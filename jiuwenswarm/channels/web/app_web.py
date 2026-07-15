@@ -30,12 +30,20 @@ from jiuwenswarm.dotenv_early import parse_dotenv_early
 parse_dotenv_early("jiuwenswarm-web")
 
 # --- Now safe to import jiuwenswarm modules ---
+from dotenv import load_dotenv
+
 from jiuwenswarm.agents.harness.common.tools.ssl_config import get_insecure_ssl_context, get_ssl_verify
 from jiuwenswarm.agents.harness.team.bootstrap import configure_agent_teams_home
 from jiuwenswarm.common.ws_diagnostics import describe_ws_exception, format_ws_diagnostics
-from jiuwenswarm.common.utils import get_agent_root_dir, get_logs_dir, \
+from jiuwenswarm.common.utils import get_agent_root_dir, get_env_file, get_logs_dir, \
     get_agent_sessions_dir, get_root_dir, get_user_workspace_dir, is_package_installation, wait_for_tcp_port
 from jiuwenswarm.server.runtime.session.session_history import history_exists, load_history_records
+
+# Load the default instance's config/.env (e.g. WEB_PORT/GATEWAY_PORT overrides) the same way
+# jiuwenswarm/app.py does. Without this, this process only sees --name/--dotenv-loaded env vars
+# (a no-op for the unnamed default instance) and its proxy target silently falls back to the
+# hardcoded default port instead of matching where the gateway actually bound.
+load_dotenv(dotenv_path=get_env_file(), override=True)
 
 configure_agent_teams_home()
 
