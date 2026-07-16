@@ -100,6 +100,22 @@ function stripLeadingOrphanedA2UIFenceTail(text: string): string {
   return text.replace(/^\s*(?:[}\]]\s*)+```[ \t]*/, '');
 }
 
+// Matches any true (non-empty) prefix of "<a2ui-json" anchored at the end
+// of the string — e.g. "<", "<a", "<a2ui-", "<a2ui-jso", but not the
+// complete "<a2ui-json>" tag (that's handled elsewhere once it fully
+// streams in). When the stream-suppression detector on the backend fires
+// on a short partial tag prefix and then never delivers the completed
+// content, the client's buffer stays frozen at exactly this kind of
+// fragment. Left in place, it renders as a raw, broken-looking snippet of
+// markup right before the user; stripping it keeps only the clean prose
+// that came before.
+const DANGLING_A2UI_OPEN_TAG_PREFIX_RE =
+  /<(?:a(?:2(?:u(?:i(?:-(?:j(?:s(?:o(?:n)?)?)?)?)?)?)?)?)?$/;
+
+function stripDanglingA2UIOpenTagPrefix(text: string): string {
+  return text.replace(DANGLING_A2UI_OPEN_TAG_PREFIX_RE, '').trimEnd();
+}
+
 function findNextFencedA2UIBlock(content: string, cursor: number): FencedA2UIBlock | null {
   const fencePattern = /```(?:json|a2ui|a2ui-json)?[ \t]*\r?\n([\s\S]*?)\r?\n```/gi;
   fencePattern.lastIndex = cursor;
@@ -243,7 +259,7 @@ export function parseA2UIContent(
     const fencedIndex = fencedBlock?.start ?? -1;
 
     if (openIndex < 0 && fencedIndex < 0) {
-      const tail = content.slice(cursor);
+      const tail = options.isStreaming ? content.slice(cursor) : stripDanglingA2UIOpenTagPrefix(content.slice(cursor));
       if (tail) {
         parts.push({ kind: 'text', text: tail });
       }
@@ -255,8 +271,8 @@ export function parseA2UIContent(
 
     sawA2UIBlock = true;
     if (blockStart > cursor) {
-      const textBeforeBlock = stripLeadingOrphanedA2UIFenceTail(
-        content.slice(cursor, blockStart)
+      const textBeforeBlock = stripDanglingA2UIOpenTagPrefix(
+        stripLeadingOrphanedA2UIFenceTail(content.slice(cursor, blockStart))
       );
       if (textBeforeBlock.trim()) {
         parts.push({ kind: 'text', text: textBeforeBlock });
@@ -292,7 +308,11 @@ export function parseA2UIContent(
     cursor = closeIndex + A2UI_CLOSE_TAG.length;
   }
 
-  return sawA2UIBlock ? parts.filter((part) => part.kind !== 'text' || part.text) : [{ kind: 'text', text: content }];
+  if (sawA2UIBlock) {
+    return parts.filter((part) => part.kind !== 'text' || part.text);
+  }
+  const fallbackText = options.isStreaming ? content : stripDanglingA2UIOpenTagPrefix(content);
+  return [{ kind: 'text', text: fallbackText }];
 }
 
 export function namespaceA2UIMessages(

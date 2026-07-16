@@ -101,7 +101,11 @@ async def finalize_a2ui_assistant_content(
         return _a2ui_timeout_fallback(content)
     except Exception as exc:  # noqa: BLE001
         logger.exception("A2UI response finalization failed: request_id=%s error=%s", request_id, exc)
-        return content
+        # Never leak the original content on an unexpected failure: it may
+        # contain an unclosed/unparseable <a2ui-json> tag (e.g. a truncated
+        # model response), which the frontend cannot render and cannot even
+        # display as readable text.
+        return _a2ui_safe_degrade(content, "界面内容生成失败，请重试或换一种方式描述你的需求。")
 
     finalized = finalization.content
     logger.info(
@@ -174,17 +178,23 @@ async def _validate_parseable_tagged_a2ui_fast_path(content: str) -> tuple[bool,
     return validation.valid, validation.error or None
 
 
-def _a2ui_timeout_fallback(content: str) -> str:
+def _a2ui_safe_degrade(content: str, fallback_text: str) -> str:
+    """Best-effort recovery of readable text from content that could not be
+    finalized. Never returns a raw, unparseable <a2ui-json> fragment."""
     try:
         readable = get_protocol_spec().format_for_text_channel(content)
         if readable:
             return readable
     except Exception as exc:  # noqa: BLE001
-        logger.exception("A2UI timeout fallback formatting failed: error=%s", exc)
+        logger.exception("A2UI safe-degrade formatting failed: error=%s", exc)
     stripped = strip_tagged_a2ui_blocks(content or "")
     if stripped:
         return stripped
-    return "A2UI 界面生成超时，请重试或改用普通文本结果。"
+    return fallback_text
+
+
+def _a2ui_timeout_fallback(content: str) -> str:
+    return _a2ui_safe_degrade(content, "A2UI 界面生成超时，请重试或改用普通文本结果。")
 
 
 def _coerce_model_message_content(message: Any) -> str:

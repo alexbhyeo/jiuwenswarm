@@ -139,9 +139,26 @@ class A2UIResponseFinalizer:
                 validation_error=last_error,
                 user_query=str(user_query or ""),
             )
-            response = repair_call(prompt)
-            if inspect.isawaitable(response):
-                response = await response
+            try:
+                response = repair_call(prompt)
+                if inspect.isawaitable(response):
+                    response = await response
+            except Exception as exc:  # noqa: BLE001
+                # A transient failure in the repair model call (network error,
+                # provider timeout, etc.) must count as a failed repair
+                # attempt, not abort the whole finalization — an uncaught
+                # exception here previously propagated all the way up to
+                # finalize_a2ui_assistant_content's catch-all, which returned
+                # the original still-broken content (an unclosed <a2ui-json>
+                # tag) completely unprocessed straight to the user.
+                logger.exception(
+                    "A2UI finalizer repair attempt call failed: request_id=%s attempt=%d error=%s",
+                    request_id,
+                    _attempt,
+                    exc,
+                )
+                last_error = f"repair call failed: {exc}"
+                continue
             repaired_content = _coerce_model_message_content(response)
             validation = spec.validate_response(repaired_content)
             logger.info(

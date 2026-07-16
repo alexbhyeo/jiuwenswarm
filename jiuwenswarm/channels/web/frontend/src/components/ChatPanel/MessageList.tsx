@@ -10,7 +10,41 @@ import { MessageItem, getMessageActor } from './MessageItem';
 import { ToolGroupDisplay, collectViewedSkillIds } from './ToolGroupDisplay';
 import { useChatStore, useSessionStore } from '../../stores';
 import { isTeamMemberCollaborationMessage } from './teamEventUtils';
-import { isA2UIClientEventContent } from '../../features/a2ui/a2uiContent';
+import { isA2UIClientEventContent, parseA2UIContent } from '../../features/a2ui/a2uiContent';
+
+const A2UI_FAILURE_TEXT = '界面内容暂时无法显示';
+
+// The agent's own retry/self-correction can produce two independent
+// assistant messages for the same turn: an earlier attempt whose A2UI
+// content couldn't be salvaged (parsed down to just the failure text) and
+// a later, successful retry with a real rendered surface. Both used to stay
+// visible side by side — a broken-looking message right next to the answer
+// that actually worked. Once a later message in the same conversation
+// renders a genuine A2UI surface, the earlier failure-only message is
+// superseded and safe to hide.
+function isA2UIFailureOnlyMessage(content: unknown): boolean {
+  if (typeof content !== 'string' || !content) {
+    return false;
+  }
+  // The failure text is never literally present in the stored message —
+  // it's a fallback parseA2UIContent generates on the fly when it can't
+  // resolve the content (e.g. an unclosed <a2ui-json> tag left over from a
+  // stream that was cut short). Must actually run the parser, not just
+  // string-match the raw content.
+  const parts = parseA2UIContent(content, { isStreaming: false });
+  return (
+    parts.length > 0 &&
+    parts.every((part) => part.kind === 'text') &&
+    parts.some((part) => part.kind === 'text' && part.text.includes(A2UI_FAILURE_TEXT))
+  );
+}
+
+function hasRenderedA2UISurface(content: unknown): boolean {
+  if (typeof content !== 'string') {
+    return false;
+  }
+  return parseA2UIContent(content, { isStreaming: false }).some((part) => part.kind === 'a2ui');
+}
 
 interface MessageListProps {
   messages: Message[];
@@ -88,10 +122,29 @@ function buildTimelineItems(
   messages: Message[],
   executions: ToolExecution[]
 ): TimelineItem[] {
+  // Scan back-to-front: once a later assistant message has rendered a real
+  // A2UI surface, any earlier assistant message that resolved to nothing
+  // but the failure text is a superseded first attempt — mark it for
+  // exclusion below.
+  const supersededIndexes = new Set<number>();
+  let laterSurfaceExists = false;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (msg.role !== 'assistant') continue;
+    if (laterSurfaceExists && isA2UIFailureOnlyMessage(msg.content)) {
+      supersededIndexes.add(i);
+      continue;
+    }
+    if (hasRenderedA2UISurface(msg.content)) {
+      laterSurfaceExists = true;
+    }
+  }
+
   const messageItems: TimelineItem[] = messages
-    .filter((msg) => {
+    .filter((msg, idx) => {
       if (msg.role === 'tool') return false;
       if (msg.role === 'user' && isA2UIClientEventContent(msg.content)) return false;
+      if (supersededIndexes.has(idx)) return false;
       return true;
     })
     .map((message, index) => ({
