@@ -107,6 +107,31 @@ body .a2ui-surface .a2ui-row[data-alignment="stretch"] > section {
   align-items: stretch;
 }
 
+/* ─── Column component ─── */
+/* Library default theme sets an 8px gap (layout-g-2) between a Column's
+   direct children, which reads as cramped once a form stacks several
+   widgets (labels, chip groups, text fields, buttons). Bump it to match
+   the 16px rhythm already used for Card's own top-level spacing. */
+body .a2ui-surface .a2ui-column > section {
+  gap: 16px;
+}
+
+/* A trailing standalone Button at the end of a Column (the common "form
+   submit" position) should read as a right-aligned form/dialog action,
+   regardless of whatever cross-axis alignment the model set on the
+   Column itself (default stretch, or an explicit "center"/"start" the
+   model may have chosen for the whole surface). align-self overrides the
+   parent's align-items for just this one child, so it works whether the
+   wrapper div is stretched full-width (old justify-content approach) or
+   shrink-wrapped to its own content (the case align-self actually fixes).
+   Scoped to Column only (not Row) so explicit multi-button Row layouts the
+   model lays out itself are left untouched. */
+body .a2ui-surface .a2ui-column > section > .a2ui-button:last-child {
+  display: flex;
+  justify-content: flex-end;
+  align-self: flex-end;
+}
+
 /* ─── Horizontal List component ─── */
 /* Override library's scrollbar-width: none on the inner <section> */
 
