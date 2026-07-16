@@ -133,6 +133,17 @@ export function MultipleChoiceWithDefaults({
         return;
       }
 
+      // chips/checkbox variants are always classified as multi-select by
+      // isMultiSelectChoice(), even when maxAllowedSelections === 1. Without this,
+      // picking a different option while one is already selected pushes the array to
+      // length 2, gets rejected by the maxAllowedSelections check below, and silently
+      // no-ops — so a new pick only "works" after the old one is manually deselected.
+      // Replace instead, so a 1-max chip group behaves like a radio group.
+      if (checked && maxAllowedSelections === 1) {
+        dualWriteA2UIValue(setValue, selectionsPath, [optionValue]);
+        return;
+      }
+
       // Multi-select mode: add/remove from array
       const currentValues = [...effectiveSelectedValues];
       if (checked) {
