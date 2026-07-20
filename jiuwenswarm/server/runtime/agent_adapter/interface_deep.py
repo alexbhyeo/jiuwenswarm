@@ -136,6 +136,7 @@ from jiuwenswarm.agents.harness.common.rails.execution_guard import (
 )
 from jiuwenswarm.common.config import get_model_names
 from jiuwenswarm.common.hooks_config import load_hooks_config
+from jiuwenswarm.server.runtime.a2ui.runtime.call_purpose import call_purpose, call_purpose_var
 from jiuwenswarm.server.hooks.user_hook_rail import UserHookRail
 from jiuwenswarm.agents.harness.common.rails.permissions.owner_scopes import (
     TOOL_PERMISSION_CONTEXT,
@@ -6620,7 +6621,11 @@ class JiuWenSwarmDeepAdapter:
                 chunk_type = chunk.type
 
                 if chunk_type == "llm_usage":
-                    logger.info(f"[JiuWenSwarmDeepAdapter] llm_usage chunk: {chunk}")
+                    logger.info(
+                        f"[JiuWenSwarmDeepAdapter] llm_usage chunk: "
+                        f"session_id={session_id} request_id={rid} "
+                        f"call_purpose={call_purpose_var.get()} {chunk}"
+                    )
                     usage_meta = (
                         chunk.payload.get("usage_metadata", {})
                         if isinstance(chunk.payload, dict)
@@ -7932,10 +7937,18 @@ class JiuWenSwarmDeepAdapter:
             return None
         from openjiuwen.core.foundation.llm.schema.message import UserMessage
 
-        result = await self._model.invoke(
-            [UserMessage(content=prompt)],
-            temperature=0,
-        )
+        with call_purpose("a2ui_repair"):
+            result = await self._model.invoke(
+                [UserMessage(content=prompt)],
+                temperature=0,
+            )
+        usage = getattr(result, "usage_metadata", None)
+        if usage is not None:
+            logger.info(
+                "[JiuWenSwarmDeepAdapter] llm_usage chunk: call_purpose=a2ui_repair "
+                "payload={'usage_metadata': %s}",
+                usage.model_dump() if hasattr(usage, "model_dump") else usage,
+            )
         content = getattr(result, "content", None)
         if isinstance(content, str):
             return content

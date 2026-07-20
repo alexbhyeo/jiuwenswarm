@@ -10,12 +10,15 @@ from jiuwenswarm.server.runtime.a2ui.protocol import (
     format_content_for_channel,
     is_a2ui_client_event,
 )
+from jiuwenswarm.server.runtime.a2ui.runtime.call_purpose import call_purpose, call_purpose_var
 from jiuwenswarm.server.runtime.a2ui.runtime.response_finalization import finalize_a2ui_assistant_content
 
 __all__ = [
     "A2UIStreamGuard",
     "build_a2ui_client_event_prompt",
     "build_a2ui_prompt_section",
+    "call_purpose",
+    "call_purpose_var",
     "finalize_a2ui_assistant_content",
     "format_a2ui_for_text_channel",
     "format_content_for_channel",

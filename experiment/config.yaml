@@ -1,0 +1,40 @@
+# A2UI token-usage benchmark configuration.
+# See README.md for how to run.
+
+server:
+  base_url: "http://localhost:5173"
+  # jiuwenswarm checkout root - used to invoke `uv run jiuwenswarm-start` and to
+  # locate the live agent_server.log for usage parsing.
+  repo_root: "d:/git_projects/jiuwenswarm"
+  agent_log_path: "C:/Users/Administrator/.jiuwenswarm/agent/.logs/agent_server.log"
+  ports: [8090, 8091, 8092, 5173]
+  startup_timeout_seconds: 60
+
+benchmark:
+  test_cases_xlsx: "a2ui_benchmark.xlsx"
+  sheet_name: "Sheet1"
+  question_column: "Tests"
+  # Each condition toggles JIUWENSWARM_A2UI_ENABLED for the backend restart that
+  # precedes it. Order matters only for run time, not for results.
+  conditions:
+    - name: with_a2ui
+      a2ui_enabled: true
+    - name: without_a2ui
+      a2ui_enabled: false
+  # Hard ceiling per test case. A2UI generation + repair + browser_agent search
+  # can occasionally stall (see project history) - this bounds worst case so one
+  # bad test doesn't stall the whole run. Tests that hit this are recorded with
+  # status=timeout, not silently dropped.
+  per_test_timeout_seconds: 180
+  # Extra settle time after the backend log reports the request finished,
+  # before reading the final transcript and closing the usage-log time
+  # window. Gives a same-turn a2ui_repair/a2ui_retry_plain follow-up call a
+  # chance to land and be captured (not a hard guarantee - see README).
+  post_complete_grace_seconds: 8
+
+output:
+  results_dir: "results"
+  raw_json: "raw_results.json"
+  summary_csv: "summary.csv"
+  summary_xlsx: "benchmark_results.xlsx"
+  screenshot_on_failure: true
