@@ -1,0 +1,61 @@
+test_index,condition,question,status,duration_seconds,total_tokens
+1,with_a2ui,Book me a hotel in Bangkok. Ask for my travel dates before searching.,error,0.0,0
+2,with_a2ui,Find me flights to Shanghai and sort them by the shortest travel time.,ok,38.9,39737
+3,with_a2ui,"Recommend three hotels in Singapore and compare their prices, ratings, and locations.",error,30.0,0
+4,with_a2ui,I want to buy a gaming laptop. Show me several options and explain the pros and cons of each.,ok,69.1,172839
+5,with_a2ui,Help me plan a food tour in Penang. Ask me what cuisines I like first.,ok,19.6,37973
+6,with_a2ui,Find attractions in Kyoto and organize them into a 3-day itinerary.,ok,48.4,127427
+7,with_a2ui,"I need a hotel with free breakfast, a swimming pool, and Wi-Fi. Don't recommend anything until you ask my budget.",ok,25.9,39504
+8,with_a2ui,"I want to plan a vacation, but I'm not sure where to go. Ask me a few questions before making recommendations.",ok,26.9,54178
+9,with_a2ui,Recommend a smartphone for me. Don't suggest anything until you've asked about my budget and what I use it for.,ok,15.5,37771
+10,with_a2ui,"Help me choose a university in Australia. Ask about my preferred course, budget, and career goals before recommending one.",ok,27.0,39971
+11,with_a2ui,Recommend five restaurants in Seoul based on my preferences. Ask what cuisine I enjoy before searching.,ok,28.0,76503
+12,with_a2ui,Help me organize a café-hopping trip in Singapore. Suggest the most efficient route between cafés.,ok,84.1,325280
+13,with_a2ui,Find restaurants near Marina Bay Sands that have at least a 4.5-star rating and cost less than SGD 50 per person.,timeout,188.9,37836
+14,with_a2ui,"I'm planning a family vacation with young children. Ask enough questions before recommending destinations, hotels, and activities.",ok,44.1,156247
+15,with_a2ui,"Help me organize a business trip to Shanghai. Book a flight, recommend hotels near the exhibition center, and suggest nearby restaurants.",ok,39.9,117355
+16,with_a2ui,"I have SGD 3,000 for a vacation. Recommend the best destination based on weather, flight prices, and attractions during my travel dates.",ok,33.4,77447
+17,with_a2ui,"Plan my honeymoon in Italy. Ask about our budget, travel dates, interests, preferred hotel type, and flight preferences before creating a complete itinerary.",ok,29.2,39940
+18,with_a2ui,I'm buying a DSLR camera. Interview me like a salesperson before recommending the best camera and lenses.,ok,46.6,118246
+19,with_a2ui,"Help me move to a new apartment. Create a checklist, recommend moving companies, estimate costs, and suggest a timeline.",ok,29.0,76149
+20,with_a2ui,"I'm organizing a company offsite for 30 people. Find suitable venues, nearby hotels, transportation options, and restaurants, then compare them.",ok,23.1,38324
+21,with_a2ui,"Plan a weekend trip where the total budget (hotel, transport, food, and attractions) stays under SGD 500.",ok,24.9,75952
+22,with_a2ui,"Search for electric vehicles available in Singapore and compare purchase price, government rebates, range, charging time, and maintenance costs.",ok,76.0,116780
+23,with_a2ui,Find three travel insurance plans for my trip to Japan and explain which one is best for my needs after asking about my travel duration and activities.,ok,19.8,37976
+24,with_a2ui,"Help me buy a bicycle. Ask about my height, riding style, terrain, and budget before recommending suitable models.",ok,28.2,39402
+25,with_a2ui,"Build me a complete PC for AI development with a SGD 3,000 budget. Compare components, compatibility, and performance.",timeout,188.2,355501
+26,with_a2ui,"Help me plan a ski trip. Ask about my skiing experience, preferred country, budget, and travel dates before recommending resorts, hotels, equipment rental, and flights.",ok,8.2,0
+27,with_a2ui,"Find the cheapest MacBook Air on Apple's website, then compare it with offers from authorized retailers.",ok,19.5,78997
+28,with_a2ui,"Search for Taylor Swift concert tickets. If multiple ticket websites are available, compare prices and seat availability.",timeout,188.4,76614
+29,with_a2ui,I want to apply for a tourist visa to Japan. Guide me through the application process and ask for any required information before proceeding.,error,0.0,0
+30,with_a2ui,"Help me register for a marathon. Search for upcoming races near Singapore, compare registration fees, and guide me through the registration process.",ok,97.6,514379
+1,without_a2ui,Book me a hotel in Bangkok. Ask for my travel dates before searching.,ok,24.0,28345
+2,without_a2ui,Find me flights to Shanghai and sort them by the shortest travel time.,ok,19.0,28262
+3,without_a2ui,"Recommend three hotels in Singapore and compare their prices, ratings, and locations.",ok,57.4,58352
+4,without_a2ui,I want to buy a gaming laptop. Show me several options and explain the pros and cons of each.,timeout,188.7,85579
+5,without_a2ui,Help me plan a food tour in Penang. Ask me what cuisines I like first.,ok,18.7,28208
+6,without_a2ui,Find attractions in Kyoto and organize them into a 3-day itinerary.,ok,32.5,91784
+7,without_a2ui,"I need a hotel with free breakfast, a swimming pool, and Wi-Fi. Don't recommend anything until you ask my budget.",ok,16.6,28111
+8,without_a2ui,"I want to plan a vacation, but I'm not sure where to go. Ask me a few questions before making recommendations.",ok,17.7,28346
+9,without_a2ui,Recommend a smartphone for me. Don't suggest anything until you've asked about my budget and what I use it for.,ok,92.1,170891
+10,without_a2ui,"Help me choose a university in Australia. Ask about my preferred course, budget, and career goals before recommending one.",ok,19.8,28284
+11,without_a2ui,Recommend five restaurants in Seoul based on my preferences. Ask what cuisine I enjoy before searching.,ok,17.7,28184
+12,without_a2ui,Help me organize a café-hopping trip in Singapore. Suggest the most efficient route between cafés.,ok,162.0,191466
+13,without_a2ui,Find restaurants near Marina Bay Sands that have at least a 4.5-star rating and cost less than SGD 50 per person.,timeout,188.0,28399
+14,without_a2ui,"I'm planning a family vacation with young children. Ask enough questions before recommending destinations, hotels, and activities.",ok,21.0,28520
+15,without_a2ui,"Help me organize a business trip to Shanghai. Book a flight, recommend hotels near the exhibition center, and suggest nearby restaurants.",ok,26.3,56856
+16,without_a2ui,"I have SGD 3,000 for a vacation. Recommend the best destination based on weather, flight prices, and attractions during my travel dates.",ok,25.3,57008
+17,without_a2ui,"Plan my honeymoon in Italy. Ask about our budget, travel dates, interests, preferred hotel type, and flight preferences before creating a complete itinerary.",ok,20.9,28825
+18,without_a2ui,I'm buying a DSLR camera. Interview me like a salesperson before recommending the best camera and lenses.,ok,19.9,28446
+19,without_a2ui,"Help me move to a new apartment. Create a checklist, recommend moving companies, estimate costs, and suggest a timeline.",ok,32.7,116292
+20,without_a2ui,"I'm organizing a company offsite for 30 people. Find suitable venues, nearby hotels, transportation options, and restaurants, then compare them.",ok,17.8,125545
+21,without_a2ui,"Plan a weekend trip where the total budget (hotel, transport, food, and attractions) stays under SGD 500.",ok,13.5,61259
+22,without_a2ui,"Search for electric vehicles available in Singapore and compare purchase price, government rebates, range, charging time, and maintenance costs.",ok,8.2,0
+23,without_a2ui,Find three travel insurance plans for my trip to Japan and explain which one is best for my needs after asking about my travel duration and activities.,ok,19.9,86022
+24,without_a2ui,"Help me buy a bicycle. Ask about my height, riding style, terrain, and budget before recommending suitable models.",ok,22.9,28203
+25,without_a2ui,"Build me a complete PC for AI development with a SGD 3,000 budget. Compare components, compatibility, and performance.",timeout,188.6,57358
+26,without_a2ui,"Help me plan a ski trip. Ask about my skiing experience, preferred country, budget, and travel dates before recommending resorts, hotels, equipment rental, and flights.",ok,18.9,28241
+27,without_a2ui,"Find the cheapest MacBook Air on Apple's website, then compare it with offers from authorized retailers.",ok,82.1,309478
+28,without_a2ui,"Search for Taylor Swift concert tickets. If multiple ticket websites are available, compare prices and seat availability.",ok,8.2,0
+29,without_a2ui,I want to apply for a tourist visa to Japan. Guide me through the application process and ask for any required information before proceeding.,ok,21.2,28454
+30,without_a2ui,"Help me register for a marathon. Search for upcoming races near Singapore, compare registration fees, and guide me through the registration process.",timeout,188.7,204227

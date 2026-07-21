@@ -106,14 +106,30 @@ def wait_for_health(base_url: str, *, timeout_seconds: int = 30) -> bool:
     return False
 
 
-def restart_with_a2ui(repo_root: str, *, a2ui_enabled: bool, base_url: str, startup_timeout_seconds: int) -> None:
-    stop_all(repo_root)
-    start(repo_root, a2ui_enabled=a2ui_enabled)
-    if not wait_for_health(base_url, timeout_seconds=startup_timeout_seconds):
-        raise RuntimeError(
+def restart_with_a2ui(
+    repo_root: str,
+    *,
+    a2ui_enabled: bool,
+    base_url: str,
+    startup_timeout_seconds: int,
+    max_attempts: int = 3,
+) -> None:
+    # Retries the whole stop/start/health-check cycle: an occasional slow
+    # restart (system under load, antivirus scanning newly-touched files,
+    # etc.) previously raised immediately and crashed a whole multi-hour
+    # multi-iteration run over one transient hiccup.
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        stop_all(repo_root)
+        start(repo_root, a2ui_enabled=a2ui_enabled)
+        if wait_for_health(base_url, timeout_seconds=startup_timeout_seconds):
+            return
+        last_error = RuntimeError(
             f"jiuwenswarm did not become healthy within {startup_timeout_seconds}s "
-            f"(a2ui_enabled={a2ui_enabled})"
+            f"(a2ui_enabled={a2ui_enabled}, attempt={attempt}/{max_attempts})"
         )
+        print(f"[process_manager] {last_error} - retrying" if attempt < max_attempts else f"[process_manager] {last_error} - giving up")
+    raise last_error
     # The web frontend can report healthy slightly before the gateway->agent_server
     # tunnel is fully wired (see _wait_for_gateway in app_web.py) - give it a
     # short additional margin before sending real traffic.

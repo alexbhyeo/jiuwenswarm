@@ -1,0 +1,1168 @@
+[
+  {
+    "test_index": 1,
+    "condition": "with_a2ui",
+    "question": "Book me a hotel in Bangkok. Ask for my travel dates before searching.",
+    "status": "timeout",
+    "duration_seconds": 188.5462610721588,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": null
+  },
+  {
+    "test_index": 2,
+    "condition": "with_a2ui",
+    "question": "Find me flights to Shanghai and sort them by the shortest travel time.",
+    "status": "ok",
+    "duration_seconds": 27.82497787475586,
+    "total_tokens": 38730,
+    "input_tokens": 37483,
+    "output_tokens": 1247,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37483,
+        "output_tokens": 1247,
+        "total_tokens": 38730,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 3,
+    "condition": "with_a2ui",
+    "question": "Recommend three hotels in Singapore and compare their prices, ratings, and locations.",
+    "status": "ok",
+    "duration_seconds": 90.83647203445435,
+    "total_tokens": 199426,
+    "input_tokens": 197998,
+    "output_tokens": 1428,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 197998,
+        "output_tokens": 1428,
+        "total_tokens": 199426,
+        "cache_tokens": 190208,
+        "call_count": 5
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 4,
+    "condition": "with_a2ui",
+    "question": "I want to buy a gaming laptop. Show me several options and explain the pros and cons of each.",
+    "status": "ok",
+    "duration_seconds": 75.12782096862793,
+    "total_tokens": 79490,
+    "input_tokens": 75690,
+    "output_tokens": 3800,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 75690,
+        "output_tokens": 3800,
+        "total_tokens": 79490,
+        "cache_tokens": 74496,
+        "call_count": 2
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 5,
+    "condition": "with_a2ui",
+    "question": "Help me plan a food tour in Penang. Ask me what cuisines I like first.",
+    "status": "ok",
+    "duration_seconds": 27.648855447769165,
+    "total_tokens": 39925,
+    "input_tokens": 37489,
+    "output_tokens": 2436,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37489,
+        "output_tokens": 2436,
+        "total_tokens": 39925,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 6,
+    "condition": "with_a2ui",
+    "question": "Find attractions in Kyoto and organize them into a 3-day itinerary.",
+    "status": "ok",
+    "duration_seconds": 42.82187366485596,
+    "total_tokens": 126041,
+    "input_tokens": 124176,
+    "output_tokens": 1865,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 124176,
+        "output_tokens": 1865,
+        "total_tokens": 126041,
+        "cache_tokens": 111744,
+        "call_count": 3
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 7,
+    "condition": "with_a2ui",
+    "question": "I need a hotel with free breakfast, a swimming pool, and Wi-Fi. Don't recommend anything until you ask my budget.",
+    "status": "ok",
+    "duration_seconds": 18.79042959213257,
+    "total_tokens": 38367,
+    "input_tokens": 37495,
+    "output_tokens": 872,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37495,
+        "output_tokens": 872,
+        "total_tokens": 38367,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 8,
+    "condition": "with_a2ui",
+    "question": "I want to plan a vacation, but I'm not sure where to go. Ask me a few questions before making recommendations.",
+    "status": "ok",
+    "duration_seconds": 27.07369613647461,
+    "total_tokens": 39647,
+    "input_tokens": 37494,
+    "output_tokens": 2153,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37494,
+        "output_tokens": 2153,
+        "total_tokens": 39647,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 9,
+    "condition": "with_a2ui",
+    "question": "Recommend a smartphone for me. Don't suggest anything until you've asked about my budget and what I use it for.",
+    "status": "ok",
+    "duration_seconds": 16.728129386901855,
+    "total_tokens": 37744,
+    "input_tokens": 37493,
+    "output_tokens": 251,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37493,
+        "output_tokens": 251,
+        "total_tokens": 37744,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 10,
+    "condition": "with_a2ui",
+    "question": "Help me choose a university in Australia. Ask about my preferred course, budget, and career goals before recommending one.",
+    "status": "ok",
+    "duration_seconds": 27.305964708328247,
+    "total_tokens": 39822,
+    "input_tokens": 37492,
+    "output_tokens": 2330,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37492,
+        "output_tokens": 2330,
+        "total_tokens": 39822,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 11,
+    "condition": "with_a2ui",
+    "question": "Recommend five restaurants in Seoul based on my preferences. Ask what cuisine I enjoy before searching.",
+    "status": "ok",
+    "duration_seconds": 18.939175605773926,
+    "total_tokens": 53148,
+    "input_tokens": 49426,
+    "output_tokens": 3722,
+    "usage_by_purpose": {
+      "a2ui_repair": {
+        "input_tokens": 11939,
+        "output_tokens": 3172,
+        "total_tokens": 15111,
+        "cache_tokens": 0,
+        "call_count": 1
+      },
+      "main": {
+        "input_tokens": 37487,
+        "output_tokens": 550,
+        "total_tokens": 38037,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 12,
+    "condition": "with_a2ui",
+    "question": "Help me organize a café-hopping trip in Singapore. Suggest the most efficient route between cafés.",
+    "status": "timeout",
+    "duration_seconds": 188.70923018455505,
+    "total_tokens": 81486,
+    "input_tokens": 78362,
+    "output_tokens": 3124,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 78362,
+        "output_tokens": 3124,
+        "total_tokens": 81486,
+        "cache_tokens": 74496,
+        "call_count": 2
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 13,
+    "condition": "with_a2ui",
+    "question": "Find restaurants near Marina Bay Sands that have at least a 4.5-star rating and cost less than SGD 50 per person.",
+    "status": "ok",
+    "duration_seconds": 8.253148555755615,
+    "total_tokens": 37778,
+    "input_tokens": 37496,
+    "output_tokens": 282,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37496,
+        "output_tokens": 282,
+        "total_tokens": 37778,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 14,
+    "condition": "with_a2ui",
+    "question": "I'm planning a family vacation with young children. Ask enough questions before recommending destinations, hotels, and activities.",
+    "status": "ok",
+    "duration_seconds": 30.587557077407837,
+    "total_tokens": 59743,
+    "input_tokens": 51709,
+    "output_tokens": 8034,
+    "usage_by_purpose": {
+      "a2ui_repair": {
+        "input_tokens": 14218,
+        "output_tokens": 5116,
+        "total_tokens": 19334,
+        "cache_tokens": 0,
+        "call_count": 1
+      },
+      "main": {
+        "input_tokens": 37491,
+        "output_tokens": 2918,
+        "total_tokens": 40409,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 15,
+    "condition": "with_a2ui",
+    "question": "Help me organize a business trip to Shanghai. Book a flight, recommend hotels near the exhibition center, and suggest nearby restaurants.",
+    "status": "ok",
+    "duration_seconds": 20.963081121444702,
+    "total_tokens": 76176,
+    "input_tokens": 75517,
+    "output_tokens": 659,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 75517,
+        "output_tokens": 659,
+        "total_tokens": 76176,
+        "cache_tokens": 74624,
+        "call_count": 2
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 16,
+    "condition": "with_a2ui",
+    "question": "I have SGD 3,000 for a vacation. Recommend the best destination based on weather, flight prices, and attractions during my travel dates.",
+    "status": "ok",
+    "duration_seconds": 18.941745042800903,
+    "total_tokens": 38224,
+    "input_tokens": 37498,
+    "output_tokens": 726,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37498,
+        "output_tokens": 726,
+        "total_tokens": 38224,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 17,
+    "condition": "with_a2ui",
+    "question": "Plan my honeymoon in Italy. Ask about our budget, travel dates, interests, preferred hotel type, and flight preferences before creating a complete itinerary.",
+    "status": "ok",
+    "duration_seconds": 28.561455249786377,
+    "total_tokens": 39829,
+    "input_tokens": 37499,
+    "output_tokens": 2330,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37499,
+        "output_tokens": 2330,
+        "total_tokens": 39829,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 18,
+    "condition": "with_a2ui",
+    "question": "I'm buying a DSLR camera. Interview me like a salesperson before recommending the best camera and lenses.",
+    "status": "error",
+    "duration_seconds": 30.01325035095215,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "playwright timeout: Locator.click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator(\"textarea, [contenteditable='true']\").first\n"
+  },
+  {
+    "test_index": 19,
+    "condition": "with_a2ui",
+    "question": "Help me move to a new apartment. Create a checklist, recommend moving companies, estimate costs, and suggest a timeline.",
+    "status": "ok",
+    "duration_seconds": 22.46830463409424,
+    "total_tokens": 38205,
+    "input_tokens": 37493,
+    "output_tokens": 712,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37493,
+        "output_tokens": 712,
+        "total_tokens": 38205,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 20,
+    "condition": "with_a2ui",
+    "question": "I'm organizing a company offsite for 30 people. Find suitable venues, nearby hotels, transportation options, and restaurants, then compare them.",
+    "status": "ok",
+    "duration_seconds": 21.20671248435974,
+    "total_tokens": 38137,
+    "input_tokens": 37498,
+    "output_tokens": 639,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37498,
+        "output_tokens": 639,
+        "total_tokens": 38137,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 21,
+    "condition": "with_a2ui",
+    "question": "Plan a weekend trip where the total budget (hotel, transport, food, and attractions) stays under SGD 500.",
+    "status": "ok",
+    "duration_seconds": 30.70895528793335,
+    "total_tokens": 76633,
+    "input_tokens": 75393,
+    "output_tokens": 1240,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 75393,
+        "output_tokens": 1240,
+        "total_tokens": 76633,
+        "cache_tokens": 74624,
+        "call_count": 2
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 22,
+    "condition": "with_a2ui",
+    "question": "Search for electric vehicles available in Singapore and compare purchase price, government rebates, range, charging time, and maintenance costs.",
+    "status": "timeout",
+    "duration_seconds": 188.0268943309784,
+    "total_tokens": 76382,
+    "input_tokens": 75440,
+    "output_tokens": 942,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 75440,
+        "output_tokens": 942,
+        "total_tokens": 76382,
+        "cache_tokens": 74624,
+        "call_count": 2
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 23,
+    "condition": "with_a2ui",
+    "question": "Find three travel insurance plans for my trip to Japan and explain which one is best for my needs after asking about my travel duration and activities.",
+    "status": "ok",
+    "duration_seconds": 43.83590888977051,
+    "total_tokens": 77219,
+    "input_tokens": 75410,
+    "output_tokens": 1809,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 75410,
+        "output_tokens": 1809,
+        "total_tokens": 77219,
+        "cache_tokens": 74624,
+        "call_count": 2
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 24,
+    "condition": "with_a2ui",
+    "question": "Help me buy a bicycle. Ask about my height, riding style, terrain, and budget before recommending suitable models.",
+    "status": "ok",
+    "duration_seconds": 39.60267877578735,
+    "total_tokens": 78051,
+    "input_tokens": 75297,
+    "output_tokens": 2754,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 75297,
+        "output_tokens": 2754,
+        "total_tokens": 78051,
+        "cache_tokens": 74496,
+        "call_count": 2
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 25,
+    "condition": "with_a2ui",
+    "question": "Build me a complete PC for AI development with a SGD 3,000 budget. Compare components, compatibility, and performance.",
+    "status": "ok",
+    "duration_seconds": 50.023118019104004,
+    "total_tokens": 276276,
+    "input_tokens": 273862,
+    "output_tokens": 2414,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 273862,
+        "output_tokens": 2414,
+        "total_tokens": 276276,
+        "cache_tokens": 264064,
+        "call_count": 7
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 26,
+    "condition": "with_a2ui",
+    "question": "Help me plan a ski trip. Ask about my skiing experience, preferred country, budget, and travel dates before recommending resorts, hotels, equipment rental, and flights.",
+    "status": "ok",
+    "duration_seconds": 32.024452924728394,
+    "total_tokens": 170205,
+    "input_tokens": 166080,
+    "output_tokens": 4125,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 166080,
+        "output_tokens": 4125,
+        "total_tokens": 170205,
+        "cache_tokens": 157824,
+        "call_count": 4
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 27,
+    "condition": "with_a2ui",
+    "question": "Find the cheapest MacBook Air on Apple's website, then compare it with offers from authorized retailers.",
+    "status": "ok",
+    "duration_seconds": 38.695061922073364,
+    "total_tokens": 353853,
+    "input_tokens": 349208,
+    "output_tokens": 4645,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 349208,
+        "output_tokens": 4645,
+        "total_tokens": 353853,
+        "cache_tokens": 318336,
+        "call_count": 8
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 28,
+    "condition": "with_a2ui",
+    "question": "Search for Taylor Swift concert tickets. If multiple ticket websites are available, compare prices and seat availability.",
+    "status": "ok",
+    "duration_seconds": 8.19796633720398,
+    "total_tokens": 37804,
+    "input_tokens": 37489,
+    "output_tokens": 315,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37489,
+        "output_tokens": 315,
+        "total_tokens": 37804,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 29,
+    "condition": "with_a2ui",
+    "question": "I want to apply for a tourist visa to Japan. Guide me through the application process and ask for any required information before proceeding.",
+    "status": "error",
+    "duration_seconds": 30.022903203964233,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "playwright timeout: Locator.click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator(\"textarea, [contenteditable='true']\").first\n"
+  },
+  {
+    "test_index": 30,
+    "condition": "with_a2ui",
+    "question": "Help me register for a marathon. Search for upcoming races near Singapore, compare registration fees, and guide me through the registration process.",
+    "status": "ok",
+    "duration_seconds": 154.46189284324646,
+    "total_tokens": 689323,
+    "input_tokens": 684609,
+    "output_tokens": 4714,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 684609,
+        "output_tokens": 4714,
+        "total_tokens": 689323,
+        "cache_tokens": 635136,
+        "call_count": 14
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 1,
+    "condition": "without_a2ui",
+    "question": "Book me a hotel in Bangkok. Ask for my travel dates before searching.",
+    "status": "ok",
+    "duration_seconds": 24.241257667541504,
+    "total_tokens": 28602,
+    "input_tokens": 27928,
+    "output_tokens": 674,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 27928,
+        "output_tokens": 674,
+        "total_tokens": 28602,
+        "cache_tokens": 21888,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 2,
+    "condition": "without_a2ui",
+    "question": "Find me flights to Shanghai and sort them by the shortest travel time.",
+    "status": "ok",
+    "duration_seconds": 17.8193142414093,
+    "total_tokens": 28333,
+    "input_tokens": 27927,
+    "output_tokens": 406,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 27927,
+        "output_tokens": 406,
+        "total_tokens": 28333,
+        "cache_tokens": 27648,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 3,
+    "condition": "without_a2ui",
+    "question": "Recommend three hotels in Singapore and compare their prices, ratings, and locations.",
+    "status": "timeout",
+    "duration_seconds": 188.5105917453766,
+    "total_tokens": 86162,
+    "input_tokens": 85334,
+    "output_tokens": 828,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 85334,
+        "output_tokens": 828,
+        "total_tokens": 86162,
+        "cache_tokens": 83072,
+        "call_count": 3
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 4,
+    "condition": "without_a2ui",
+    "question": "I want to buy a gaming laptop. Show me several options and explain the pros and cons of each.",
+    "status": "ok",
+    "duration_seconds": 130.29133534431458,
+    "total_tokens": 87636,
+    "input_tokens": 86466,
+    "output_tokens": 1170,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 86466,
+        "output_tokens": 1170,
+        "total_tokens": 87636,
+        "cache_tokens": 83584,
+        "call_count": 3
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 5,
+    "condition": "without_a2ui",
+    "question": "Help me plan a food tour in Penang. Ask me what cuisines I like first.",
+    "status": "ok",
+    "duration_seconds": 15.646202087402344,
+    "total_tokens": 28143,
+    "input_tokens": 27933,
+    "output_tokens": 210,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 27933,
+        "output_tokens": 210,
+        "total_tokens": 28143,
+        "cache_tokens": 27648,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 6,
+    "condition": "without_a2ui",
+    "question": "Find attractions in Kyoto and organize them into a 3-day itinerary.",
+    "status": "ok",
+    "duration_seconds": 8.218538999557495,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": null
+  },
+  {
+    "test_index": 7,
+    "condition": "without_a2ui",
+    "question": "I need a hotel with free breakfast, a swimming pool, and Wi-Fi. Don't recommend anything until you ask my budget.",
+    "status": "ok",
+    "duration_seconds": 24.44347882270813,
+    "total_tokens": 28101,
+    "input_tokens": 27939,
+    "output_tokens": 162,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 27939,
+        "output_tokens": 162,
+        "total_tokens": 28101,
+        "cache_tokens": 27648,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 8,
+    "condition": "without_a2ui",
+    "question": "I want to plan a vacation, but I'm not sure where to go. Ask me a few questions before making recommendations.",
+    "status": "ok",
+    "duration_seconds": 44.10562443733215,
+    "total_tokens": 28649,
+    "input_tokens": 27938,
+    "output_tokens": 711,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 27938,
+        "output_tokens": 711,
+        "total_tokens": 28649,
+        "cache_tokens": 27648,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 9,
+    "condition": "without_a2ui",
+    "question": "Recommend a smartphone for me. Don't suggest anything until you've asked about my budget and what I use it for.",
+    "status": "ok",
+    "duration_seconds": 21.309675693511963,
+    "total_tokens": 28162,
+    "input_tokens": 27937,
+    "output_tokens": 225,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 27937,
+        "output_tokens": 225,
+        "total_tokens": 28162,
+        "cache_tokens": 27648,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 10,
+    "condition": "without_a2ui",
+    "question": "Help me choose a university in Australia. Ask about my preferred course, budget, and career goals before recommending one.",
+    "status": "ok",
+    "duration_seconds": 19.14188313484192,
+    "total_tokens": 28272,
+    "input_tokens": 27936,
+    "output_tokens": 336,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 27936,
+        "output_tokens": 336,
+        "total_tokens": 28272,
+        "cache_tokens": 27648,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 11,
+    "condition": "without_a2ui",
+    "question": "Recommend five restaurants in Seoul based on my preferences. Ask what cuisine I enjoy before searching.",
+    "status": "ok",
+    "duration_seconds": 15.6172776222229,
+    "total_tokens": 28135,
+    "input_tokens": 27931,
+    "output_tokens": 204,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 27931,
+        "output_tokens": 204,
+        "total_tokens": 28135,
+        "cache_tokens": 27648,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 12,
+    "condition": "without_a2ui",
+    "question": "Help me organize a café-hopping trip in Singapore. Suggest the most efficient route between cafés.",
+    "status": "ok",
+    "duration_seconds": 92.29918885231018,
+    "total_tokens": 155652,
+    "input_tokens": 152370,
+    "output_tokens": 3282,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 152370,
+        "output_tokens": 3282,
+        "total_tokens": 155652,
+        "cache_tokens": 138880,
+        "call_count": 5
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 13,
+    "condition": "without_a2ui",
+    "question": "Find restaurants near Marina Bay Sands that have at least a 4.5-star rating and cost less than SGD 50 per person.",
+    "status": "ok",
+    "duration_seconds": 12.568043231964111,
+    "total_tokens": 93254,
+    "input_tokens": 92032,
+    "output_tokens": 1222,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 92032,
+        "output_tokens": 1222,
+        "total_tokens": 93254,
+        "cache_tokens": 90368,
+        "call_count": 3
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 14,
+    "condition": "without_a2ui",
+    "question": "I'm planning a family vacation with young children. Ask enough questions before recommending destinations, hotels, and activities.",
+    "status": "ok",
+    "duration_seconds": 21.144529819488525,
+    "total_tokens": 87509,
+    "input_tokens": 86349,
+    "output_tokens": 1160,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 86349,
+        "output_tokens": 1160,
+        "total_tokens": 87509,
+        "cache_tokens": 83968,
+        "call_count": 3
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 15,
+    "condition": "without_a2ui",
+    "question": "Help me organize a business trip to Shanghai. Book a flight, recommend hotels near the exhibition center, and suggest nearby restaurants.",
+    "status": "ok",
+    "duration_seconds": 21.34595799446106,
+    "total_tokens": 28485,
+    "input_tokens": 27938,
+    "output_tokens": 547,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 27938,
+        "output_tokens": 547,
+        "total_tokens": 28485,
+        "cache_tokens": 27648,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 16,
+    "condition": "without_a2ui",
+    "question": "I have SGD 3,000 for a vacation. Recommend the best destination based on weather, flight prices, and attractions during my travel dates.",
+    "status": "timeout",
+    "duration_seconds": 188.65717601776123,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": null
+  },
+  {
+    "test_index": 17,
+    "condition": "without_a2ui",
+    "question": "Plan my honeymoon in Italy. Ask about our budget, travel dates, interests, preferred hotel type, and flight preferences before creating a complete itinerary.",
+    "status": "ok",
+    "duration_seconds": 21.762458086013794,
+    "total_tokens": 28392,
+    "input_tokens": 27943,
+    "output_tokens": 449,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 27943,
+        "output_tokens": 449,
+        "total_tokens": 28392,
+        "cache_tokens": 27648,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 18,
+    "condition": "without_a2ui",
+    "question": "I'm buying a DSLR camera. Interview me like a salesperson before recommending the best camera and lenses.",
+    "status": "ok",
+    "duration_seconds": 19.020410776138306,
+    "total_tokens": 28377,
+    "input_tokens": 27935,
+    "output_tokens": 442,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 27935,
+        "output_tokens": 442,
+        "total_tokens": 28377,
+        "cache_tokens": 27648,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 19,
+    "condition": "without_a2ui",
+    "question": "Help me move to a new apartment. Create a checklist, recommend moving companies, estimate costs, and suggest a timeline.",
+    "status": "ok",
+    "duration_seconds": 22.107508659362793,
+    "total_tokens": 57217,
+    "input_tokens": 56485,
+    "output_tokens": 732,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 56485,
+        "output_tokens": 732,
+        "total_tokens": 57217,
+        "cache_tokens": 55296,
+        "call_count": 2
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 20,
+    "condition": "without_a2ui",
+    "question": "I'm organizing a company offsite for 30 people. Find suitable venues, nearby hotels, transportation options, and restaurants, then compare them.",
+    "status": "ok",
+    "duration_seconds": 20.945932388305664,
+    "total_tokens": 28717,
+    "input_tokens": 27942,
+    "output_tokens": 775,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 27942,
+        "output_tokens": 775,
+        "total_tokens": 28717,
+        "cache_tokens": 27648,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 21,
+    "condition": "without_a2ui",
+    "question": "Plan a weekend trip where the total budget (hotel, transport, food, and attractions) stays under SGD 500.",
+    "status": "ok",
+    "duration_seconds": 17.804046630859375,
+    "total_tokens": 28238,
+    "input_tokens": 27938,
+    "output_tokens": 300,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 27938,
+        "output_tokens": 300,
+        "total_tokens": 28238,
+        "cache_tokens": 27648,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 22,
+    "condition": "without_a2ui",
+    "question": "Search for electric vehicles available in Singapore and compare purchase price, government rebates, range, charging time, and maintenance costs.",
+    "status": "ok",
+    "duration_seconds": 175.09078335762024,
+    "total_tokens": 179711,
+    "input_tokens": 177097,
+    "output_tokens": 2614,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 177097,
+        "output_tokens": 2614,
+        "total_tokens": 179711,
+        "cache_tokens": 169600,
+        "call_count": 6
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 23,
+    "condition": "without_a2ui",
+    "question": "Find three travel insurance plans for my trip to Japan and explain which one is best for my needs after asking about my travel duration and activities.",
+    "status": "ok",
+    "duration_seconds": 20.510573863983154,
+    "total_tokens": 28240,
+    "input_tokens": 27941,
+    "output_tokens": 299,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 27941,
+        "output_tokens": 299,
+        "total_tokens": 28240,
+        "cache_tokens": 27648,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 24,
+    "condition": "without_a2ui",
+    "question": "Help me buy a bicycle. Ask about my height, riding style, terrain, and budget before recommending suitable models.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "Page.goto: net::ERR_CONNECTION_TIMED_OUT at http://localhost:5173/\nCall log:\n  - navigating to \"http://localhost:5173/\", waiting until \"networkidle\"\n"
+  },
+  {
+    "test_index": 25,
+    "condition": "without_a2ui",
+    "question": "Build me a complete PC for AI development with a SGD 3,000 budget. Compare components, compatibility, and performance.",
+    "status": "timeout",
+    "duration_seconds": 189.05539894104004,
+    "total_tokens": 58000,
+    "input_tokens": 56680,
+    "output_tokens": 1320,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 56680,
+        "output_tokens": 1320,
+        "total_tokens": 58000,
+        "cache_tokens": 55296,
+        "call_count": 2
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 26,
+    "condition": "without_a2ui",
+    "question": "Help me plan a ski trip. Ask about my skiing experience, preferred country, budget, and travel dates before recommending resorts, hotels, equipment rental, and flights.",
+    "status": "ok",
+    "duration_seconds": 32.88836741447449,
+    "total_tokens": 28538,
+    "input_tokens": 27946,
+    "output_tokens": 592,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 27946,
+        "output_tokens": 592,
+        "total_tokens": 28538,
+        "cache_tokens": 27648,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 27,
+    "condition": "without_a2ui",
+    "question": "Find the cheapest MacBook Air on Apple's website, then compare it with offers from authorized retailers.",
+    "status": "ok",
+    "duration_seconds": 180.52452158927917,
+    "total_tokens": 295333,
+    "input_tokens": 285598,
+    "output_tokens": 9735,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 285598,
+        "output_tokens": 9735,
+        "total_tokens": 295333,
+        "cache_tokens": 262912,
+        "call_count": 8
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 28,
+    "condition": "without_a2ui",
+    "question": "Search for Taylor Swift concert tickets. If multiple ticket websites are available, compare prices and seat availability.",
+    "status": "ok",
+    "duration_seconds": 177.97417068481445,
+    "total_tokens": 177675,
+    "input_tokens": 175818,
+    "output_tokens": 1857,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 175818,
+        "output_tokens": 1857,
+        "total_tokens": 177675,
+        "cache_tokens": 170624,
+        "call_count": 6
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 29,
+    "condition": "without_a2ui",
+    "question": "I want to apply for a tourist visa to Japan. Guide me through the application process and ask for any required information before proceeding.",
+    "status": "ok",
+    "duration_seconds": 16.75304365158081,
+    "total_tokens": 28340,
+    "input_tokens": 27939,
+    "output_tokens": 401,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 27939,
+        "output_tokens": 401,
+        "total_tokens": 28340,
+        "cache_tokens": 27648,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 30,
+    "condition": "without_a2ui",
+    "question": "Help me register for a marathon. Search for upcoming races near Singapore, compare registration fees, and guide me through the registration process.",
+    "status": "ok",
+    "duration_seconds": 88.29116630554199,
+    "total_tokens": 547740,
+    "input_tokens": 540703,
+    "output_tokens": 7037,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 540703,
+        "output_tokens": 7037,
+        "total_tokens": 547740,
+        "cache_tokens": 484096,
+        "call_count": 13
+      }
+    },
+    "error": null
+  }
+]

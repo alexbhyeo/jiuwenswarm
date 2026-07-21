@@ -44,12 +44,34 @@ def run_condition(
 
     print(f"\n=== Condition: {condition_name} (a2ui_enabled={condition['a2ui_enabled']}) ===")
     print("Restarting jiuwenswarm backend...")
-    process_manager.restart_with_a2ui(
-        server_cfg["repo_root"],
-        a2ui_enabled=condition["a2ui_enabled"],
-        base_url=server_cfg["base_url"],
-        startup_timeout_seconds=server_cfg["startup_timeout_seconds"],
-    )
+    try:
+        process_manager.restart_with_a2ui(
+            server_cfg["repo_root"],
+            a2ui_enabled=condition["a2ui_enabled"],
+            base_url=server_cfg["base_url"],
+            startup_timeout_seconds=server_cfg["startup_timeout_seconds"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        # A persistently-failing restart (retries already exhausted inside
+        # restart_with_a2ui) must not abort the whole multi-hour run - record
+        # every question in this condition as errored and let the caller move
+        # on to the next condition/iteration.
+        print(f"Backend failed to restart for this condition, skipping it: {exc}")
+        for idx, question in enumerate(questions, start=1):
+            results.append({
+                "test_index": idx,
+                "condition": condition_name,
+                "question": question,
+                "status": "error",
+                "duration_seconds": 0.0,
+                "total_tokens": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "usage_by_purpose": {},
+                "error": f"backend restart failed: {exc}",
+            })
+        raw_json_path.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
+        return
     print("Backend healthy.")
 
     log_path = server_cfg["agent_log_path"]
@@ -118,38 +140,9 @@ def run_condition(
             raw_json_path.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="A2UI token-usage benchmark runner")
-    parser.add_argument(
-        "--limit", type=int, default=None,
-        help="Only run the first N test cases (per condition). Useful for smoke-testing the pipeline.",
-    )
-    parser.add_argument(
-        "--condition", type=str, default=None, choices=["with_a2ui", "without_a2ui"],
-        help="Only run this single condition instead of all configured conditions.",
-    )
-    args = parser.parse_args()
-
-    cfg = load_config()
-    out_cfg = cfg["output"]
-    bench_cfg = cfg["benchmark"]
-
-    results_dir = EXPERIMENT_DIR / out_cfg["results_dir"]
+def run_once(cfg: dict, questions: list[str], conditions: list[dict], results_dir: Path, out_cfg: dict) -> list[dict]:
     results_dir.mkdir(parents=True, exist_ok=True)
     raw_json_path = results_dir / out_cfg["raw_json"]
-
-    questions = xlsx_io.load_test_cases(
-        EXPERIMENT_DIR / bench_cfg["test_cases_xlsx"],
-        sheet_name=bench_cfg["sheet_name"],
-        question_column=bench_cfg["question_column"],
-    )
-    if args.limit is not None:
-        questions = questions[: args.limit]
-    print(f"Loaded {len(questions)} test cases from {bench_cfg['test_cases_xlsx']}")
-
-    conditions = bench_cfg["conditions"]
-    if args.condition is not None:
-        conditions = [c for c in conditions if c["name"] == args.condition]
 
     results: list[dict] = []
     started_at = time.time()
@@ -157,12 +150,11 @@ def main() -> None:
         run_condition(cfg, condition, questions, results, raw_json_path)
 
     elapsed = time.time() - started_at
-    print(f"\nAll conditions complete in {elapsed / 60:.1f} minutes.")
+    print(f"\nRun complete in {elapsed / 60:.1f} minutes.")
 
     xlsx_io.write_summary_xlsx(results, results_dir / out_cfg["summary_xlsx"])
     print(f"Wrote {results_dir / out_cfg['summary_xlsx']}")
 
-    # Simple CSV mirror of the xlsx "results" sheet for quick grepping.
     import csv
 
     csv_path = results_dir / out_cfg["summary_csv"]
@@ -178,10 +170,64 @@ def main() -> None:
 
     with_totals = sum(r["total_tokens"] for r in results if r["condition"] == "with_a2ui")
     without_totals = sum(r["total_tokens"] for r in results if r["condition"] == "without_a2ui")
-    print(f"\nTotal tokens - with_a2ui: {with_totals}, without_a2ui: {without_totals}")
+    print(f"Total tokens - with_a2ui: {with_totals}, without_a2ui: {without_totals}")
     if without_totals:
         print(f"A2UI overhead: {with_totals - without_totals} tokens "
               f"({(with_totals - without_totals) / without_totals * 100:.1f}%)")
+    return results
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="A2UI token-usage benchmark runner")
+    parser.add_argument(
+        "--limit", type=int, default=None,
+        help="Only run the first N test cases (per condition). Useful for smoke-testing the pipeline.",
+    )
+    parser.add_argument(
+        "--condition", type=str, default=None, choices=["with_a2ui", "without_a2ui"],
+        help="Only run this single condition instead of all configured conditions.",
+    )
+    parser.add_argument(
+        "--iterations", type=int, default=1,
+        help="Repeat the full benchmark this many times, for variance/reliability analysis across trials. "
+             "Each iteration writes to results/run<N>/ instead of results/ directly.",
+    )
+    parser.add_argument(
+        "--start-iteration", type=int, default=1,
+        help="First iteration number to run (for resuming a multi-iteration run that was interrupted).",
+    )
+    args = parser.parse_args()
+
+    cfg = load_config()
+    out_cfg = cfg["output"]
+    bench_cfg = cfg["benchmark"]
+    base_results_dir = EXPERIMENT_DIR / out_cfg["results_dir"]
+
+    questions = xlsx_io.load_test_cases(
+        EXPERIMENT_DIR / bench_cfg["test_cases_xlsx"],
+        sheet_name=bench_cfg["sheet_name"],
+        question_column=bench_cfg["question_column"],
+    )
+    if args.limit is not None:
+        questions = questions[: args.limit]
+    print(f"Loaded {len(questions)} test cases from {bench_cfg['test_cases_xlsx']}")
+
+    conditions = bench_cfg["conditions"]
+    if args.condition is not None:
+        conditions = [c for c in conditions if c["name"] == args.condition]
+
+    if args.iterations == 1 and args.start_iteration == 1:
+        run_once(cfg, questions, conditions, base_results_dir, out_cfg)
+        return
+
+    overall_start = time.time()
+    last_iteration = args.start_iteration + args.iterations - 1
+    for i in range(args.start_iteration, last_iteration + 1):
+        print(f"\n{'#' * 70}\n# ITERATION {i} / {last_iteration}\n{'#' * 70}")
+        run_once(cfg, questions, conditions, base_results_dir / f"run{i}", out_cfg)
+    print(f"\nAll {args.iterations} iterations complete in {(time.time() - overall_start) / 60:.1f} minutes.")
+    print(f"Per-iteration results in {base_results_dir}/run<N>/. "
+          f"Run compile_multi_run.py to aggregate into the variance CSV.")
 
 
 if __name__ == "__main__":

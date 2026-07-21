@@ -8,7 +8,7 @@ server:
   repo_root: "d:/git_projects/jiuwenswarm"
   agent_log_path: "C:/Users/Administrator/.jiuwenswarm/agent/.logs/agent_server.log"
   ports: [8090, 8091, 8092, 5173]
-  startup_timeout_seconds: 60
+  startup_timeout_seconds: 90
 
 benchmark:
   test_cases_xlsx: "a2ui_benchmark.xlsx"

@@ -1,0 +1,951 @@
+[
+  {
+    "test_index": 1,
+    "condition": "with_a2ui",
+    "question": "Book me a hotel in Bangkok. Ask for my travel dates before searching.",
+    "status": "ok",
+    "duration_seconds": 30.201370000839233,
+    "total_tokens": 39325,
+    "input_tokens": 37484,
+    "output_tokens": 1841,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37484,
+        "output_tokens": 1841,
+        "total_tokens": 39325,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 2,
+    "condition": "with_a2ui",
+    "question": "Find me flights to Shanghai and sort them by the shortest travel time.",
+    "status": "ok",
+    "duration_seconds": 34.122108459472656,
+    "total_tokens": 154144,
+    "input_tokens": 151726,
+    "output_tokens": 2418,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 151726,
+        "output_tokens": 2418,
+        "total_tokens": 154144,
+        "cache_tokens": 149376,
+        "call_count": 4
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 3,
+    "condition": "with_a2ui",
+    "question": "Recommend three hotels in Singapore and compare their prices, ratings, and locations.",
+    "status": "timeout",
+    "duration_seconds": 188.72199821472168,
+    "total_tokens": 37829,
+    "input_tokens": 37484,
+    "output_tokens": 345,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37484,
+        "output_tokens": 345,
+        "total_tokens": 37829,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 4,
+    "condition": "with_a2ui",
+    "question": "I want to buy a gaming laptop. Show me several options and explain the pros and cons of each.",
+    "status": "ok",
+    "duration_seconds": 50.312594175338745,
+    "total_tokens": 128947,
+    "input_tokens": 124634,
+    "output_tokens": 4313,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 124634,
+        "output_tokens": 4313,
+        "total_tokens": 128947,
+        "cache_tokens": 111744,
+        "call_count": 3
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 5,
+    "condition": "with_a2ui",
+    "question": "Help me plan a food tour in Penang. Ask me what cuisines I like first.",
+    "status": "ok",
+    "duration_seconds": 26.588221788406372,
+    "total_tokens": 98613,
+    "input_tokens": 88768,
+    "output_tokens": 9845,
+    "usage_by_purpose": {
+      "a2ui_repair": {
+        "input_tokens": 12586,
+        "output_tokens": 4549,
+        "total_tokens": 17135,
+        "cache_tokens": 0,
+        "call_count": 1
+      },
+      "main": {
+        "input_tokens": 76182,
+        "output_tokens": 5296,
+        "total_tokens": 81478,
+        "cache_tokens": 74496,
+        "call_count": 2
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 6,
+    "condition": "with_a2ui",
+    "question": "Find attractions in Kyoto and organize them into a 3-day itinerary.",
+    "status": "ok",
+    "duration_seconds": 44.291481018066406,
+    "total_tokens": 185668,
+    "input_tokens": 181154,
+    "output_tokens": 4514,
+    "usage_by_purpose": {
+      "a2ui_repair": {
+        "input_tokens": 11656,
+        "output_tokens": 2359,
+        "total_tokens": 14015,
+        "cache_tokens": 0,
+        "call_count": 1
+      },
+      "main": {
+        "input_tokens": 169498,
+        "output_tokens": 2155,
+        "total_tokens": 171653,
+        "cache_tokens": 155008,
+        "call_count": 4
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 7,
+    "condition": "with_a2ui",
+    "question": "I need a hotel with free breakfast, a swimming pool, and Wi-Fi. Don't recommend anything until you ask my budget.",
+    "status": "ok",
+    "duration_seconds": 15.814618110656738,
+    "total_tokens": 37647,
+    "input_tokens": 37495,
+    "output_tokens": 152,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37495,
+        "output_tokens": 152,
+        "total_tokens": 37647,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 8,
+    "condition": "with_a2ui",
+    "question": "I want to plan a vacation, but I'm not sure where to go. Ask me a few questions before making recommendations.",
+    "status": "timeout",
+    "duration_seconds": 188.47330856323242,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": null
+  },
+  {
+    "test_index": 9,
+    "condition": "with_a2ui",
+    "question": "Recommend a smartphone for me. Don't suggest anything until you've asked about my budget and what I use it for.",
+    "status": "ok",
+    "duration_seconds": 15.647111892700195,
+    "total_tokens": 37825,
+    "input_tokens": 37493,
+    "output_tokens": 332,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37493,
+        "output_tokens": 332,
+        "total_tokens": 37825,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 10,
+    "condition": "with_a2ui",
+    "question": "Help me choose a university in Australia. Ask about my preferred course, budget, and career goals before recommending one.",
+    "status": "ok",
+    "duration_seconds": 31.65277624130249,
+    "total_tokens": 78204,
+    "input_tokens": 75351,
+    "output_tokens": 2853,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 75351,
+        "output_tokens": 2853,
+        "total_tokens": 78204,
+        "cache_tokens": 74496,
+        "call_count": 2
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 11,
+    "condition": "with_a2ui",
+    "question": "Recommend five restaurants in Seoul based on my preferences. Ask what cuisine I enjoy before searching.",
+    "status": "ok",
+    "duration_seconds": 19.863686561584473,
+    "total_tokens": 38603,
+    "input_tokens": 37487,
+    "output_tokens": 1116,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37487,
+        "output_tokens": 1116,
+        "total_tokens": 38603,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 12,
+    "condition": "with_a2ui",
+    "question": "Help me organize a café-hopping trip in Singapore. Suggest the most efficient route between cafés.",
+    "status": "ok",
+    "duration_seconds": 105.48641467094421,
+    "total_tokens": 82295,
+    "input_tokens": 77051,
+    "output_tokens": 5244,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 77051,
+        "output_tokens": 5244,
+        "total_tokens": 82295,
+        "cache_tokens": 74496,
+        "call_count": 2
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 13,
+    "condition": "with_a2ui",
+    "question": "Find restaurants near Marina Bay Sands that have at least a 4.5-star rating and cost less than SGD 50 per person.",
+    "status": "timeout",
+    "duration_seconds": 188.89613676071167,
+    "total_tokens": 76089,
+    "input_tokens": 75505,
+    "output_tokens": 584,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 75505,
+        "output_tokens": 584,
+        "total_tokens": 76089,
+        "cache_tokens": 74624,
+        "call_count": 2
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 14,
+    "condition": "with_a2ui",
+    "question": "I'm planning a family vacation with young children. Ask enough questions before recommending destinations, hotels, and activities.",
+    "status": "ok",
+    "duration_seconds": 35.41859197616577,
+    "total_tokens": 40777,
+    "input_tokens": 37491,
+    "output_tokens": 3286,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37491,
+        "output_tokens": 3286,
+        "total_tokens": 40777,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 15,
+    "condition": "with_a2ui",
+    "question": "Help me organize a business trip to Shanghai. Book a flight, recommend hotels near the exhibition center, and suggest nearby restaurants.",
+    "status": "ok",
+    "duration_seconds": 53.4590265750885,
+    "total_tokens": 158218,
+    "input_tokens": 153514,
+    "output_tokens": 4704,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 153514,
+        "output_tokens": 4704,
+        "total_tokens": 158218,
+        "cache_tokens": 150144,
+        "call_count": 4
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 16,
+    "condition": "with_a2ui",
+    "question": "I have SGD 3,000 for a vacation. Recommend the best destination based on weather, flight prices, and attractions during my travel dates.",
+    "status": "ok",
+    "duration_seconds": 26.28104829788208,
+    "total_tokens": 75723,
+    "input_tokens": 75252,
+    "output_tokens": 471,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 75252,
+        "output_tokens": 471,
+        "total_tokens": 75723,
+        "cache_tokens": 74624,
+        "call_count": 2
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 17,
+    "condition": "with_a2ui",
+    "question": "Plan my honeymoon in Italy. Ask about our budget, travel dates, interests, preferred hotel type, and flight preferences before creating a complete itinerary.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "Page.goto: net::ERR_CONNECTION_TIMED_OUT at http://localhost:5173/\nCall log:\n  - navigating to \"http://localhost:5173/\", waiting until \"networkidle\"\n"
+  },
+  {
+    "test_index": 18,
+    "condition": "with_a2ui",
+    "question": "I'm buying a DSLR camera. Interview me like a salesperson before recommending the best camera and lenses.",
+    "status": "ok",
+    "duration_seconds": 42.395042181015015,
+    "total_tokens": 80193,
+    "input_tokens": 75541,
+    "output_tokens": 4652,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 75541,
+        "output_tokens": 4652,
+        "total_tokens": 80193,
+        "cache_tokens": 74496,
+        "call_count": 2
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 19,
+    "condition": "with_a2ui",
+    "question": "Help me move to a new apartment. Create a checklist, recommend moving companies, estimate costs, and suggest a timeline.",
+    "status": "ok",
+    "duration_seconds": 75.90862846374512,
+    "total_tokens": 295512,
+    "input_tokens": 287576,
+    "output_tokens": 7936,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 273818,
+        "output_tokens": 3247,
+        "total_tokens": 277065,
+        "cache_tokens": 226048,
+        "call_count": 7
+      },
+      "a2ui_repair": {
+        "input_tokens": 13758,
+        "output_tokens": 4689,
+        "total_tokens": 18447,
+        "cache_tokens": 0,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 20,
+    "condition": "with_a2ui",
+    "question": "I'm organizing a company offsite for 30 people. Find suitable venues, nearby hotels, transportation options, and restaurants, then compare them.",
+    "status": "ok",
+    "duration_seconds": 22.506652116775513,
+    "total_tokens": 75966,
+    "input_tokens": 75385,
+    "output_tokens": 581,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 75385,
+        "output_tokens": 581,
+        "total_tokens": 75966,
+        "cache_tokens": 70016,
+        "call_count": 2
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 21,
+    "condition": "with_a2ui",
+    "question": "Plan a weekend trip where the total budget (hotel, transport, food, and attractions) stays under SGD 500.",
+    "status": "timeout",
+    "duration_seconds": 188.3014748096466,
+    "total_tokens": 116969,
+    "input_tokens": 115253,
+    "output_tokens": 1716,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 115253,
+        "output_tokens": 1716,
+        "total_tokens": 116969,
+        "cache_tokens": 112384,
+        "call_count": 3
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 22,
+    "condition": "with_a2ui",
+    "question": "Search for electric vehicles available in Singapore and compare purchase price, government rebates, range, charging time, and maintenance costs.",
+    "status": "timeout",
+    "duration_seconds": 188.7146191596985,
+    "total_tokens": 495830,
+    "input_tokens": 479746,
+    "output_tokens": 16084,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 479746,
+        "output_tokens": 16084,
+        "total_tokens": 495830,
+        "cache_tokens": 445696,
+        "call_count": 11
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 23,
+    "condition": "with_a2ui",
+    "question": "Find three travel insurance plans for my trip to Japan and explain which one is best for my needs after asking about my travel duration and activities.",
+    "status": "ok",
+    "duration_seconds": 23.49176287651062,
+    "total_tokens": 38051,
+    "input_tokens": 37523,
+    "output_tokens": 528,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37523,
+        "output_tokens": 528,
+        "total_tokens": 38051,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 24,
+    "condition": "with_a2ui",
+    "question": "Help me buy a bicycle. Ask about my height, riding style, terrain, and budget before recommending suitable models.",
+    "status": "ok",
+    "duration_seconds": 8.189093351364136,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": null
+  },
+  {
+    "test_index": 25,
+    "condition": "with_a2ui",
+    "question": "Build me a complete PC for AI development with a SGD 3,000 budget. Compare components, compatibility, and performance.",
+    "status": "ok",
+    "duration_seconds": 8.22560167312622,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": null
+  },
+  {
+    "test_index": 26,
+    "condition": "with_a2ui",
+    "question": "Help me plan a ski trip. Ask about my skiing experience, preferred country, budget, and travel dates before recommending resorts, hotels, equipment rental, and flights.",
+    "status": "ok",
+    "duration_seconds": 42.66433787345886,
+    "total_tokens": 39665,
+    "input_tokens": 37528,
+    "output_tokens": 2137,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 37528,
+        "output_tokens": 2137,
+        "total_tokens": 39665,
+        "cache_tokens": 37248,
+        "call_count": 1
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 27,
+    "condition": "with_a2ui",
+    "question": "Find the cheapest MacBook Air on Apple's website, then compare it with offers from authorized retailers.",
+    "status": "timeout",
+    "duration_seconds": 188.4540114402771,
+    "total_tokens": 117713,
+    "input_tokens": 116562,
+    "output_tokens": 1151,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 116562,
+        "output_tokens": 1151,
+        "total_tokens": 117713,
+        "cache_tokens": 111872,
+        "call_count": 3
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 28,
+    "condition": "with_a2ui",
+    "question": "Search for Taylor Swift concert tickets. If multiple ticket websites are available, compare prices and seat availability.",
+    "status": "ok",
+    "duration_seconds": 90.01223587989807,
+    "total_tokens": 407082,
+    "input_tokens": 402535,
+    "output_tokens": 4547,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 402535,
+        "output_tokens": 4547,
+        "total_tokens": 407082,
+        "cache_tokens": 383872,
+        "call_count": 10
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 29,
+    "condition": "with_a2ui",
+    "question": "I want to apply for a tourist visa to Japan. Guide me through the application process and ask for any required information before proceeding.",
+    "status": "timeout",
+    "duration_seconds": 188.56971883773804,
+    "total_tokens": 212412,
+    "input_tokens": 209959,
+    "output_tokens": 2453,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 209959,
+        "output_tokens": 2453,
+        "total_tokens": 212412,
+        "cache_tokens": 188416,
+        "call_count": 5
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 30,
+    "condition": "with_a2ui",
+    "question": "Help me register for a marathon. Search for upcoming races near Singapore, compare registration fees, and guide me through the registration process.",
+    "status": "ok",
+    "duration_seconds": 53.393242597579956,
+    "total_tokens": 204048,
+    "input_tokens": 197738,
+    "output_tokens": 6310,
+    "usage_by_purpose": {
+      "main": {
+        "input_tokens": 197738,
+        "output_tokens": 6310,
+        "total_tokens": 204048,
+        "cache_tokens": 193536,
+        "call_count": 5
+      }
+    },
+    "error": null
+  },
+  {
+    "test_index": 1,
+    "condition": "without_a2ui",
+    "question": "Book me a hotel in Bangkok. Ask for my travel dates before searching.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 2,
+    "condition": "without_a2ui",
+    "question": "Find me flights to Shanghai and sort them by the shortest travel time.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 3,
+    "condition": "without_a2ui",
+    "question": "Recommend three hotels in Singapore and compare their prices, ratings, and locations.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 4,
+    "condition": "without_a2ui",
+    "question": "I want to buy a gaming laptop. Show me several options and explain the pros and cons of each.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 5,
+    "condition": "without_a2ui",
+    "question": "Help me plan a food tour in Penang. Ask me what cuisines I like first.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 6,
+    "condition": "without_a2ui",
+    "question": "Find attractions in Kyoto and organize them into a 3-day itinerary.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 7,
+    "condition": "without_a2ui",
+    "question": "I need a hotel with free breakfast, a swimming pool, and Wi-Fi. Don't recommend anything until you ask my budget.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 8,
+    "condition": "without_a2ui",
+    "question": "I want to plan a vacation, but I'm not sure where to go. Ask me a few questions before making recommendations.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 9,
+    "condition": "without_a2ui",
+    "question": "Recommend a smartphone for me. Don't suggest anything until you've asked about my budget and what I use it for.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 10,
+    "condition": "without_a2ui",
+    "question": "Help me choose a university in Australia. Ask about my preferred course, budget, and career goals before recommending one.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 11,
+    "condition": "without_a2ui",
+    "question": "Recommend five restaurants in Seoul based on my preferences. Ask what cuisine I enjoy before searching.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 12,
+    "condition": "without_a2ui",
+    "question": "Help me organize a café-hopping trip in Singapore. Suggest the most efficient route between cafés.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 13,
+    "condition": "without_a2ui",
+    "question": "Find restaurants near Marina Bay Sands that have at least a 4.5-star rating and cost less than SGD 50 per person.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 14,
+    "condition": "without_a2ui",
+    "question": "I'm planning a family vacation with young children. Ask enough questions before recommending destinations, hotels, and activities.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 15,
+    "condition": "without_a2ui",
+    "question": "Help me organize a business trip to Shanghai. Book a flight, recommend hotels near the exhibition center, and suggest nearby restaurants.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 16,
+    "condition": "without_a2ui",
+    "question": "I have SGD 3,000 for a vacation. Recommend the best destination based on weather, flight prices, and attractions during my travel dates.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 17,
+    "condition": "without_a2ui",
+    "question": "Plan my honeymoon in Italy. Ask about our budget, travel dates, interests, preferred hotel type, and flight preferences before creating a complete itinerary.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 18,
+    "condition": "without_a2ui",
+    "question": "I'm buying a DSLR camera. Interview me like a salesperson before recommending the best camera and lenses.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 19,
+    "condition": "without_a2ui",
+    "question": "Help me move to a new apartment. Create a checklist, recommend moving companies, estimate costs, and suggest a timeline.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 20,
+    "condition": "without_a2ui",
+    "question": "I'm organizing a company offsite for 30 people. Find suitable venues, nearby hotels, transportation options, and restaurants, then compare them.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 21,
+    "condition": "without_a2ui",
+    "question": "Plan a weekend trip where the total budget (hotel, transport, food, and attractions) stays under SGD 500.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 22,
+    "condition": "without_a2ui",
+    "question": "Search for electric vehicles available in Singapore and compare purchase price, government rebates, range, charging time, and maintenance costs.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 23,
+    "condition": "without_a2ui",
+    "question": "Find three travel insurance plans for my trip to Japan and explain which one is best for my needs after asking about my travel duration and activities.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 24,
+    "condition": "without_a2ui",
+    "question": "Help me buy a bicycle. Ask about my height, riding style, terrain, and budget before recommending suitable models.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 25,
+    "condition": "without_a2ui",
+    "question": "Build me a complete PC for AI development with a SGD 3,000 budget. Compare components, compatibility, and performance.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 26,
+    "condition": "without_a2ui",
+    "question": "Help me plan a ski trip. Ask about my skiing experience, preferred country, budget, and travel dates before recommending resorts, hotels, equipment rental, and flights.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 27,
+    "condition": "without_a2ui",
+    "question": "Find the cheapest MacBook Air on Apple's website, then compare it with offers from authorized retailers.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 28,
+    "condition": "without_a2ui",
+    "question": "Search for Taylor Swift concert tickets. If multiple ticket websites are available, compare prices and seat availability.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 29,
+    "condition": "without_a2ui",
+    "question": "I want to apply for a tourist visa to Japan. Guide me through the application process and ask for any required information before proceeding.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  },
+  {
+    "test_index": 30,
+    "condition": "without_a2ui",
+    "question": "Help me register for a marathon. Search for upcoming races near Singapore, compare registration fees, and guide me through the registration process.",
+    "status": "error",
+    "duration_seconds": 0.0,
+    "total_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_by_purpose": {},
+    "error": "backend restart failed: jiuwenswarm did not become healthy within 60s (a2ui_enabled=False, attempt=3/3)"
+  }
+]
