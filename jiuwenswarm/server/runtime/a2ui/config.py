@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-SUPPORTED_A2UI_PROTOCOL_VERSIONS = frozenset({"0.8"})
+SUPPORTED_A2UI_PROTOCOL_VERSIONS = frozenset({"0.9.1"})
 
 
 @dataclass(frozen=True)
@@ -17,7 +17,7 @@ class A2UIConfig:
     """Runtime switches controlling the optional A2UI feature."""
 
     enabled: bool = False
-    protocol_version: str = "0.8"
+    protocol_version: str = "0.9.1"
     stream_validation_enabled: bool = True
     non_web_fallback_enabled: bool = False
     dev_smoke_tools_enabled: bool = False
@@ -51,7 +51,7 @@ def get_a2ui_config(config: dict[str, Any] | None = None) -> A2UIConfig:
     protocol_version = str(
         os.getenv("JIUWENSWARM_A2UI_PROTOCOL_VERSION")
         or section.get("protocol_version")
-        or "0.8"
+        or "0.9.1"
     ).strip()
     if protocol_version not in SUPPORTED_A2UI_PROTOCOL_VERSIONS:
         raise ValueError(f"Unsupported A2UI protocol version: {protocol_version}")

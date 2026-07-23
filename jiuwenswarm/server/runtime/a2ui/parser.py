@@ -15,7 +15,7 @@ from jiuwenswarm.server.runtime.a2ui.types import A2UIResponsePart
 
 
 _A2UI_MESSAGE_KEYS = frozenset(
-    {"beginRendering", "surfaceUpdate", "dataModelUpdate", "deleteSurface"}
+    {"createSurface", "updateComponents", "updateDataModel", "deleteSurface"}
 )
 
 

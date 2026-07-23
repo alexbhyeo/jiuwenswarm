@@ -1,10 +1,10 @@
 import './i18n';
 import ReactDOM from 'react-dom/client';
-import { A2UIProvider } from '@a2ui/react';
-import type { A2UIClientEventMessage } from '@a2ui/react';
-import { injectStyles } from '@a2ui/react/styles';
 import App from './App.tsx'
-import { dispatchA2UIAction } from './features/a2ui/actionBridge';
+// v0.9's basicCatalog components ship their own CSS Modules, imported as a
+// side effect of the package's JS (see @a2ui/react's "sideEffects": ["*.css"]
+// in package.json) - unlike v0.8, there is no separate injectStyles() call.
+import './features/a2ui/messageProcessor';
 import './index.css'
 import './features/a2ui/a2ui.css'
 
@@ -24,16 +24,9 @@ function flagA2UIIconFontAvailability() {
   )
 }
 
-injectStyles();
 flagA2UIIconFontAvailability()
 void document.fonts?.ready.then(flagA2UIIconFontAvailability)
 
-function handleA2UIAction(message: A2UIClientEventMessage) {
-  void dispatchA2UIAction(message);
-}
-
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <A2UIProvider onAction={handleA2UIAction}>
-    <App />
-  </A2UIProvider>,
+  <App />,
 )

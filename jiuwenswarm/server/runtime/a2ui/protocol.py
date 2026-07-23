@@ -1,6 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-"""A2UI v0.8 protocol adapter and public protocol facade."""
+"""A2UI v0.9.1 protocol adapter and public protocol facade."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from typing import Any
 
 from a2ui.basic_catalog.provider import BasicCatalog
 from a2ui.schema.common_modifiers import remove_strict_validation
-from a2ui.schema.constants import A2UI_CLOSE_TAG, A2UI_OPEN_TAG, VERSION_0_8
+from a2ui.schema.constants import A2UI_CLOSE_TAG, A2UI_OPEN_TAG, VERSION_0_9_1
 from a2ui.schema.manager import A2uiSchemaManager
 
 from jiuwenswarm.server.runtime.a2ui.parser import (
@@ -30,7 +30,12 @@ from jiuwenswarm.server.runtime.a2ui.validator import (
 )
 
 
-A2UI_ACTIVE_PROTOCOL_VERSION = VERSION_0_8
+A2UI_ACTIVE_PROTOCOL_VERSION = VERSION_0_9_1
+# The message envelope's own "version" field is a schema const/enum independent of
+# the catalog version string above - the installed SDK (a2ui-agent-sdk==0.2.4)
+# requires exactly "v0.9" here for both the "0.9" and "0.9.1" catalogs (their
+# server_to_client.json schemas are byte-identical in this SDK release).
+A2UI_MESSAGE_ENVELOPE_VERSION = "v0.9"
 A2UI_CLIENT_EVENT_TYPE = "a2ui.client_event"
 logger = logging.getLogger(__name__)
 
@@ -59,7 +64,7 @@ def _load_json_file(path: Path) -> Any:
 
 
 def _normalize_prompt_contract(prompt: str) -> str:
-    """Remove SDK default wording that conflicts with jiuwenswarm's v0.8 contract."""
+    """Remove SDK default wording that conflicts with jiuwenswarm's v0.9.1 contract."""
     return prompt.replace(
         _SDK_JSON_OBJECT_WORKFLOW_LINE,
         _JWC_JSON_LIST_WORKFLOW_LINE,
@@ -69,12 +74,12 @@ def _normalize_prompt_contract(prompt: str) -> str:
 class A2UIProtocolSpec:
     """Versioned A2UI protocol adapter.
 
-    The registry starts with v0.8 only. Future versions should be added as new
+    The registry starts with v0.9.1 only. Future versions should be added as new
     A2UIProtocolSpec instances rather than modifying call sites.
     """
 
     def __init__(self, version: str) -> None:
-        if version != VERSION_0_8:
+        if version != VERSION_0_9_1:
             raise ValueError(f"Unsupported A2UI protocol version: {version}")
         self.version = version
         self.examples_dir = _examples_dir(version)
@@ -92,7 +97,7 @@ class A2UIProtocolSpec:
         if language in {"zh", "cn"}:
             role = (
                 "JiuwenSwarm 支持可选的 A2UI 输出格式。当富交互界面适合当前回答时，"
-                "可以生成严格符合 A2UI 0.8 schema 的消息。"
+                "可以生成严格符合 A2UI 0.9.1 schema 的消息。"
             )
             ui = (
                 "当用户需要列表、卡片、表单、确认结果、可点击操作或结构化信息比较时使用 A2UI。"
@@ -102,14 +107,19 @@ class A2UIProtocolSpec:
                 "如果使用 A2UI，回答可以包含说明文本和一个或多个 A2UI JSON block。"
                 f"每个 block 必须用 {A2UI_OPEN_TAG} 和 {A2UI_CLOSE_TAG} 包装。"
                 "block 内必须是 JSON list，list 中每个元素都是 A2UI server-to-client message。"
-                "必须先输出 beginRendering，再输出 surfaceUpdate；如果使用数据绑定，再按需输出 dataModelUpdate。"
-                "父组件必须先于子组件出现。不要输出其他协议版本的 schema、字段或组件。"
+                f'每条 message 都必须包含 "version": "{A2UI_MESSAGE_ENVELOPE_VERSION}"。'
+                "必须先输出 createSurface，再输出 updateComponents；如果使用数据绑定，"
+                "再按需输出 updateDataModel。updateComponents.components 数组中，"
+                "父组件必须先于子组件出现。组件对象是扁平结构：\"component\" 字段是组件类型名"
+                "的字符串（例如 \"component\": \"ChoicePicker\"），其余属性与 \"component\"、\"id\" "
+                "同级并列，不要把属性嵌套在组件类型名下面。不要输出其他协议版本的 schema、"
+                "字段或组件。"
             )
         else:
             role = (
                 "JiuwenSwarm supports an optional A2UI output format. When a rich "
                 "interactive answer is appropriate, generate messages that "
-                "strictly validate against the A2UI 0.8 schema."
+                "strictly validate against the A2UI 0.9.1 schema."
             )
             ui = (
                 "Use A2UI for lists, cards, forms, confirmations, clickable "
@@ -121,11 +131,16 @@ class A2UIProtocolSpec:
                 "When using A2UI, the response may contain conversational text and "
                 f"one or more A2UI JSON blocks wrapped in {A2UI_OPEN_TAG} and "
                 f"{A2UI_CLOSE_TAG}. The JSON inside each block MUST be a JSON list "
-                "of A2UI server-to-client messages. Emit beginRendering before "
-                "surfaceUpdate; include dataModelUpdate only when data binding is "
-                "needed. List parent components before child components. Do not "
-                "emit schema, fields, or components from any protocol version "
-                "other than 0.8."
+                "of A2UI server-to-client messages. Every message MUST include "
+                f'"version": "{A2UI_MESSAGE_ENVELOPE_VERSION}". Emit createSurface '
+                "before updateComponents; include updateDataModel only when data "
+                "binding is needed. Within updateComponents.components, list parent "
+                "components before child components. Component objects are flat: "
+                '"component" is a string naming the component type (e.g. '
+                '"component": "ChoicePicker"), and every other property is a '
+                'sibling of "component" and "id" - do not nest properties under the '
+                "component type name. Do not emit schema, fields, or components "
+                "from any protocol version other than 0.9.1."
             )
 
         workflow = f"{workflow}\n\n{build_a2ui_autonomy_instruction(language)}"
@@ -200,11 +215,12 @@ class A2UIProtocolSpec:
             "Your previous A2UI response was invalid. "
             f"Validation error: {validation_error}\n\n"
             f"{query_section}"
-            "Return only a valid A2UI 0.8 response. Every A2UI JSON block must be "
+            "Return only a valid A2UI 0.9.1 response. Every A2UI JSON block must be "
             f"wrapped in {A2UI_OPEN_TAG} and {A2UI_CLOSE_TAG}; each block must "
             "contain a JSON list of server-to-client messages that validates "
-            "against the provided schema. Do not call tools. Do not explain the "
-            "repair.\n\n"
+            f'against the provided schema. Every message MUST include "version": '
+            f'"{A2UI_MESSAGE_ENVELOPE_VERSION}". Do not call tools. Do not explain '
+            "the repair.\n\n"
             f"Schema and examples:\n{schema_prompt}\n\n"
             f"Invalid response:\n{invalid_content}"
         )
@@ -224,7 +240,7 @@ def get_protocol_spec(version: str = A2UI_ACTIVE_PROTOCOL_VERSION) -> A2UIProtoc
     The A2UI schema and bundled examples are loaded once per protocol version;
     runtime hot-reload is intentionally not supported.
     """
-    if version != VERSION_0_8:
+    if version != VERSION_0_9_1:
         raise ValueError(f"Unsupported A2UI protocol version: {version}")
     return A2UIProtocolSpec(version)
 
@@ -233,7 +249,7 @@ def build_a2ui_prompt_section(language: str = "en") -> str:
     return get_protocol_spec().build_prompt(language)
 
 
-def format_a2ui_for_text_channel(content: str, version: str = VERSION_0_8) -> str:
+def format_a2ui_for_text_channel(content: str, version: str = VERSION_0_9_1) -> str:
     return get_protocol_spec(version).format_for_text_channel(content)
 
 
@@ -252,10 +268,11 @@ def is_a2ui_client_event(value: Any) -> bool:
 
 
 def _log_a2ui_client_event(event: dict[str, Any]) -> None:
-    payload = event.get("event")
-    user_action = payload.get("userAction") if isinstance(payload, dict) else None
+    # v0.9.1's A2uiClientAction is flat ({name, surfaceId, sourceComponentId,
+    # timestamp, context}) - unlike v0.8, there is no "userAction" wrapper key.
+    user_action = event.get("event")
     if not isinstance(user_action, dict):
-        logger.info("A2UI client event received without userAction")
+        logger.info("A2UI client event received without an action payload")
         return
 
     context = user_action.get("context")
@@ -271,8 +288,9 @@ def _log_a2ui_client_event(event: dict[str, Any]) -> None:
 
 
 def _get_a2ui_user_action(event: dict[str, Any]) -> dict[str, Any]:
-    payload = event.get("event")
-    user_action = payload.get("userAction") if isinstance(payload, dict) else None
+    # v0.9.1's A2uiClientAction is flat - the "event" key holds the action
+    # object itself, with no nested "userAction" wrapper (v0.8's shape).
+    user_action = event.get("event")
     return user_action if isinstance(user_action, dict) else {}
 
 
@@ -397,7 +415,7 @@ def _build_a2ui_event_payload(
         "source": channel,
         "preferred_response_language": language,
         "type": A2UI_CLIENT_EVENT_TYPE,
-        "protocolVersion": event.get("protocolVersion", VERSION_0_8),
+        "protocolVersion": event.get("protocolVersion", VERSION_0_9_1),
         "event": event.get("event", {}),
     }
 
@@ -410,7 +428,7 @@ def _build_browser_preflight_client_event_prompt(
     payload = _build_a2ui_event_payload(event, channel, language)
     prefix = (
         "You receive an A2UI browser task preflight submission. The user has "
-        "confirmed the values in event.userAction.context. Combine those values "
+        "confirmed the values in event.context. Combine those values "
         "with original_query and start the browser task now by calling "
         "spawn_sub_agent with subagent_type='browser_agent' and a complete "
         "task_description. Do not ask again for values already present in the "
@@ -432,7 +450,7 @@ def _build_hotel_option_select_client_event_prompt(
     prefix = (
         "You receive an A2UI hotel candidate selection. The user selected one "
         "candidate from a hotel list previously returned by browser automation. "
-        "Treat event.userAction.context as the authoritative selected candidate "
+        "Treat event.context as the authoritative selected candidate "
         "and booking context. Continue the existing hotel booking flow by calling "
         "spawn_sub_agent with subagent_type='browser_agent'. The task_description "
         "must instruct the browser_agent to continue from the current browser "
@@ -460,7 +478,7 @@ def _build_hotel_payment_confirm_client_event_prompt(
     payload = _build_a2ui_event_payload(event, channel, language)
     prefix = (
         "You receive an A2UI final hotel payment confirmation. The user is "
-        "confirming the exact order summary shown in event.userAction.context. "
+        "confirming the exact order summary shown in event.context. "
         "Before taking any irreversible action, verify that the selected hotel, "
         "dates, guest/room details, total price, cancellation policy, and payment "
         "step in the current browser state match the context. If they do not "
@@ -495,7 +513,7 @@ def _build_gmail_email_select_client_event_prompt(
     prefix = (
         "You receive an A2UI Gmail email/thread selection. The user selected "
         "one item from Gmail search results previously returned by browser "
-        "automation. Treat event.userAction.context as the authoritative "
+        "automation. Treat event.context as the authoritative "
         "selected email/thread and search context. Continue by calling "
         "spawn_sub_agent with subagent_type='browser_agent'. The task_description "
         "must instruct browser_agent to continue from the current Gmail browser "
@@ -521,7 +539,7 @@ def _build_gmail_reply_draft_select_client_event_prompt(
     prefix = (
         "You receive an A2UI Gmail reply draft selection. The user selected a "
         "reply draft or drafting style from an email summary. Treat "
-        "event.userAction.context as the authoritative selected email/thread, "
+        "event.context as the authoritative selected email/thread, "
         "recipient, subject, and draft body. Continue by calling spawn_sub_agent "
         "with subagent_type='browser_agent' to open the existing selected Gmail "
         "thread and fill the reply compose box. Do not send the email. Do not "
@@ -542,7 +560,7 @@ def _build_gmail_send_confirm_client_event_prompt(
     prefix = (
         "You receive an A2UI final Gmail send confirmation. Before sending, "
         "verify that the visible Gmail compose/reply state matches "
-        "event.userAction.context for recipient, subject, body, attachment "
+        "event.context for recipient, subject, body, attachment "
         "state, and selected thread. If anything differs, stop and render a "
         "corrected A2UI confirmation. If it matches, call browser_agent to send "
         "the email now using the visible Gmail send action. Never send to a "
@@ -576,7 +594,7 @@ def _build_gmail_cleanup_select_client_event_prompt(
     prefix = (
         "You receive an A2UI Gmail cleanup selection. The user selected messages, "
         "categories, or cleanup rules from a Gmail cleanup candidate list. Treat "
-        "event.userAction.context as the authoritative cleanup selection. Do not "
+        "event.context as the authoritative cleanup selection. Do not "
         "modify Gmail yet. Render a final A2UI cleanup confirmation that lists "
         "the exact operation, selected message count, representative subjects or "
         "senders, excluded messages, and risk level. The confirm action must be "
@@ -597,7 +615,7 @@ def _build_gmail_cleanup_confirm_client_event_prompt(
         "calling spawn_sub_agent with subagent_type='browser_agent'. The "
         "task_description must instruct browser_agent to continue from the "
         "current Gmail browser state/session and apply only the confirmed cleanup "
-        "operation to the selected messages/categories in event.userAction.context. "
+        "operation to the selected messages/categories in event.context. "
         "Do not repeat or broaden the Gmail search unless state recovery is "
         "needed. Before modifying Gmail, verify the selected messages/count and "
         "operation match the context. If they do not match, stop and render a "
@@ -630,7 +648,7 @@ def _build_social_post_draft_select_client_event_prompt(
     prefix = (
         "You receive an A2UI social media post draft selection. The user selected "
         "one draft variant for a public social-media post. Treat "
-        "event.userAction.context as the authoritative platform, account, draft "
+        "event.context as the authoritative platform, account, draft "
         "body, media/link state, visibility, and posting context. Continue by "
         "calling spawn_sub_agent with subagent_type='browser_agent' to continue "
         "from the current browser state/session, open or use the selected social "
@@ -652,7 +670,7 @@ def _build_social_post_confirm_client_event_prompt(
     prefix = (
         "You receive an A2UI final social media post confirmation. Before "
         "publishing, verify that the visible compose state matches "
-        "event.userAction.context for platform, account, body, media/link state, "
+        "event.context for platform, account, body, media/link state, "
         "visibility, and target audience. If anything differs, stop and render a "
         "corrected A2UI confirmation. If it matches, call browser_agent to "
         "publish the post now using the visible platform publish/post action. "
@@ -709,12 +727,12 @@ def build_a2ui_client_event_prompt(event: dict[str, Any], channel: str, language
         return _build_browser_preflight_client_event_prompt(event, channel, language)
 
     prefix = (
-        "你收到了一次 A2UI 组件交互。请把 event.userAction.context "
+        "你收到了一次 A2UI 组件交互。请把 event.context "
         "视为用户提交的值。对于普通表单或按钮提交，请直接、简洁地使用首选回复语言回答。"
         "不要调用工具、读写记忆或创建文件，除非该 action 明确要求外部工作。\n"
         if language in {"zh", "cn"}
         else (
-            "You receive an A2UI component interaction. Treat event.userAction.context "
+            "You receive an A2UI component interaction. Treat event.context "
             "as values submitted by the user. For normal form/button submissions, "
             "answer directly and concisely in the preferred response language. Do not "
             "call tools, read/write memory, or create files unless the action explicitly "

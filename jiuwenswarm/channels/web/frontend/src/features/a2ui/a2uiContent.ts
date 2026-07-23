@@ -1,15 +1,26 @@
 ﻿// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-import type { ServerToClientMessage } from '@a2ui/react';
+// v0.9.1 message envelope: {"version": "v0.9", <one of the 4 keys below>: {...}}.
+// Defined locally rather than imported from the SDK - this module does its own
+// manual JSON structural parsing on raw streamed text before any SDK
+// processing happens, so it only needs the shape, not the full Zod-inferred
+// runtime type.
+export interface ServerToClientMessage {
+  version?: string;
+  createSurface?: { surfaceId: string; catalogId?: string; [key: string]: unknown };
+  updateComponents?: { surfaceId: string; components?: unknown[] };
+  updateDataModel?: { surfaceId?: string; path?: string; value?: unknown };
+  deleteSurface?: { surfaceId: string };
+}
 
-export const A2UI_PROTOCOL_VERSION = '0.8';
+export const A2UI_PROTOCOL_VERSION = '0.9.1';
 export const A2UI_OPEN_TAG = '<a2ui-json>';
 export const A2UI_CLOSE_TAG = '</a2ui-json>';
 
 const A2UI_MESSAGE_KEYS = [
-  'beginRendering',
-  'surfaceUpdate',
-  'dataModelUpdate',
+  'createSurface',
+  'updateComponents',
+  'updateDataModel',
   'deleteSurface',
 ] as const;
 
@@ -135,14 +146,14 @@ function findNextFencedA2UIBlock(content: string, cursor: number): FencedA2UIBlo
 }
 
 function getMessageSurfaceId(message: ServerToClientMessage): string | null {
-  if (message.beginRendering?.surfaceId) {
-    return message.beginRendering.surfaceId;
+  if (message.createSurface?.surfaceId) {
+    return message.createSurface.surfaceId;
   }
-  if (message.surfaceUpdate?.surfaceId) {
-    return message.surfaceUpdate.surfaceId;
+  if (message.updateComponents?.surfaceId) {
+    return message.updateComponents.surfaceId;
   }
-  if (message.dataModelUpdate?.surfaceId) {
-    return message.dataModelUpdate.surfaceId;
+  if (message.updateDataModel?.surfaceId) {
+    return message.updateDataModel.surfaceId;
   }
   if (message.deleteSurface?.surfaceId) {
     return message.deleteSurface.surfaceId;
@@ -325,14 +336,14 @@ export function namespaceA2UIMessages(
 
   return messages.map((message) => {
     const cloned = structuredClone(message) as ServerToClientMessage;
-    if (cloned.beginRendering?.surfaceId) {
-      cloned.beginRendering.surfaceId = namespaceSurfaceId(cloned.beginRendering.surfaceId);
+    if (cloned.createSurface?.surfaceId) {
+      cloned.createSurface.surfaceId = namespaceSurfaceId(cloned.createSurface.surfaceId);
     }
-    if (cloned.surfaceUpdate?.surfaceId) {
-      cloned.surfaceUpdate.surfaceId = namespaceSurfaceId(cloned.surfaceUpdate.surfaceId);
+    if (cloned.updateComponents?.surfaceId) {
+      cloned.updateComponents.surfaceId = namespaceSurfaceId(cloned.updateComponents.surfaceId);
     }
-    if (cloned.dataModelUpdate?.surfaceId) {
-      cloned.dataModelUpdate.surfaceId = namespaceSurfaceId(cloned.dataModelUpdate.surfaceId);
+    if (cloned.updateDataModel?.surfaceId) {
+      cloned.updateDataModel.surfaceId = namespaceSurfaceId(cloned.updateDataModel.surfaceId);
     }
     if (cloned.deleteSurface?.surfaceId) {
       cloned.deleteSurface.surfaceId = namespaceSurfaceId(cloned.deleteSurface.surfaceId);

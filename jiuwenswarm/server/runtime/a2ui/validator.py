@@ -5,14 +5,19 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from typing import Any
+
+from referencing.exceptions import Unresolvable
 
 from jiuwenswarm.server.runtime.a2ui.parser import (
     coerce_message_list,
     iter_tagged_block_bodies,
 )
 from jiuwenswarm.server.runtime.a2ui.types import A2UIResponsePart, A2UIValidationResult
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_data_path(path: Any) -> str:
@@ -41,7 +46,7 @@ def _validate_value_map_keys(entries: Any, path: str) -> None:
         if not isinstance(key, str):
             continue
         if key in seen:
-            raise ValueError(f"Duplicate dataModelUpdate key at {path}: {key}")
+            raise ValueError(f"Duplicate updateDataModel key at {path}: {key}")
         seen.add(key)
         nested = entry.get("valueMap")
         if isinstance(nested, list):
@@ -68,7 +73,7 @@ def _index_data_model_entries(
 def _build_data_model_index(messages: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     index: dict[str, list[dict[str, Any]]] = {}
     for message in messages:
-        update = message.get("dataModelUpdate")
+        update = message.get("updateDataModel")
         if not isinstance(update, dict):
             continue
         path = _normalize_data_path(update.get("path", "/"))
@@ -212,12 +217,12 @@ def _validate_image_runtime_semantics(messages: list[dict[str, Any]]) -> None:
 def _validate_template_runtime_semantics(messages: list[dict[str, Any]]) -> None:
     data_model_index = _build_data_model_index(messages)
     for message in messages:
-        update = message.get("dataModelUpdate")
+        update = message.get("updateDataModel")
         if isinstance(update, dict):
             _validate_value_map_keys(update.get("contents"), _normalize_data_path(update.get("path", "/")))
 
     for message in messages:
-        surface_update = message.get("surfaceUpdate")
+        surface_update = message.get("updateComponents")
         if not isinstance(surface_update, dict):
             continue
         components = surface_update.get("components")
@@ -239,7 +244,7 @@ def _validate_template_runtime_semantics(messages: list[dict[str, Any]]) -> None
                 for component_id in _component_subtree_ids(template_component_id, components_by_id):
                     if _component_has_template(components_by_id[component_id]):
                         raise ValueError(
-                            "A2UI v0.8 nested templates are not supported by the Web renderer; "
+                            "A2UI v0.9.1 nested templates are not supported by the Web renderer; "
                             f"found a template inside template {template_component_id!r}. "
                             "Flatten repeated item content into fields on the outer item, or use "
                             "explicit child components inside the template."
@@ -272,10 +277,39 @@ def _validate_template_runtime_semantics(messages: list[dict[str, Any]]) -> None
                     )
 
 
+# a2ui-agent-sdk==0.2.4's A2uiValidator builds several isolated sub-validators
+# from raw $defs fragments (e.g. _get_sub_validator("CreateSurfaceMessage") for
+# createSurface, and a synthetic {"$ref": "catalog.json#/components/<Type>"}
+# schema per component in updateComponents) that carry no base URI of their
+# own. Any relative "catalog.json#/$defs/<name>" reference reached through one
+# of these fragments then fails to resolve against the shared registry - even
+# though catalog.json genuinely defines that $defs entry and top-level
+# validation of the full message list resolves the same ref just fine.
+# Confirmed by direct repro: createSurface.theme -> Unresolvable(catalog.json#/$defs/theme),
+# and updateComponents components -> Unresolvable(catalog.json#/$defs/anyComponent).
+# This is a bug in the SDK's registry plumbing, not a real schema violation,
+# so treat it as such rather than rejecting-and-repairing content that was
+# never actually invalid.
+_KNOWN_SDK_UNRESOLVABLE_REF_PREFIX = "catalog.json#/$defs/"
+
+
 def validate_a2ui_messages(catalog: Any, messages: list[dict[str, Any]]) -> None:
     if not messages:
         raise ValueError("A2UI message list is empty")
-    catalog.validator.validate(messages)
+    try:
+        catalog.validator.validate(messages)
+    except Exception as exc:  # noqa: BLE001
+        cause = exc if isinstance(exc, Unresolvable) else exc.__cause__
+        if isinstance(cause, Unresolvable) and str(cause.ref).startswith(
+            _KNOWN_SDK_UNRESOLVABLE_REF_PREFIX
+        ):
+            logger.warning(
+                "A2UI schema validation hit a known a2ui-agent-sdk $ref resolution "
+                "bug (%s) - treating message list as schema-valid.",
+                cause.ref,
+            )
+        else:
+            raise
     _validate_template_runtime_semantics(messages)
     _validate_image_runtime_semantics(messages)
 
@@ -306,7 +340,7 @@ def validate_a2ui_response(
                         valid=False,
                         error=(
                             f"A2UI block {block_index} at $: expected an A2UI "
-                            "0.8 server-to-client message list"
+                            "0.9.1 server-to-client message list"
                         ),
                     )
                 try:

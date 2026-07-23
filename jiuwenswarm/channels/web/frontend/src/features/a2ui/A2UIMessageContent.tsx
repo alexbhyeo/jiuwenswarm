@@ -1,7 +1,6 @@
 ﻿// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
 import { useEffect, useMemo } from 'react';
-import { useA2UIActions } from '@a2ui/react';
 import { MarkdownRenderer } from '../../components/MarkdownRenderer';
 import {
   extractA2UISurfaceIds,
@@ -11,7 +10,8 @@ import {
 } from './a2uiContent';
 import { recordA2UIActionDefaults } from './actionDefaults';
 import { isA2UIFeatureEnabled } from './featureConfig';
-import { getA2UIRenderer } from './rendererRegistry';
+import { processA2UIMessages } from './messageProcessor';
+import { A2UISurfaceRenderer } from './rendererRegistry';
 import { A2UIErrorBoundary } from './A2UIErrorBoundary';
 import { a2uiError } from './formDefaults';
 
@@ -53,7 +53,6 @@ export function A2UIMessageContent({
   disableInteraction = false,
   testId,
 }: A2UIMessageContentProps) {
-  const { processMessages } = useA2UIActions();
   const namespace = useMemo(() => `msg_${safeNamespace(messageId)}`, [messageId]);
   const a2uiEnabled = isA2UIFeatureEnabled();
 
@@ -90,7 +89,7 @@ export function A2UIMessageContent({
         recordA2UIActionDefaults(part.messages);
 
         try {
-          processMessages(part.messages);
+          processA2UIMessages(part.messages);
         } catch (err) {
           // Enhanced error logging with context
           const surfaceIds = part.surfaceIds.join(', ');
@@ -117,7 +116,7 @@ export function A2UIMessageContent({
         }
       }
     }
-  }, [a2uiEnabled, processMessages, renderParts]);
+  }, [a2uiEnabled, renderParts]);
 
   // Dev-only diagnostic: log horizontal overflow containers after DOM layout
   useEffect(() => {
@@ -165,15 +164,6 @@ export function A2UIMessageContent({
           );
         }
 
-        const Renderer = getA2UIRenderer(part.protocolVersion);
-        if (!Renderer) {
-          return (
-            <div key={part.key} className="text-sm text-danger">
-              Unsupported A2UI protocol version: {part.protocolVersion}
-            </div>
-          );
-        }
-
         return (
           <div key={part.key} className="a2ui-message-content__surfaces">
             {part.surfaceIds.map((surfaceId) => (
@@ -183,10 +173,10 @@ export function A2UIMessageContent({
               >
                 {disableInteraction ? (
                   <div className="pointer-events-none opacity-75">
-                    <Renderer surfaceId={surfaceId} />
+                    <A2UISurfaceRenderer surfaceId={surfaceId} />
                   </div>
                 ) : (
-                  <Renderer surfaceId={surfaceId} />
+                  <A2UISurfaceRenderer surfaceId={surfaceId} />
                 )}
               </A2UIErrorBoundary>
             ))}

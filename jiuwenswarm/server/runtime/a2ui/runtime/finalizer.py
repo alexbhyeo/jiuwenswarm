@@ -19,7 +19,7 @@ RepairCall = Callable[[str], Any]
 logger = logging.getLogger(__name__)
 
 _A2UI_PROTOCOL_LINE_RE = re.compile(
-    r'(?im)^\s*(?:[\[{,]\s*)*"?(?:beginRendering|surfaceUpdate|dataModelUpdate|deleteSurface)"?\s*(?::|$)'
+    r'(?im)^\s*(?:[\[{,]\s*)*"?(?:createSurface|updateComponents|updateDataModel|deleteSurface)"?\s*(?::|$)'
 )
 
 

@@ -30,48 +30,50 @@ def _literal_value(value: Any) -> str | None:
 
 
 def _extract_component_text(component_node: dict[str, Any]) -> list[str]:
-    component = component_node.get("component")
-    if not isinstance(component, dict):
+    # v0.9.1 components are flat: "component" is a string naming the type
+    # (discriminator), and every other property (label, text, options, ...) is
+    # a sibling of "component"/"id" on the same object - not nested under a
+    # per-type key like v0.8's {"component": {"<TypeName>": {props}}}.
+    component_name = component_node.get("component")
+    if not isinstance(component_name, str):
         return []
 
     snippets: list[str] = []
-    for component_name, props in component.items():
-        if not isinstance(props, dict):
-            continue
-        if component_name == "Text":
-            text = _literal_value(props.get("text"))
-            if text:
-                snippets.append(text)
-        elif component_name in {"TextField", "CheckBox", "Slider"}:
-            label = _literal_value(props.get("label"))
-            if label:
-                snippets.append(label)
-        elif component_name == "MultipleChoice":
-            for option in props.get("options") or []:
-                if isinstance(option, dict):
-                    label = _literal_value(option.get("label"))
-                    if label:
-                        snippets.append(label)
-        elif component_name == "Button":
-            action = props.get("action")
-            if isinstance(action, dict) and action.get("name"):
-                snippets.append(f"Action: {action['name']}")
+    if component_name == "Text":
+        text = _literal_value(component_node.get("text"))
+        if text:
+            snippets.append(text)
+    elif component_name in {"TextField", "CheckBox", "Slider"}:
+        label = _literal_value(component_node.get("label"))
+        if label:
+            snippets.append(label)
+    elif component_name == "ChoicePicker":
+        for option in component_node.get("options") or []:
+            if isinstance(option, dict):
+                label = _literal_value(option.get("label"))
+                if label:
+                    snippets.append(label)
+    elif component_name == "Button":
+        action = component_node.get("action")
+        event = action.get("event") if isinstance(action, dict) else None
+        if isinstance(event, dict) and event.get("name"):
+            snippets.append(f"Action: {event['name']}")
     return snippets
 
 
 def _summarize_messages(messages: list[dict[str, Any]]) -> list[str]:
     lines: list[str] = []
     for message in messages:
-        if "beginRendering" in message:
-            surface_id = message["beginRendering"].get("surfaceId", "default")
+        if "createSurface" in message:
+            surface_id = message["createSurface"].get("surfaceId", "default")
             lines.append(f"A2UI surface: {surface_id}")
-        elif "surfaceUpdate" in message:
-            components = message["surfaceUpdate"].get("components") or []
+        elif "updateComponents" in message:
+            components = message["updateComponents"].get("components") or []
             for component in components:
                 if isinstance(component, dict):
                     lines.extend(_extract_component_text(component))
-        elif "dataModelUpdate" in message:
-            for entry in message["dataModelUpdate"].get("contents") or []:
+        elif "updateDataModel" in message:
+            for entry in message["updateDataModel"].get("contents") or []:
                 if not isinstance(entry, dict):
                     continue
                 value = _literal_value(entry)

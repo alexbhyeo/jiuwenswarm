@@ -7,7 +7,7 @@ auto_recap:
 
 a2ui:
   enabled: false
-  protocol_version: "0.8"
+  protocol_version: "0.9.1"
   stream_validation_enabled: true
   non_web_fallback_enabled: false
   dev_smoke_tools_enabled: false

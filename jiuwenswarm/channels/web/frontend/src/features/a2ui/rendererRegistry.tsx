@@ -1,72 +1,39 @@
-﻿// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-import type { ComponentType } from 'react';
-import { A2UIRenderer, ComponentRegistry } from '@a2ui/react';
-import { A2UI_PROTOCOL_VERSION, type A2UIProtocolVersion } from './a2uiContent';
-import { CheckBoxWithDefaults } from './CheckBoxWithDefaults';
-import { DateTimeInputWithDefaults } from './DateTimeInputWithDefaults';
-import { MultipleChoiceWithDefaults } from './MultipleChoiceWithDefaults';
-import { SliderWithDefaults } from './SliderWithDefaults';
-import { TextFieldWithDefaults } from './TextFieldWithDefaults';
-import { TextWithDefaults } from './TextWithDefaults';
+// v0.9.1 has no per-version ComponentRegistry/A2UIRenderer to look up by
+// protocol version string - rendering a surface means holding the actual
+// SurfaceModel object (from the message-processor bridge) and handing it to
+// <A2uiSurface surface={surface}/>. Since createSurface is processed
+// synchronously as part of processMessages() in the common case, but nothing
+// guarantees that ordering, this subscribes to onA2UISurfaceCreated and
+// re-renders once the surface actually shows up.
+
+import { useEffect, useState } from 'react';
+import { A2uiSurface } from '@a2ui/react/v0_9';
+import { getA2UISurface, onA2UISurfaceCreated } from './messageProcessor';
 
 export interface A2UIRendererProps {
   surfaceId: string;
 }
 
-const a2uiV08Registry = ComponentRegistry.getInstance();
+export function A2UISurfaceRenderer({ surfaceId }: A2UIRendererProps) {
+  const [, bumpVersion] = useState(0);
 
-// Register our overrides. These must be applied AFTER initializeDefaultCatalog()
-// which runs lazily on first A2UI render. We apply them both here (for early
-// access) and again in the renderer component (after ensureInitialized runs).
-function applyOverrides() {
-  a2uiV08Registry.register('Text', {
-    component: TextWithDefaults,
-  });
-  a2uiV08Registry.register('CheckBox', {
-    component: CheckBoxWithDefaults,
-  });
-  a2uiV08Registry.register('DateTimeInput', {
-    component: DateTimeInputWithDefaults,
-  });
-  a2uiV08Registry.register('MultipleChoice', {
-    component: MultipleChoiceWithDefaults,
-  });
-  a2uiV08Registry.register('Slider', {
-    component: SliderWithDefaults,
-  });
-  a2uiV08Registry.register('TextField', {
-    component: TextFieldWithDefaults,
-  });
-}
-
-// Try early registration (may be overwritten by ensureInitialized)
-applyOverrides();
-
-// Re-apply overrides after the library's lazy initialization runs.
-let _overridesApplied = false;
-
-const A2UIV08Renderer = ({ surfaceId }: A2UIRendererProps) => {
-  if (!_overridesApplied) {
-    const current = a2uiV08Registry.get('TextField');
-    if (current !== TextFieldWithDefaults) {
-      applyOverrides();
+  useEffect(() => {
+    if (getA2UISurface(surfaceId)) {
+      return undefined;
     }
-    _overridesApplied = true;
+    const unsubscribe = onA2UISurfaceCreated((createdId) => {
+      if (createdId === surfaceId) {
+        bumpVersion((value) => value + 1);
+      }
+    });
+    return unsubscribe;
+  }, [surfaceId]);
+
+  const surface = getA2UISurface(surfaceId);
+  if (!surface) {
+    return null;
   }
-
-  return <A2UIRenderer surfaceId={surfaceId} registry={a2uiV08Registry} />;
-};
-
-export const rendererByVersion: Record<
-  A2UIProtocolVersion,
-  ComponentType<A2UIRendererProps>
-> = {
-  [A2UI_PROTOCOL_VERSION]: A2UIV08Renderer,
-};
-
-export function getA2UIRenderer(
-  version: string
-): ComponentType<A2UIRendererProps> | null {
-  return rendererByVersion[version as A2UIProtocolVersion] ?? null;
+  return <A2uiSurface surface={surface} />;
 }

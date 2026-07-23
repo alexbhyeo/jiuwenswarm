@@ -201,9 +201,9 @@ def _contains_a2ui_marker(value: Any) -> bool:
 _A2UI_STREAM_PROBE_WINDOW = 512
 _A2UI_STREAM_PARTIAL_MARKERS = (
     "<a2ui-json>",
-    "beginRendering",
-    "surfaceUpdate",
-    "dataModelUpdate",
+    "createSurface",
+    "updateComponents",
+    "updateDataModel",
     "deleteSurface",
 )
 _A2UI_PENDING_RENDER_DELTA = "<a2ui-json>\n"
@@ -252,7 +252,7 @@ def _stream_probe_has_a2ui_marker(value: Any) -> bool:
 
 _A2UI_STREAM_PROTOCOL_START_RE = re.compile(
     r"(?im)^(?P<marker>[ \t]*(?:[\[{,][ \t]*)*\"?"
-    r"(?:beginRendering|surfaceUpdate|dataModelUpdate|deleteSurface)\"?[ \t]*(?::|$))"
+    r"(?:createSurface|updateComponents|updateDataModel|deleteSurface)\"?[ \t]*(?::|$))"
 )
 
 
