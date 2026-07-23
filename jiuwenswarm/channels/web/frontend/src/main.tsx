@@ -1,10 +1,13 @@
 import './i18n';
 import ReactDOM from 'react-dom/client';
 import App from './App.tsx'
-// v0.9's basicCatalog components ship their own CSS Modules, imported as a
-// side effect of the package's JS (see @a2ui/react's "sideEffects": ["*.css"]
-// in package.json) - unlike v0.8, there is no separate injectStyles() call.
+// @a2ui/react v0.9's basicCatalog CSS (v0_9/index.css) is never actually
+// imported by the package's own JS and isn't in its exports map either, so
+// it can never end up in our bundle no matter what - see a2ui.css for a
+// verbatim copy of its rules, which this import brings in.
 import './features/a2ui/messageProcessor';
+import { MarkdownContext } from '@a2ui/react/v0_9';
+import { renderMarkdown } from '@a2ui/markdown-it';
 import './index.css'
 import './features/a2ui/a2ui.css'
 
@@ -28,5 +31,7 @@ flagA2UIIconFontAvailability()
 void document.fonts?.ready.then(flagA2UIIconFontAvailability)
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <App />,
+  <MarkdownContext.Provider value={renderMarkdown}>
+    <App />
+  </MarkdownContext.Provider>,
 )

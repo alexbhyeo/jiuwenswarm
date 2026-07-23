@@ -13,17 +13,47 @@
 // one processor instance for the whole app's lifetime is enough, mirroring
 // the single ComponentRegistry.getInstance() singleton v0.8 used.
 
-import { MessageProcessor } from '@a2ui/web_core/v0_9';
+import { Catalog, MessageProcessor } from '@a2ui/web_core/v0_9';
 import type { A2uiClientAction, A2uiMessage, SurfaceModel } from '@a2ui/web_core/v0_9';
 import { basicCatalog, type ReactComponentImplementation } from '@a2ui/react/v0_9';
 import { dispatchA2UIAction } from './actionBridge';
+import { ButtonWithStyles } from './ButtonWithStyles';
+import { TextFieldWithStyles } from './TextFieldWithStyles';
+import { ChoicePickerWithStyles } from './ChoicePickerWithStyles';
 import type { ServerToClientMessage } from './a2uiContent';
 
 const surfacesById = new Map<string, SurfaceModel<ReactComponentImplementation>>();
 const surfaceListeners = new Set<(surfaceId: string) => void>();
 
+// @a2ui/react's basicCatalog ships Button/TextField/ChoicePicker with two
+// confirmed bugs (still present as of 0.10.2): (1) their CSS-module class
+// maps compile to empty objects, so className ends up as the literal string
+// "undefined" and these components render with zero visual styling (no
+// spacing/borders/selected-state - ChoicePicker options visually merge into
+// one unreadable, effectively unclickable block); (2) even the package's own
+// real CSS for these components (plain, unhashed selectors like
+// .button/.chip/.host, in v0_9/index.css) is never imported by the package's
+// own JS and isn't in its exports map, so it can never reach our bundle
+// either - see a2ui.css for a verbatim copy of those rules. Rather than
+// design new styling, swap in overrides that apply those exact same
+// selectors correctly; everything else in basicCatalog (Text, Card, Row,
+// Column, Image, Divider, ...) is unaffected since it uses inline styles
+// instead of this class map, so it's kept as-is.
+const patchedComponents = Array.from(basicCatalog.components.values()).map((component) => {
+  if (component.name === 'Button') return ButtonWithStyles;
+  if (component.name === 'TextField') return TextFieldWithStyles;
+  if (component.name === 'ChoicePicker') return ChoicePickerWithStyles;
+  return component;
+});
+const patchedBasicCatalog = new Catalog<ReactComponentImplementation>(
+  basicCatalog.id,
+  patchedComponents,
+  Array.from(basicCatalog.functions.values()),
+  basicCatalog.themeSchema
+);
+
 export const messageProcessor = new MessageProcessor<ReactComponentImplementation>(
-  [basicCatalog],
+  [patchedBasicCatalog],
   (action: A2uiClientAction) => dispatchA2UIAction(action),
 );
 

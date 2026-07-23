@@ -2,186 +2,212 @@
 
 /* A2UI Component Styles */
 
-body .a2ui-surface,
-body .a2ui-surface *,
-body .a2ui-surface *::before,
-body .a2ui-surface *::after {
+/* ─── @a2ui/react v0.9 basicCatalog component CSS ───
+   @a2ui/react's own build has two confirmed bugs (still present as of
+   0.10.2): (1) its Text/Button/TextField/ChoicePicker components' CSS-module
+   class maps compile to empty objects, so we supply the real class names
+   ourselves via ButtonWithStyles.tsx/TextFieldWithStyles.tsx/
+   ChoicePickerWithStyles.tsx; and (2) even the plain, unhashed CSS in the
+   package's own v0_9/index.css is never actually imported by the package's
+   own JS (only referenced in a source-path comment), so Node/Vite has no
+   import-graph edge to it and it never ends up in our bundle regardless of
+   className correctness. @a2ui/react/v0_9/index.css also isn't in the
+   package's exports map, so it can't even be imported directly. This block
+   is a verbatim copy of that file's rules (Button/TextField/ChoicePicker
+   sections; Text's heading/caption rules are folded in too since Text has
+   the same missing-class-map bug for its "caption" variant, and its
+   variant-driven h1-h5 sizing only applies via nested :global(h1..h5) tags -
+   i.e. actual markdown-rendered headings, not a variant="h1" class). Card,
+   Row, Column, Divider, and Image are unaffected by either bug since they
+   render fully inline styles and never depend on this stylesheet. Re-sync
+   this block if @a2ui/react is upgraded and these bugs get fixed upstream
+   (at which point it becomes redundant, harmless duplication, not a
+   conflict, since the selectors are identical). */
+
+/* All selectors below are scoped under .a2ui-message-content__surfaces -
+   these are common/generic names (.label, .input, .error, .options, ...)
+   that would otherwise be free to collide with unrelated classNames
+   elsewhere in this (mostly Tailwind-based) app; the A2UI surfaces subtree
+   is the only place these exact DOM shapes are ever produced. */
+.a2ui-message-content__surfaces .a2uiText {
+  display: inline-block;
+  color: var(--_a2ui-text-color, var(--a2ui-text-color-text, var(--a2ui-color-on-background)));
+  margin: var(--_a2ui-text-margin, 0);
   box-sizing: border-box;
 }
+.a2ui-message-content__surfaces .a2uiCaption {
+  display: inline-block;
+  color: var(--a2ui-text-caption-color, light-dark(#666, #aaa));
+  text-align: left;
+  margin: var(--_a2ui-text-margin, 0);
+  box-sizing: border-box;
+  font-style: italic;
+}
+.a2ui-message-content__surfaces .a2uiText p,
+.a2ui-message-content__surfaces .a2uiText h1,
+.a2ui-message-content__surfaces .a2uiText h2,
+.a2ui-message-content__surfaces .a2uiText h3,
+.a2ui-message-content__surfaces .a2uiText h4,
+.a2ui-message-content__surfaces .a2uiText h5,
+.a2ui-message-content__surfaces .a2uiText h6,
+.a2ui-message-content__surfaces .a2uiText ol,
+.a2ui-message-content__surfaces .a2uiText ul,
+.a2ui-message-content__surfaces .a2uiText li,
+.a2ui-message-content__surfaces .a2uiText blockquote,
+.a2ui-message-content__surfaces .a2uiText pre {
+  margin: var(--_a2ui-text-margin, 0);
+}
+.a2ui-message-content__surfaces .a2uiText h1,
+.a2ui-message-content__surfaces .a2uiText h2,
+.a2ui-message-content__surfaces .a2uiText h3,
+.a2ui-message-content__surfaces .a2uiText h4,
+.a2ui-message-content__surfaces .a2uiText h5 {
+  font-family: var(--a2ui-font-family-title, inherit);
+  line-height: var(--a2ui-line-height-headings, 1.2);
+}
+.a2ui-message-content__surfaces .a2uiText h1 { font-size: var(--a2ui-font-size-2xl); }
+.a2ui-message-content__surfaces .a2uiText h2 { font-size: var(--a2ui-font-size-xl); }
+.a2ui-message-content__surfaces .a2uiText h3 { font-size: var(--a2ui-font-size-l); }
+.a2ui-message-content__surfaces .a2uiText p,
+.a2ui-message-content__surfaces .a2uiText h4 { font-size: var(--a2ui-font-size-m); }
+.a2ui-message-content__surfaces .a2uiText h5 { font-size: var(--a2ui-font-size-s); }
+.a2ui-message-content__surfaces .a2uiText p,
+.a2ui-message-content__surfaces .a2uiText ol,
+.a2ui-message-content__surfaces .a2uiText ul,
+.a2ui-message-content__surfaces .a2uiText li,
+.a2ui-message-content__surfaces .a2uiText blockquote {
+  line-height: var(--a2ui-line-height-body, 1.5);
+}
+.a2ui-message-content__surfaces .a2uiText a {
+  color: var(--a2ui-text-a-color, inherit);
+  font-weight: var(--a2ui-text-a-font-weight, inherit);
+}
 
-body .a2ui-surface {
+/* Button */
+.a2ui-message-content__surfaces .button {
+  --_a2ui-text-margin: 0;
+  --_a2ui-text-color: var(--a2ui-color-on-secondary, #333);
+  padding: var(--a2ui-button-padding, var(--a2ui-spacing-m, 0.5rem) var(--a2ui-spacing-l, 1rem));
+  margin: var(--a2ui-button-margin, var(--a2ui-spacing-m));
+  background: var(--a2ui-button-background, var(--a2ui-color-surface, #fff));
+  box-shadow: var(--a2ui-button-box-shadow, none);
+  font-weight: var(--a2ui-button-font-weight, normal);
+  color: var(--a2ui-color-on-secondary, #333);
+  border: var(--a2ui-button-border, var(--a2ui-border-width, 1px) solid var(--a2ui-color-border, #ccc));
+  border-radius: var(--a2ui-button-border-radius, var(--a2ui-border-radius, 8px));
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s;
+}
+.a2ui-message-content__surfaces .button:hover { background-color: var(--a2ui-color-secondary-hover, #ddd); }
+.a2ui-message-content__surfaces .primary {
+  --_a2ui-text-color: var(--a2ui-color-on-primary, #fff);
+  background-color: var(--a2ui-color-primary, #17e);
+  border: none;
+  color: var(--_a2ui-text-color);
+}
+.a2ui-message-content__surfaces .primary:hover { background-color: var(--a2ui-color-primary-hover, #fbd); }
+.a2ui-message-content__surfaces .borderless {
+  background: none;
+  padding: 0;
+  color: var(--a2ui-color-primary, #17e);
+  border: none;
+}
+.a2ui-message-content__surfaces .button:disabled { cursor: not-allowed; opacity: 0.6; }
+
+/* TextField */
+.a2ui-message-content__surfaces .host {
+  display: flex;
+  flex-direction: column;
+  gap: var(--a2ui-spacing-xs, 0.25rem);
+  width: 100%;
+}
+.a2ui-message-content__surfaces .label {
+  font-size: var(--a2ui-textfield-label-font-size, var(--a2ui-label-font-size, var(--a2ui-font-size-s)));
+  font-weight: var(--a2ui-textfield-label-font-weight, var(--a2ui-label-font-weight, bold));
+}
+.a2ui-message-content__surfaces .input {
+  background-color: var(--a2ui-color-input, #fff);
+  color: var(--a2ui-color-on-input, #333);
+  border: var(--a2ui-textfield-border, var(--a2ui-border-width, 1px) solid var(--a2ui-color-border, #ccc));
+  border-radius: var(--a2ui-textfield-border-radius, var(--a2ui-spacing-m, 8px));
+  padding: var(--a2ui-textfield-padding, var(--a2ui-spacing-m, 0.5rem));
+  font-family: inherit;
+  box-sizing: border-box;
+  width: 100%;
+  transition: border-color 0.2s;
+}
+.a2ui-message-content__surfaces .input:hover { border-color: var(--a2ui-textfield-color-border-hover, var(--a2ui-color-border-hover, #999)); }
+.a2ui-message-content__surfaces .input:focus {
+  outline: none;
+  border-color: var(--a2ui-textfield-color-border-focus, var(--a2ui-color-primary, #17e));
+}
+.a2ui-message-content__surfaces .invalid { border-color: var(--a2ui-textfield-color-error, red) !important; }
+.a2ui-message-content__surfaces .error {
+  color: var(--a2ui-textfield-color-error, red);
+  font-size: var(--a2ui-font-size-xs, 0.75rem);
+}
+
+/* ChoicePicker */
+.a2ui-message-content__surfaces .filterInput {
+  background-color: var(--a2ui-color-input, #fff);
+  color: var(--a2ui-color-on-input, #333);
+  border: var(--a2ui-textfield-border, var(--a2ui-border-width, 1px) solid var(--a2ui-color-border, #ccc));
+  border-radius: var(--a2ui-textfield-border-radius, var(--a2ui-spacing-m, 8px));
+  padding: var(--a2ui-choicepicker-filter-padding, var(--a2ui-spacing-xs, 4px) var(--a2ui-spacing-s, 8px));
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+.a2ui-message-content__surfaces .filterInput:hover { border-color: var(--a2ui-textfield-color-border-hover, var(--a2ui-color-border-hover, #999)); }
+.a2ui-message-content__surfaces .filterInput:focus {
+  outline: none;
+  border-color: var(--a2ui-textfield-color-border-focus, var(--a2ui-color-primary, #17e));
+}
+.a2ui-message-content__surfaces .options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--a2ui-choicepicker-gap, var(--a2ui-spacing-xs, 0.25rem));
+}
+.a2ui-message-content__surfaces .chips { flex-direction: row; flex-wrap: wrap; }
+.a2ui-message-content__surfaces .chip {
+  padding: var(--a2ui-choicepicker-chip-padding, var(--a2ui-spacing-s, 4px) var(--a2ui-spacing-m, 8px));
+  border-radius: var(--a2ui-choicepicker-chip-border-radius, 999px);
+  border: 1px solid var(--a2ui-color-border, #ccc);
+  background-color: var(--a2ui-color-surface, #fff);
+  color: var(--a2ui-color-on-surface, inherit);
+  cursor: pointer;
+  font-size: var(--a2ui-font-size-xs, 0.75rem);
+  font-family: inherit;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+.a2ui-message-content__surfaces .chip.selected {
+  background-color: var(--a2ui-color-primary, #007bff);
+  color: var(--a2ui-color-on-primary, #fff);
+  border-color: var(--a2ui-color-primary, #007bff);
+}
+.a2ui-message-content__surfaces .optionLabel {
+  display: flex;
+  align-items: center;
+  gap: var(--a2ui-choicepicker-gap, var(--a2ui-spacing-xs, 0.25rem));
+  cursor: pointer;
+}
+/* Deliberately matches .chip's font-size (not the SDK's original
+   font-size-m) so checkbox/radio-style options read consistently with
+   chip-style options within the same ChoicePicker family. */
+.a2ui-message-content__surfaces .optionText { font-size: var(--a2ui-font-size-xs, 0.75rem); }
+
+/* ─── App-specific polish (v0.9-safe: scoped to the surfaces wrapper) ─── */
+
+body .a2ui-message-content__surfaces {
   max-width: 100%;
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-body .a2ui-surface section {
+body .a2ui-message-content__surfaces button {
   max-width: 100%;
-  min-width: 0;
-}
-
-body .a2ui-surface button,
-body .a2ui-surface [role="button"] {
-  max-width: 100%;
-  min-width: 2.5rem;
   white-space: normal;
   overflow-wrap: anywhere;
-}
-
-/* ─── Horizontal scrollable containers (utility class) ─── */
-.a2ui-horizontal-scroll {
-  overflow-x: auto;
-  scrollbar-width: thin;
-  scrollbar-color: #888 #f1f1f1;
-}
-
-.a2ui-horizontal-scroll::-webkit-scrollbar {
-  height: 8px;
-}
-
-.a2ui-horizontal-scroll::-webkit-scrollbar-track {
-  background: #f1f1f1;
-  border-radius: 4px;
-}
-
-.a2ui-horizontal-scroll::-webkit-scrollbar-thumb {
-  background: #888;
-  border-radius: 4px;
-}
-
-.a2ui-horizontal-scroll::-webkit-scrollbar-thumb:hover {
-  background: #555;
-}
-
-/* ─── Row component ─── */
-/* Use body prefix to exceed library specificity (.a2ui-surface .a2ui-row) */
-
-body .a2ui-surface .a2ui-row {
-  max-width: 100%;
-  min-width: 0;
-}
-
-body .a2ui-surface .a2ui-row > section {
-  max-width: 100%;
-  min-width: 0;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding-bottom: 8px;
-  scrollbar-width: thin;
-  scrollbar-color: #888 #f1f1f1;
-  -webkit-overflow-scrolling: touch;
-}
-
-/* Distribution alignment (keep data-attribute selectors) */
-body .a2ui-surface .a2ui-row[data-distribution="spaceBetween"] > section {
-  justify-content: space-between;
-}
-
-body .a2ui-surface .a2ui-row[data-distribution="spaceAround"] > section {
-  justify-content: space-around;
-}
-
-body .a2ui-surface .a2ui-row[data-distribution="spaceEvenly"] > section {
-  justify-content: space-evenly;
-}
-
-body .a2ui-surface .a2ui-row[data-distribution="center"] > section {
-  justify-content: center;
-}
-
-body .a2ui-surface .a2ui-row[data-distribution="end"] > section {
-  justify-content: flex-end;
-}
-
-/* Item alignment */
-body .a2ui-surface .a2ui-row[data-alignment="center"] > section {
-  align-items: center;
-}
-
-body .a2ui-surface .a2ui-row[data-alignment="end"] > section {
-  align-items: flex-end;
-}
-
-body .a2ui-surface .a2ui-row[data-alignment="stretch"] > section {
-  align-items: stretch;
-}
-
-/* ─── Column component ─── */
-/* Library default theme sets an 8px gap (layout-g-2) between a Column's
-   direct children, which reads as cramped once a form stacks several
-   widgets (labels, chip groups, text fields, buttons). Bump it to match
-   the 16px rhythm already used for Card's own top-level spacing. */
-body .a2ui-surface .a2ui-column > section {
-  gap: 16px;
-}
-
-/* A trailing standalone Button at the end of a Column (the common "form
-   submit" position) should read as a right-aligned form/dialog action,
-   regardless of whatever cross-axis alignment the model set on the
-   Column itself (default stretch, or an explicit "center"/"start" the
-   model may have chosen for the whole surface). align-self overrides the
-   parent's align-items for just this one child, so it works whether the
-   wrapper div is stretched full-width (old justify-content approach) or
-   shrink-wrapped to its own content (the case align-self actually fixes).
-   Scoped to Column only (not Row) so explicit multi-button Row layouts the
-   model lays out itself are left untouched. */
-body .a2ui-surface .a2ui-column > section > .a2ui-button:last-child {
-  display: flex;
-  justify-content: flex-end;
-  align-self: flex-end;
-}
-
-/* ─── Horizontal List component ─── */
-/* Override library's scrollbar-width: none on the inner <section> */
-
-body .a2ui-surface .a2ui-list[data-direction="horizontal"] {
-  max-width: 100%;
-  min-width: 0;
-}
-
-body .a2ui-surface .a2ui-list[data-direction="horizontal"] > section {
-  max-width: 100%;
-  min-width: 0;
-  overflow-x: auto !important;
-  overflow-y: hidden;
-  padding-bottom: 8px;
-  scrollbar-width: thin !important;
-  scrollbar-color: #888 #f1f1f1;
-  -webkit-overflow-scrolling: touch;
-}
-
-/* Override library's flex: 1 0 fit-content and max-width on List children */
-body .a2ui-surface .a2ui-list[data-direction="horizontal"] > section > * {
-  flex: 0 0 auto;
-  max-width: none;
-}
-
-/* ─── WebKit scrollbar styles (Edge / Chrome) ─── */
-body .a2ui-surface .a2ui-row > section::-webkit-scrollbar,
-body .a2ui-surface .a2ui-list[data-direction="horizontal"] > section::-webkit-scrollbar {
-  height: 8px;
-}
-
-body .a2ui-surface .a2ui-row > section::-webkit-scrollbar-track,
-body .a2ui-surface .a2ui-list[data-direction="horizontal"] > section::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.08);
-  border-radius: 999px;
-}
-
-body .a2ui-surface .a2ui-row > section::-webkit-scrollbar-thumb,
-body .a2ui-surface .a2ui-list[data-direction="horizontal"] > section::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.28);
-  border-radius: 999px;
-}
-
-body .a2ui-surface .a2ui-row > section::-webkit-scrollbar-thumb:hover,
-body .a2ui-surface .a2ui-list[data-direction="horizontal"] > section::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.38);
-}
-
-/* ─── TextField obscured type (password) ─── */
-.a2ui-textfield input[type="password"] {
-  font-family: 'password';
-  letter-spacing: 0.125em;
 }
