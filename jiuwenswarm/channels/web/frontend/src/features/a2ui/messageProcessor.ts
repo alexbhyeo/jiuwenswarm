@@ -20,6 +20,7 @@ import { dispatchA2UIAction } from './actionBridge';
 import { ButtonWithStyles } from './ButtonWithStyles';
 import { TextFieldWithStyles } from './TextFieldWithStyles';
 import { ChoicePickerWithStyles } from './ChoicePickerWithStyles';
+import { ImageWithStyles } from './ImageWithStyles';
 import type { ServerToClientMessage } from './a2uiContent';
 
 const surfacesById = new Map<string, SurfaceModel<ReactComponentImplementation>>();
@@ -36,13 +37,20 @@ const surfaceListeners = new Set<(surfaceId: string) => void>();
 // own JS and isn't in its exports map, so it can never reach our bundle
 // either - see a2ui.css for a verbatim copy of those rules. Rather than
 // design new styling, swap in overrides that apply those exact same
-// selectors correctly; everything else in basicCatalog (Text, Card, Row,
-// Column, Image, Divider, ...) is unaffected since it uses inline styles
-// instead of this class map, so it's kept as-is.
+// selectors correctly; Row/Column/Card/Divider are unaffected since they use
+// inline styles instead of this class map, so they're kept as-is.
+//
+// Image has a separate, unrelated gap (also still present as of 0.10.2):
+// its "smallFeature" variant only sets maxWidth (no height), and
+// "mediumFeature" - a valid, schema-declared variant - isn't handled at all,
+// so object-fit never has a real box to crop within and photo grids render
+// with inconsistent, source-image-dependent thumbnail shapes. ImageWithStyles
+// adds the missing sizing via aspect-ratio.
 const patchedComponents = Array.from(basicCatalog.components.values()).map((component) => {
   if (component.name === 'Button') return ButtonWithStyles;
   if (component.name === 'TextField') return TextFieldWithStyles;
   if (component.name === 'ChoicePicker') return ChoicePickerWithStyles;
+  if (component.name === 'Image') return ImageWithStyles;
   return component;
 });
 const patchedBasicCatalog = new Catalog<ReactComponentImplementation>(

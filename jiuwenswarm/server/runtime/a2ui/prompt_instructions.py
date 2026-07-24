@@ -102,15 +102,19 @@ def build_a2ui_autonomy_instruction(language: str = "en") -> str:
     )
     template_binding_rule_en = (
         " For repeated list/card data, use A2UI template binding correctly: "
-        "Duplicate updateDataModel keys are invalid. Encode arrays as one "
-        'collection key with indexed valueMap entries such as "0", "1", where '
-        "each item contains its own nested valueMap fields. Inside template "
-        "components, use item-relative paths like 'name', 'price', or "
-        "'/item/name' for Text, Image, and Button.action.event.context values; do not "
-        "use collection-absolute paths such as '/phones/name' inside templates. "
-        "Do not nest templates inside template-rendered components in A2UI 0.9.1; "
-        "flatten repeated item details into fields on the outer item, or use "
-        "explicit child components that bind to those fields."
+        'encode the collection as a genuine JSON array (e.g. "places": '
+        '[{...}, {...}, ...]), never as an object with string-numeral keys '
+        'like {"0": {...}, "1": {...}} - the renderer\'s list-template '
+        "binding only recognizes a true JSON array at the bound path and "
+        "silently renders zero items for any other shape, even when every "
+        "item's data is otherwise present and correct. Duplicate "
+        "updateDataModel keys are invalid. Inside template components, use "
+        "item-relative paths like 'name', 'price', or '/item/name' for "
+        "Text, Image, and Button.action.event.context values; do not use "
+        "collection-absolute paths such as '/phones/name' inside templates. "
+        "Do not nest templates inside template-rendered components in A2UI "
+        "0.9.1; flatten repeated item details into fields on the outer "
+        "item, or use explicit child components that bind to those fields."
     )
     image_url_rule_en = (
         " If the user explicitly asks to see photos, pictures, or an image "
@@ -274,13 +278,15 @@ def build_a2ui_autonomy_instruction(language: str = "en") -> str:
     )
 
     template_binding_rule_zh = (
-        " 使用 List 或卡片列表展示重复数据时，updateDataModel 的 key 不能重复。"
-        "请把数组编码为一个集合 key，并在 valueMap 中使用 \"0\"、\"1\" 这类索引项；"
-        "每个 item 包含自己的嵌套 valueMap 字段。模板组件和 Button.action.event.context "
-        "内使用 item-relative path，例如 name、price 或 /item/name；"
-        "不要在模板内使用 /phones/name 这类集合绝对路径。A2UI 0.9.1 不要在模板渲染出的"
-        "组件内部再嵌套 template；请把重复 item 的明细拍平成外层 item 字段，或使用显式"
-        "子组件绑定这些字段。"
+        " 使用 List 或卡片列表展示重复数据时，集合必须编码为真正的 JSON 数组"
+        "（例如 \"places\": [{...}, {...}, ...]），绝不能编码为带字符串数字 key "
+        "的对象（例如 {\"0\": {...}, \"1\": {...}}）——渲染器的列表模板绑定只"
+        "识别真正的数组，其他形状即使每个 item 的数据都正确完整，也会被当作"
+        "空列表渲染出零个条目。updateDataModel 的 key 不能重复。模板组件和 "
+        "Button.action.event.context 内使用 item-relative path，例如 name、"
+        "price 或 /item/name；不要在模板内使用 /phones/name 这类集合绝对路径。"
+        "A2UI 0.9.1 不要在模板渲染出的组件内部再嵌套 template；请把重复 item 的"
+        "明细拍平成外层 item 字段，或使用显式子组件绑定这些字段。"
     )
     image_url_rule_zh = (
         " 如果用户明确要求查看照片、图片或图片画廊，或者主题本身就是视觉性的"
