@@ -14,6 +14,7 @@
 // margin) - smallFeature uses aspect-ratio so it stays a square at any
 // width; mediumFeature/header use a fixed height, matching the pattern
 // already established for "header".
+import { useState } from 'react';
 import { ImageApi } from '@a2ui/web_core/v0_9/basic_catalog';
 import { createComponentImplementation } from '@a2ui/react/v0_9';
 
@@ -45,6 +46,7 @@ function resolveImageUrl(url: unknown): string {
 }
 
 export const ImageWithStyles = createComponentImplementation(ImageApi, ({ props }) => {
+  const [loadFailed, setLoadFailed] = useState(false);
   const style: Record<string, string | number> = {
     boxSizing: 'border-box',
     ...getWeightStyle(props.weight),
@@ -76,5 +78,45 @@ export const ImageWithStyles = createComponentImplementation(ImageApi, ({ props 
     style.objectFit = 'cover';
   }
 
-  return <img src={resolveImageUrl(props.url)} alt={props.description || ''} style={style} />;
+  const resolvedUrl = resolveImageUrl(props.url);
+
+  // A blank imageUrl (the model couldn't find a real photo for this item -
+  // common in data-bound list templates where one shared Image can't be
+  // conditionally omitted per item) previously rendered as an empty <img
+  // src="">, which browsers just leave blank with no broken-icon, reading
+  // as an unstyled layout glitch. A URL that resolves but 404s/times out at
+  // runtime looks the same way once the browser's default broken-image icon
+  // renders at native size instead of filling this box. Show the same
+  // deliberate "no image" placeholder for both cases instead.
+  if (!resolvedUrl || loadFailed) {
+    // icon/avatar are 24-40px - too small for a label, just the glyph.
+    const isTiny = props.variant === 'icon' || props.variant === 'avatar';
+    const placeholderStyle: Record<string, string | number> = {
+      ...style,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: 'var(--a2ui-image-placeholder-background, light-dark(#eee, #333))',
+      color: 'var(--a2ui-image-placeholder-color, light-dark(#999, #777))',
+      fontSize: 'var(--a2ui-font-size-xs, 0.75rem)',
+      gap: '4px',
+      flexDirection: 'column',
+    };
+    delete placeholderStyle.objectFit;
+    return (
+      <div style={placeholderStyle} role="img" aria-label={props.description || 'No image available'}>
+        <span aria-hidden="true" style={{ fontSize: isTiny ? '1em' : '1.5em' }}>🖼️</span>
+        {!isTiny && <span>No image available</span>}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={resolvedUrl}
+      alt={props.description || ''}
+      style={style}
+      onError={() => setLoadFailed(true)}
+    />
+  );
 });
