@@ -257,8 +257,12 @@ def build_a2ui_autonomy_instruction(language: str = "en") -> str:
         "single object detail layout, not a multi-card demo. Do not substitute a "
         "fixed demo for the requested component. For any interactive or "
         "user-editable control — TextField, Slider, CheckBox, DateTimeInput, "
-        "or ChoicePicker — bind its value property to a data "
-        "model path, initialize that path with updateDataModel, and include "
+        'or ChoicePicker — bind its value property using the exact wire '
+        'syntax "value": {"path": "/some/path"} - an object with a "path" '
+        'key, never a bare path string like "value": "/some/path". A bare '
+        "string is treated as a static literal, not a binding, so the "
+        "control silently stops responding to every click or keystroke with "
+        "no error. Initialize that path with updateDataModel, and include "
         "the submitted value in Button.action.event.context using a path reference. "
         "A ChoicePicker or chips component with no bound value path "
         "will not respond to clicks. Do not emit an empty "
@@ -380,8 +384,11 @@ def build_a2ui_autonomy_instruction(language: str = "en") -> str:
         "只有用户要求卡片或卡片列表时才生成 card list。Card/list 不是万能 fallback。"
         "单个对象详情请求应生成单对象详情布局，不要生成多卡片 demo。"
         "不要用固定 demo 替代用户请求的组件。对任意交互式或可编辑控件——TextField、"
-        "Slider、CheckBox、DateTimeInput 或 ChoicePicker——都必须把其 value "
-        "属性绑定到 data model 路径，用 updateDataModel 初始化该路径，"
+        "Slider、CheckBox、DateTimeInput 或 ChoicePicker——其 value 属性必须使用"
+        "精确的绑定语法 \"value\": {\"path\": \"/some/path\"}——一个带 \"path\" key "
+        "的对象，绝不能写成裸字符串 \"value\": \"/some/path\"。裸字符串会被当作"
+        "静态字面量而不是绑定，导致控件对点击或输入完全没有反应，且不会报任何错误。"
+        "用 updateDataModel 初始化该路径，"
         "并在 Button.action.event.context 中用 path reference 包含提交值。没有绑定"
         "value 路径的 ChoicePicker 或 chips 组件点击后不会有任何反应。"
         "表单提交不能输出空的 Button.action.event.context。"

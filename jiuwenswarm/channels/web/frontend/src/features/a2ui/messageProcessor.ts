@@ -100,6 +100,42 @@ function normalizeCreateSurfaceCatalogId(messages: ServerToClientMessage[]): Ser
   });
 }
 
+// A2UIMessageContent's effect reprocesses the *cumulative* re-parsed message
+// list on every streaming delta tick (not just the newly-arrived portion),
+// so the same createSurface message gets sent again on every tick after the
+// surface first exists. MessageProcessor.processMessages is a plain loop
+// with no per-message try/catch - processCreateSurfaceMessage throws
+// unconditionally on a repeat surfaceId (there's no upsert path like
+// updateComponents has), which aborts the whole batch before it ever
+// reaches the updateComponents/updateDataModel messages that follow,
+// silently dropping however many components arrived after the first
+// streaming tick. A page refresh "fixes" it only because it reloads the
+// full stored history into a brand-new, empty MessageProcessor, so
+// createSurface only ever runs once. Drop any createSurface whose surfaceId
+// is already registered (or already created earlier in this same batch) so
+// reprocessing the cumulative list is safe and the rest of the batch still
+// goes through - updateComponents is naturally idempotent already.
+function dropRedundantCreateSurface(messages: ServerToClientMessage[]): ServerToClientMessage[] {
+  const known = new Set(surfacesById.keys());
+  const result: ServerToClientMessage[] = [];
+  for (const message of messages) {
+    if (message.createSurface) {
+      const id = message.createSurface.surfaceId;
+      if (id && known.has(id)) {
+        continue;
+      }
+      if (id) {
+        known.add(id);
+      }
+    }
+    if (message.deleteSurface?.surfaceId) {
+      known.delete(message.deleteSurface.surfaceId);
+    }
+    result.push(message);
+  }
+  return result;
+}
+
 /**
  * ServerToClientMessage is a loosely-typed structural shape used for manual
  * JSON parsing (see a2uiContent.ts); each parsed message only ever carries
@@ -108,7 +144,7 @@ function normalizeCreateSurfaceCatalogId(messages: ServerToClientMessage[]): Ser
  */
 export function processA2UIMessages(messages: ServerToClientMessage[]): void {
   messageProcessor.processMessages(
-    normalizeCreateSurfaceCatalogId(messages) as unknown as A2uiMessage[]
+    dropRedundantCreateSurface(normalizeCreateSurfaceCatalogId(messages)) as unknown as A2uiMessage[]
   );
 }
 
