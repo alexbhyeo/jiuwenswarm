@@ -4,13 +4,14 @@
  * 消息列表显示：将普通消息与工具执行按时间线交错渲染。
  */
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { Message, ToolExecution } from '../../types';
 import { MessageItem, getMessageActor } from './MessageItem';
 import { ToolGroupDisplay, collectViewedSkillIds } from './ToolGroupDisplay';
 import { useChatStore, useSessionStore } from '../../stores';
 import { isTeamMemberCollaborationMessage } from './teamEventUtils';
 import { isA2UIClientEventContent, parseA2UIContent } from '../../features/a2ui/a2uiContent';
+import { triggerSilentA2UIResync } from '../../features/historyRestore';
 
 const A2UI_FAILURE_TEXT = '界面内容暂时无法显示';
 
@@ -412,15 +413,46 @@ export function ChatTimelineList({
   );
 }
 
+function hasUnresolvedA2UIFailure(messages: Message[]): boolean {
+  // Same back-to-front scan buildTimelineItems uses to compute
+  // supersededIndexes - a failure-only message with a later successful
+  // surface is already hidden and fine; only an unsuperseded one (nothing
+  // after it ever rendered real A2UI content) counts as still stuck.
+  let laterSurfaceExists = false;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (msg.role !== 'assistant' || msg.isStreaming) continue;
+    if (!laterSurfaceExists && isA2UIFailureOnlyMessage(msg.content)) {
+      return true;
+    }
+    if (hasRenderedA2UISurface(msg.content)) {
+      laterSurfaceExists = true;
+    }
+  }
+  return false;
+}
+
 export function MessageList({ messages }: MessageListProps) {
   const { toolExecutions, toolExecutionOrder } = useChatStore();
-  const { mode } = useSessionStore();
+  const { mode, currentSession } = useSessionStore();
+  const sessionId = currentSession?.session_id;
   const executions = useMemo(
     () => toolExecutionOrder
       .map((toolCallId) => toolExecutions.get(toolCallId))
       .filter((item): item is NonNullable<typeof item> => !!item),
     [toolExecutions, toolExecutionOrder]
   );
+
+  const resyncedForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sessionId || !hasUnresolvedA2UIFailure(messages)) return;
+    // One attempt per session per stuck detection - triggerSilentA2UIResync
+    // has its own cooldown, this just skips the redundant scan/log noise of
+    // calling it again every render while still waiting on the same fetch.
+    if (resyncedForRef.current === sessionId) return;
+    resyncedForRef.current = sessionId;
+    triggerSilentA2UIResync(sessionId);
+  }, [messages, sessionId]);
 
   return <ChatTimelineList messages={messages} executions={executions} mode={mode} />;
 }

@@ -2,6 +2,7 @@ import { Message, MessageRole, UsageSummary, FileDownloadItem, MediaItem, WsEven
 import { webClient } from '../services/webClient';
 import { normalizeFinalContent } from '../utils/finalContent';
 import { isA2UIClientEventContent } from './a2ui/a2uiContent';
+import { useChatStore } from '../stores/chatStore';
 
 export const HISTORY_GET_METHOD = 'history.get';
 export const HISTORY_MESSAGE_EVENT = 'history.message';
@@ -715,6 +716,47 @@ export function beginHistoryRestore(options: BeginHistoryRestoreOptions): Histor
   const handle: HistoryRestoreHandle = { generation, dispose };
   activeRestore = handle;
   return handle;
+}
+
+// A2UI content occasionally ends up permanently stuck unparseable in the
+// live view (MessageList's isA2UIFailureOnlyMessage) even though the
+// backend's stored history for that same turn is complete and valid -
+// confirmed by direct inspection across every real instance investigated.
+// A manual page refresh always recovers it, because a refresh discards
+// whatever the live streaming accumulator ended up with and re-fetches the
+// authoritative version through this same beginHistoryRestore path. This
+// silently does the same thing without requiring the user to reload the
+// page. Guarded by an in-flight lock (avoid piling up concurrent resyncs if
+// multiple stuck messages trigger it at once) and a per-session cooldown
+// (avoid a tight retry loop if the resync's own fetch is also transiently
+// broken, e.g. a dropped connection).
+let silentResyncInFlight = false;
+const silentResyncCooldownUntil = new Map<string, number>();
+const SILENT_RESYNC_COOLDOWN_MS = 15_000;
+
+export function triggerSilentA2UIResync(sessionId: string): void {
+  if (silentResyncInFlight) return;
+  const cooldownUntil = silentResyncCooldownUntil.get(sessionId) ?? 0;
+  if (Date.now() < cooldownUntil) return;
+
+  silentResyncInFlight = true;
+  silentResyncCooldownUntil.set(sessionId, Date.now() + SILENT_RESYNC_COOLDOWN_MS);
+
+  const { clearMessages, addMessage } = useChatStore.getState();
+  beginHistoryRestore({
+    sessionId,
+    onReady: (messages) => {
+      silentResyncInFlight = false;
+      clearMessages();
+      messages.forEach((message) => addMessage(message));
+    },
+    onEmpty: () => {
+      silentResyncInFlight = false;
+    },
+    onError: () => {
+      silentResyncInFlight = false;
+    },
+  });
 }
 
 export interface FetchHistoryPageResult {

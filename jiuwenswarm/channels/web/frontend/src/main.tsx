@@ -30,6 +30,12 @@ function flagA2UIIconFontAvailability() {
 flagA2UIIconFontAvailability()
 void document.fonts?.ready.then(flagA2UIIconFontAvailability)
 
+// TEMPORARY: expose the chat store for the silent-resync verification test. Remove after use.
+void (async () => {
+  const { useChatStore } = await import('./stores/chatStore');
+  (window as unknown as { __debugChatStore: unknown }).__debugChatStore = useChatStore;
+})();
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <MarkdownContext.Provider value={renderMarkdown}>
     <App />
