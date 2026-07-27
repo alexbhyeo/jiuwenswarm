@@ -4,7 +4,7 @@
  * 消息列表显示：将普通消息与工具执行按时间线交错渲染。
  */
 
-import { useMemo } from 'react';
+import { Fragment, useMemo, type ReactNode } from 'react';
 import { Message, ToolExecution } from '../../types';
 import { MessageItem, getMessageActor } from './MessageItem';
 import { ToolGroupDisplay, collectViewedSkillIds } from './ToolGroupDisplay';
@@ -46,8 +46,25 @@ function hasRenderedA2UISurface(content: unknown): boolean {
   return parseA2UIContent(content, { isStreaming: false }).some((part) => part.kind === 'a2ui');
 }
 
+const legacyMessageKeyCache = new WeakMap<Message, string>();
+let legacyMessageKeyCounter = 0;
+
+function getMessageRenderKey(message: Message): string {
+  if (message.renderKey) {
+    return message.renderKey;
+  }
+  let key = legacyMessageKeyCache.get(message);
+  if (!key) {
+    legacyMessageKeyCounter += 1;
+    key = `legacy-message-${legacyMessageKeyCounter}`;
+    legacyMessageKeyCache.set(message, key);
+  }
+  return key;
+}
+
 interface MessageListProps {
   messages: Message[];
+  renderAfterMessage?: (message: Message) => ReactNode;
 }
 
 interface ChatTimelineListProps {
@@ -55,6 +72,7 @@ interface ChatTimelineListProps {
   executions?: ToolExecution[];
   mode?: string;
   disableA2UIInteraction?: boolean;
+  renderAfterMessage?: (message: Message) => ReactNode;
 }
 
 type TimelineItem =
@@ -149,7 +167,7 @@ function buildTimelineItems(
     })
     .map((message, index) => ({
       type: 'message',
-      key: `message-${message.id}-${index}`,
+      key: getMessageRenderKey(message),
       timestampMs: toTimestampMs(message.timestamp),
       sourceIndex: index,
       message,
@@ -372,6 +390,7 @@ export function ChatTimelineList({
   executions = [],
   mode = 'default',
   disableA2UIInteraction = false,
+  renderAfterMessage,
 }: ChatTimelineListProps) {
   const isTeamMode = mode === 'team';
   const renderItems = useMemo(
@@ -388,12 +407,14 @@ export function ChatTimelineList({
       {renderItems.map((item) => {
         if (item.type === 'message') {
           return (
-            <MessageItem
-              key={item.key}
-              message={item.message}
-              showAvatar={item.showAvatar}
-              disableA2UIInteraction={disableA2UIInteraction}
-            />
+            <Fragment key={item.key}>
+              <MessageItem
+                message={item.message}
+                showAvatar={item.showAvatar}
+                disableA2UIInteraction={disableA2UIInteraction}
+              />
+              {renderAfterMessage?.(item.message)}
+            </Fragment>
           );
         }
         return (
@@ -412,9 +433,11 @@ export function ChatTimelineList({
   );
 }
 
-export function MessageList({ messages }: MessageListProps) {
-  const { toolExecutions, toolExecutionOrder } = useChatStore();
-  const { mode } = useSessionStore();
+export function MessageList({ messages, renderAfterMessage }: MessageListProps) {
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
+  const toolExecutions = useChatStore((s) => s.runtimes[activeSessionId ?? '']?.toolExecutions ?? new Map());
+  const toolExecutionOrder = useChatStore((s) => s.runtimes[activeSessionId ?? '']?.toolExecutionOrder ?? []);
+  const mode = useSessionStore((s) => s.runtimes[activeSessionId ?? '']?.mode ?? 'agent');
   const executions = useMemo(
     () => toolExecutionOrder
       .map((toolCallId) => toolExecutions.get(toolCallId))
@@ -422,5 +445,12 @@ export function MessageList({ messages }: MessageListProps) {
     [toolExecutions, toolExecutionOrder]
   );
 
-  return <ChatTimelineList messages={messages} executions={executions} mode={mode} />;
+  return (
+    <ChatTimelineList
+      messages={messages}
+      executions={executions}
+      mode={mode}
+      renderAfterMessage={renderAfterMessage}
+    />
+  );
 }
