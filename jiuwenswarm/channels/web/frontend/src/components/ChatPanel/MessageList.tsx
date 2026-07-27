@@ -4,7 +4,7 @@
  * 消息列表显示：将普通消息与工具执行按时间线交错渲染。
  */
 
-import { useEffect, useMemo, useRef } from 'react';
+import { Fragment, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { Message, ToolExecution } from '../../types';
 import { MessageItem, getMessageActor } from './MessageItem';
 import { ToolGroupDisplay, collectViewedSkillIds } from './ToolGroupDisplay';
@@ -12,8 +12,6 @@ import { useChatStore, useSessionStore } from '../../stores';
 import { isTeamMemberCollaborationMessage } from './teamEventUtils';
 import { isA2UIClientEventContent, parseA2UIContent } from '../../features/a2ui/a2uiContent';
 import { triggerSilentA2UIResync } from '../../features/historyRestore';
-
-const A2UI_FAILURE_TEXT = '界面内容暂时无法显示';
 
 // The agent's own retry/self-correction can produce two independent
 // assistant messages for the same turn: an earlier attempt whose A2UI
@@ -27,16 +25,15 @@ function isA2UIFailureOnlyMessage(content: unknown): boolean {
   if (typeof content !== 'string' || !content) {
     return false;
   }
-  // The failure text is never literally present in the stored message —
-  // it's a fallback parseA2UIContent generates on the fly when it can't
-  // resolve the content (e.g. an unclosed <a2ui-json> tag left over from a
-  // stream that was cut short). Must actually run the parser, not just
-  // string-match the raw content.
+  // Checked structurally (part.isFailure), not by matching the fallback's
+  // displayed text - that text is translated per-locale (see
+  // i18n/locales/*.json's a2ui.unavailable) and a hardcoded string match
+  // would silently stop working whenever the UI isn't in Chinese.
   const parts = parseA2UIContent(content, { isStreaming: false });
   return (
     parts.length > 0 &&
     parts.every((part) => part.kind === 'text') &&
-    parts.some((part) => part.kind === 'text' && part.text.includes(A2UI_FAILURE_TEXT))
+    parts.some((part) => part.kind === 'text' && part.isFailure)
   );
 }
 
@@ -47,8 +44,25 @@ function hasRenderedA2UISurface(content: unknown): boolean {
   return parseA2UIContent(content, { isStreaming: false }).some((part) => part.kind === 'a2ui');
 }
 
+const legacyMessageKeyCache = new WeakMap<Message, string>();
+let legacyMessageKeyCounter = 0;
+
+function getMessageRenderKey(message: Message): string {
+  if (message.renderKey) {
+    return message.renderKey;
+  }
+  let key = legacyMessageKeyCache.get(message);
+  if (!key) {
+    legacyMessageKeyCounter += 1;
+    key = `legacy-message-${legacyMessageKeyCounter}`;
+    legacyMessageKeyCache.set(message, key);
+  }
+  return key;
+}
+
 interface MessageListProps {
   messages: Message[];
+  renderAfterMessage?: (message: Message) => ReactNode;
 }
 
 interface ChatTimelineListProps {
@@ -56,6 +70,7 @@ interface ChatTimelineListProps {
   executions?: ToolExecution[];
   mode?: string;
   disableA2UIInteraction?: boolean;
+  renderAfterMessage?: (message: Message) => ReactNode;
 }
 
 type TimelineItem =
@@ -150,7 +165,7 @@ function buildTimelineItems(
     })
     .map((message, index) => ({
       type: 'message',
-      key: `message-${message.id}-${index}`,
+      key: getMessageRenderKey(message),
       timestampMs: toTimestampMs(message.timestamp),
       sourceIndex: index,
       message,
@@ -373,6 +388,7 @@ export function ChatTimelineList({
   executions = [],
   mode = 'default',
   disableA2UIInteraction = false,
+  renderAfterMessage,
 }: ChatTimelineListProps) {
   const isTeamMode = mode === 'team';
   const renderItems = useMemo(
@@ -389,12 +405,14 @@ export function ChatTimelineList({
       {renderItems.map((item) => {
         if (item.type === 'message') {
           return (
-            <MessageItem
-              key={item.key}
-              message={item.message}
-              showAvatar={item.showAvatar}
-              disableA2UIInteraction={disableA2UIInteraction}
-            />
+            <Fragment key={item.key}>
+              <MessageItem
+                message={item.message}
+                showAvatar={item.showAvatar}
+                disableA2UIInteraction={disableA2UIInteraction}
+              />
+              {renderAfterMessage?.(item.message)}
+            </Fragment>
           );
         }
         return (
@@ -432,10 +450,11 @@ function hasUnresolvedA2UIFailure(messages: Message[]): boolean {
   return false;
 }
 
-export function MessageList({ messages }: MessageListProps) {
-  const { toolExecutions, toolExecutionOrder } = useChatStore();
-  const { mode, currentSession } = useSessionStore();
-  const sessionId = currentSession?.session_id;
+export function MessageList({ messages, renderAfterMessage }: MessageListProps) {
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
+  const toolExecutions = useChatStore((s) => s.runtimes[activeSessionId ?? '']?.toolExecutions ?? new Map());
+  const toolExecutionOrder = useChatStore((s) => s.runtimes[activeSessionId ?? '']?.toolExecutionOrder ?? []);
+  const mode = useSessionStore((s) => s.runtimes[activeSessionId ?? '']?.mode ?? 'agent');
   const executions = useMemo(
     () => toolExecutionOrder
       .map((toolCallId) => toolExecutions.get(toolCallId))
@@ -445,14 +464,21 @@ export function MessageList({ messages }: MessageListProps) {
 
   const resyncedForRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!sessionId || !hasUnresolvedA2UIFailure(messages)) return;
+    if (!activeSessionId || !hasUnresolvedA2UIFailure(messages)) return;
     // One attempt per session per stuck detection - triggerSilentA2UIResync
     // has its own cooldown, this just skips the redundant scan/log noise of
     // calling it again every render while still waiting on the same fetch.
-    if (resyncedForRef.current === sessionId) return;
-    resyncedForRef.current = sessionId;
-    triggerSilentA2UIResync(sessionId);
-  }, [messages, sessionId]);
+    if (resyncedForRef.current === activeSessionId) return;
+    resyncedForRef.current = activeSessionId;
+    triggerSilentA2UIResync(activeSessionId);
+  }, [messages, activeSessionId]);
 
-  return <ChatTimelineList messages={messages} executions={executions} mode={mode} />;
+  return (
+    <ChatTimelineList
+      messages={messages}
+      executions={executions}
+      mode={mode}
+      renderAfterMessage={renderAfterMessage}
+    />
+  );
 }

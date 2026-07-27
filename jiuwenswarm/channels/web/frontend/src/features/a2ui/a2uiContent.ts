@@ -27,7 +27,13 @@ const A2UI_MESSAGE_KEYS = [
 export type A2UIProtocolVersion = typeof A2UI_PROTOCOL_VERSION;
 
 export type A2UIContentPart =
-  | { kind: 'text'; text: string }
+  // isFailure marks this as the "content couldn't be parsed" fallback
+  // specifically (see invalidA2UIFallback) - a structural flag rather than
+  // matching translated fallback text, which changes per-locale (see
+  // i18n/locales/*.json's a2ui.unavailable) and would silently break
+  // locale-dependent string matching elsewhere (MessageList's stuck-A2UI
+  // detection).
+  | { kind: 'text'; text: string; isFailure?: boolean }
   | {
       kind: 'a2ui';
       protocolVersion: A2UIProtocolVersion;
@@ -38,7 +44,12 @@ export type A2UIContentPart =
 interface ParseA2UIContentOptions {
   enabled?: boolean;
   isStreaming?: boolean;
+  pendingText?: string;
+  invalidText?: string;
 }
+
+const DEFAULT_PENDING_TEXT = 'A2UI interface is being generated...';
+const DEFAULT_INVALID_TEXT = 'The interface cannot be displayed right now. Please try again later.';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -181,10 +192,11 @@ function makeA2UIPart(messages: ServerToClientMessage[]): A2UIContentPart {
   };
 }
 
-function invalidA2UIFallback(): A2UIContentPart {
+function invalidA2UIFallback(text = DEFAULT_INVALID_TEXT): A2UIContentPart {
   return {
     kind: 'text',
-    text: '界面内容暂时无法显示，请稍后重试或重新生成结果。',
+    text,
+    isFailure: true,
   };
 }
 
@@ -232,10 +244,10 @@ function extractTextFromMalformedA2UI(content: string): string | null {
   return null;
 }
 
-function pendingA2UIFallback(): A2UIContentPart {
+function pendingA2UIFallback(text = DEFAULT_PENDING_TEXT): A2UIContentPart {
   return {
     kind: 'text',
-    text: 'A2UI 界面生成中...',
+    text,
   };
 }
 
@@ -299,7 +311,11 @@ export function parseA2UIContent(
     const bodyStart = openIndex + A2UI_OPEN_TAG.length;
     const closeIndex = content.indexOf(A2UI_CLOSE_TAG, bodyStart);
     if (closeIndex < 0) {
-      parts.push(options.isStreaming ? pendingA2UIFallback() : invalidA2UIFallback());
+      parts.push(
+        options.isStreaming
+          ? pendingA2UIFallback(options.pendingText)
+          : invalidA2UIFallback(options.invalidText)
+      );
       break;
     }
 
@@ -313,7 +329,7 @@ export function parseA2UIContent(
       if (extractedText) {
         parts.push({ kind: 'text', text: extractedText });
       } else {
-        parts.push(invalidA2UIFallback());
+        parts.push(invalidA2UIFallback(options.invalidText));
       }
     }
     cursor = closeIndex + A2UI_CLOSE_TAG.length;

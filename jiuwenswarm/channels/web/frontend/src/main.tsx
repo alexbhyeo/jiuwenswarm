@@ -8,6 +8,8 @@ import App from './App.tsx'
 import './features/a2ui/messageProcessor';
 import { MarkdownContext } from '@a2ui/react/v0_9';
 import { renderMarkdown } from '@a2ui/markdown-it';
+import './styles/foundation.css'
+import './styles/themes/default/light.css'
 import './index.css'
 import './features/a2ui/a2ui.css'
 
@@ -29,12 +31,6 @@ function flagA2UIIconFontAvailability() {
 
 flagA2UIIconFontAvailability()
 void document.fonts?.ready.then(flagA2UIIconFontAvailability)
-
-// TEMPORARY: expose the chat store for the silent-resync verification test. Remove after use.
-void (async () => {
-  const { useChatStore } = await import('./stores/chatStore');
-  (window as unknown as { __debugChatStore: unknown }).__debugChatStore = useChatStore;
-})();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <MarkdownContext.Provider value={renderMarkdown}>

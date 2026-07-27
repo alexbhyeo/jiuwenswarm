@@ -31,7 +31,7 @@ import pytest
 
 from openjiuwen.agent_evolving.trajectory import InMemoryTrajectoryRegistry
 from openjiuwen.agent_teams.rails.builtin_elements import SKILL_USE as CORE_SKILL_USE
-from openjiuwen.agent_teams.schema import deep_agent_spec as das
+from openjiuwen.harness.schema import deep_agent_spec as das
 from openjiuwen.agent_teams.harness.manifest import get_catalog, resolve_factory
 from openjiuwen.agent_teams.schema.blueprint import LeaderSpec, TeamAgentSpec
 from openjiuwen.agent_teams.schema.deep_agent_spec import (
@@ -86,9 +86,20 @@ from jiuwenswarm.common.config import get_config
 
 logger = logging.getLogger(__name__)
 
+
+@pytest.mark.parametrize("mode", ["team", "team.plan", "code.team"])
+def test_member_runtime_prompt_rail_binds_request_identity(mode: str) -> None:
+    context = SwarmBuildContext(session_id="session-123", mode=mode)
+
+    rail = member_rails._build_runtime_prompt_rail({}, context)
+
+    assert rail._session_id == "session-123"
+    assert rail._mode == mode
+
 # Rail provider names shared by both roles (no role-specific evolution rails).
+# Harness todo planning is teammate-only; leaders use the team task board instead.
 # Sourced from the registry symbols so the test tracks renames automatically.
-_COMMON_RAIL_NAMES: frozenset[str] = frozenset(
+_TEAM_SHARED_RAIL_NAMES: frozenset[str] = frozenset(
     {
         registry.RUNTIME_PROMPT,
         registry.TEAM_SKILL_STORAGE_POLICY,
@@ -96,7 +107,6 @@ _COMMON_RAIL_NAMES: frozenset[str] = frozenset(
         registry.RESPONSE_PROMPT,
         registry.SYS_OPERATION,
         registry.STREAM_EVENT,
-        registry.TASK_PLANNING,
         registry.SECURITY,
         registry.HEARTBEAT,
         registry.AVATAR_PROMPT,
@@ -108,6 +118,12 @@ _COMMON_RAIL_NAMES: frozenset[str] = frozenset(
         registry.MEMBER_SKILL_TOOLKIT,
     }
 )
+
+# Provider names from config ``_COMMON_RAIL_NAMES`` (includes TASK_PLANNING;
+# excludes MEMBER_SKILL_TOOLKIT, which is appended during team build).
+_COMMON_RAIL_PROVIDER_NAMES: frozenset[str] = _TEAM_SHARED_RAIL_NAMES | {
+    registry.TASK_PLANNING,
+} - {registry.MEMBER_SKILL_TOOLKIT}
 
 _COMMON_TOOL_NAMES: frozenset[str] = frozenset(
     {
@@ -190,7 +206,7 @@ def _assert_evolution_approval_stack(
     assert isinstance(interrupt_rail, _FakeEvolutionInterruptRail)
     assert "review_runtime" in rail.kwargs
     assert rail.kwargs["review_runtime"] is not None
-    assert rail.kwargs["fuzzy_review"] is False
+    assert "fuzzy_review" not in rail.kwargs
     assert interrupt_rail.kwargs == {
         "review_runtime": rail.kwargs["review_runtime"],
         "submission_service": rail.approval_submission_service,
@@ -236,7 +252,7 @@ def test_register_swarm_providers_populates_registries() -> None:
 
     # The legacy class-type registry is gone; every rail (including the unified
     # class rails) is now provider-backed.
-    for name in _COMMON_RAIL_NAMES:
+    for name in _COMMON_RAIL_PROVIDER_NAMES:
         assert name in rail_providers, name
     for name in _COMMON_TOOL_NAMES:
         assert name in tool_providers, name
@@ -398,12 +414,14 @@ def test_build_member_capability_specs_rail_names(
     rails_specs, _ = build_member_capability_specs(config, "team", role)
     rail_names = {spec.type for spec in rails_specs}
 
-    assert _COMMON_RAIL_NAMES <= rail_names
+    expected = _TEAM_SHARED_RAIL_NAMES | extra_rails
+    if role == "teammate":
+        expected = expected | {registry.TASK_PLANNING}
+
+    assert _TEAM_SHARED_RAIL_NAMES <= rail_names
     assert extra_rails <= rail_names
-    # The common set has exactly 16 entries; the role adds only its explicit
-    # extra rails on top.
-    assert len(_COMMON_RAIL_NAMES) == 16
-    assert rail_names == _COMMON_RAIL_NAMES | extra_rails
+    assert len(_TEAM_SHARED_RAIL_NAMES) == 15
+    assert rail_names == expected
     # No DeepAgent is involved; every entry is a plain declarative RailSpec.
     assert all(isinstance(spec, RailSpec) for spec in rails_specs)
     logger.info("%s rails: %s", role, sorted(rail_names))
@@ -1051,7 +1069,7 @@ def test_symphony_orchestration_prompt_provider_is_leader_only() -> None:
     leader_rail = factory({}, SwarmBuildContext(role="leader"))
     teammate_rail = factory({}, SwarmBuildContext(role="teammate"))
 
-    assert type(leader_rail).__name__ == "SymphonyOrchestrationPromptRail"
+    assert type(leader_rail).__name__ == "SymphonyOrchestrationRail"
     assert teammate_rail is None
 
 
@@ -1137,7 +1155,11 @@ def test_team_skill_evolution_provider_passes_review_runtime(
     )
 
     built = evolution_rails.build_team_skill_evolution_rail(
-        {"evolution_model_config": {}, "auto_scan": True, "auto_save": auto_save},
+        {
+            "evolution_model_config": {},
+            "review_trigger": True,
+            "auto_save": auto_save,
+        },
         ctx,
     )
 
@@ -1148,9 +1170,9 @@ def test_team_skill_evolution_provider_passes_review_runtime(
         language="cn",
     )
     rail = built[1]
-    assert rail.kwargs["auto_scan"] is False
+    assert rail.kwargs["signal_trigger"] is False
     assert rail.kwargs["auto_save"] is auto_save
-    assert rail.kwargs["completion_followup_enabled"] is True
+    assert rail.kwargs["review_trigger"] is True
 
 
 def test_swarm_team_skill_evolution_registration_retries_deferred_watcher(
@@ -1237,7 +1259,7 @@ def test_member_skill_evolution_provider_passes_review_runtime(
     )
 
     built = evolution_rails.build_member_skill_evolution_rail(
-        {"evolution_model_config": {}, "auto_scan": False},
+        {"evolution_model_config": {}, "signal_trigger": False},
         ctx,
     )
 
@@ -1248,7 +1270,7 @@ def test_member_skill_evolution_provider_passes_review_runtime(
         language="en",
     )
     assert rail.kwargs["language"] == "en"
-    assert rail.kwargs["auto_scan"] is False
+    assert rail.kwargs["signal_trigger"] is False
     assert rail.kwargs["auto_save"] is True
     assert rail.bound_sink == (registry_obj, "t", "teammate")
 
@@ -1351,7 +1373,7 @@ def test_team_skill_create_rail_registers_full_workspace(
 # code.team / team.plan declarative profile
 # ---------------------------------------------------------------------------
 
-_EXPECTED_CODE_RAIL_NAMES: frozenset[str] = frozenset(
+_EXPECTED_CODE_RAIL_NAMES_LEADER: frozenset[str] = frozenset(
     {
         registry.CODE_RUNTIME_PROMPT,
         registry.RESPONSE_PROMPT,
@@ -1364,7 +1386,6 @@ _EXPECTED_CODE_RAIL_NAMES: frozenset[str] = frozenset(
         registry.CODE_AGENT_MODE,
         registry.STRUCTURED_ASK_USER,
         registry.CONTEXT_PROCESSOR,
-        registry.CODE_TASK_PLANNING,
         registry.CODE_AGENT_RAIL,
         registry.USER_HOOKS,
         registry.CODE_SKILL_USE,
@@ -1377,6 +1398,10 @@ _EXPECTED_CODE_RAIL_NAMES: frozenset[str] = frozenset(
     }
 )
 
+_EXPECTED_CODE_RAIL_NAMES_TEAMMATE: frozenset[str] = _EXPECTED_CODE_RAIL_NAMES_LEADER | {
+    registry.CODE_TASK_PLANNING,
+}
+
 
 @pytest.mark.parametrize("mode", ["code.team", "team.plan"])
 def test_code_capability_specs_rail_and_tool_names(mode: str) -> None:
@@ -1387,10 +1412,11 @@ def test_code_capability_specs_rail_and_tool_names(mode: str) -> None:
     rail_params = {spec.type: spec.params for spec in rails_specs}
     tool_names = {spec.type for spec in tool_specs}
 
-    expected_rails = _EXPECTED_CODE_RAIL_NAMES
+    expected_rails = _EXPECTED_CODE_RAIL_NAMES_LEADER
     if mode == "team.plan":
         expected_rails = expected_rails - {registry.CODE_CONFIRM_INTERRUPT}
     assert expected_rails <= rail_names
+    assert registry.CODE_TASK_PLANNING not in rail_names
     assert registry.TEAM_SKILL_EVOLUTION in rail_names
     assert registry.STRUCTURED_ASK_USER in rail_names
     if mode == "team.plan":
@@ -1438,6 +1464,38 @@ def test_team_plan_approval_only_mounts_on_leader() -> None:
     assert registry.CODE_CONFIRM_INTERRUPT not in {spec.type for spec in teammate_rails}
 
 
+def test_leader_omits_harness_todo_planning_rails() -> None:
+    """Leaders use the team task board; harness todo rails stay on teammates."""
+    register_swarm_providers()
+    leader_rails, _ = build_member_capability_specs({}, "team", "leader")
+    teammate_rails, _ = build_member_capability_specs({}, "team", "teammate")
+    code_leader_rails, _ = build_member_capability_specs({}, "code.team", "leader")
+    code_teammate_rails, _ = build_member_capability_specs({}, "code.team", "teammate")
+
+    leader_types = {spec.type for spec in leader_rails}
+    teammate_types = {spec.type for spec in teammate_rails}
+    code_leader_types = {spec.type for spec in code_leader_rails}
+    code_teammate_types = {spec.type for spec in code_teammate_rails}
+
+    assert registry.TASK_PLANNING not in leader_types
+    assert registry.TASK_PLANNING in teammate_types
+    assert registry.CODE_TASK_PLANNING not in code_leader_types
+    assert registry.CODE_TASK_PLANNING in code_teammate_types
+
+
+@pytest.mark.parametrize("mode", ["team", "code.team", "team.plan"])
+def test_leader_deep_agent_spec_forces_enable_task_planning_off(mode: str) -> None:
+    """Leader must not rely on agent-core auto-inject when YAML enables the flag."""
+    register_swarm_providers()
+    base = DeepAgentSpec(enable_task_planning=True)
+
+    leader_spec = build_member_deep_agent_spec({}, mode, "leader", base)
+    teammate_spec = build_member_deep_agent_spec({}, mode, "teammate", base)
+
+    assert leader_spec.enable_task_planning is False
+    assert teammate_spec.enable_task_planning is True
+
+
 def test_code_subagent_specs_use_factory_names() -> None:
     """Code modes declare explore/plan (+ gated code) sub-agents via factory_name."""
     register_swarm_providers()
@@ -1476,6 +1534,7 @@ def test_code_runtime_prompt_provider_carries_project_dir(tmp_path: Path) -> Non
     ctx = SwarmBuildContext(
         mode="code.team",
         role="leader",
+        session_id="sess-code-team-runtime",
         channel="tui",
         project_dir=str(project_dir),
     )
@@ -1487,6 +1546,8 @@ def test_code_runtime_prompt_provider_carries_project_dir(tmp_path: Path) -> Non
 
     assert getattr(rail, "_project_dir") == str(project_dir)
     assert getattr(rail, "_cwd") == str(project_dir)
+    assert getattr(rail, "_mode") == "code.team"
+    assert getattr(rail, "_session_id") == "sess-code-team-runtime"
 
 
 def test_team_plan_approval_provider_builds_only_for_leader() -> None:
@@ -1855,16 +1916,17 @@ def test_code_member_builds_declaratively_without_post_processing(
     assert post_processing_calls == []
     # Code-specific rails materialized via the normal declarative spec.build.
     for expected in (
-        "CodeTaskPlanningRail",
         "CodeAgentModeRail",
         "StructuredAskUserRail",
     ):
         assert expected in rail_types, (expected, sorted(rail_types))
+    # Leaders use the team task board; harness code todo stays on teammates.
+    assert "CodeTaskPlanningRail" not in rail_types
     assert "WorktreeRail" not in rail_types
     # The code system prompt is set declaratively on the spec.
     assert agent.deep_config.system_prompt
-    # CodingMemoryRail is published for the code_agent sub-agent to reuse.
-    assert ctx.extras.get(code_rails.CODING_MEMORY_EXTRAS_KEY) is not None
+    # CodingMemoryRail materializes through the derived build context.
+    assert "CodingMemoryRail" in rail_types
     coding_memory_dir = resolve_project_coding_memory_dir(
         agent_workspace_dir=str(tmp_path),
         project_dir=str(tmp_path),
