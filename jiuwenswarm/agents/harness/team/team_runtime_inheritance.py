@@ -40,6 +40,7 @@ from jiuwenswarm.common.config import (
     get_evolution_signal_trigger_enabled,
     get_skill_create_enabled,
 )
+from jiuwenswarm.common.rail_compat import construct_compat
 from jiuwenswarm.common.reasoning_injector import build_reasoning_model_request_kwargs
 from jiuwenswarm.server.runtime.skill import load_execution_disabled_skills
 
@@ -268,7 +269,8 @@ def build_member_rails(
             evolution_auto_save = get_evolution_auto_save_enabled(config)
             bound_team_trajectory_registry = team_trajectory_registry if team_id else None
             review_runtime = EvolutionReviewRuntime()
-            team_skill_rail = TeamSkillEvolutionRail(
+            team_skill_rail = construct_compat(
+                TeamSkillEvolutionRail,
                 skills_dir=team_ws_skills_dir,
                 llm=llm_model,
                 model=actual_model_name,
@@ -535,7 +537,8 @@ def build_skill_evolution_rail(
         )
         review_runtime = review_runtime or EvolutionReviewRuntime()
 
-        rail = SkillEvolutionRail(
+        rail = construct_compat(
+            SkillEvolutionRail,
             skills_dir=skills_dir,
             llm=llm,
             model=model_name,

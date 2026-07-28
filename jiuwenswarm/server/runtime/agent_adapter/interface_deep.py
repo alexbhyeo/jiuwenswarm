@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 import yaml
 from dotenv import load_dotenv
 from openjiuwen.core.context_engine.schema.config import ContextEngineConfig
-from openjiuwen.core.foundation.kv_cache import KVCacheAffinityConfig
+from jiuwenswarm.common.kv_cache_affinity_fallback import KVCacheAffinityConfig
 from openjiuwen.core.foundation.llm import ModelRequestConfig, ModelClientConfig, Model
 from openjiuwen.core.foundation.llm.utils.provider_utils import is_openai_account_provider
 from openjiuwen.core.foundation.store.base_embedding import EmbeddingConfig
@@ -84,8 +84,9 @@ from openjiuwen.harness.tools import (
     create_audio_tools,
     create_vision_tools,
 )
-from openjiuwen.harness.goal.schema import GoalOperationError, GoalStatus
-from openjiuwen.harness.schema.interaction import (
+from jiuwenswarm.common.goal_interaction_fallback import (
+    GoalOperationError,
+    GoalStatus,
     InteractionEventType,
     InputDispatchMode,
     SendInputRequest,
@@ -151,6 +152,15 @@ from jiuwenswarm.agents.harness.common.rails.execution_guard import (
 )
 from jiuwenswarm.common.config import get_model_names
 from jiuwenswarm.common.hooks_config import load_hooks_config
+from jiuwenswarm.common.rail_compat import (
+    construct_compat,
+    filter_rail_kwargs,
+    set_skill_evolution_triggers_compat,
+)
+from jiuwenswarm.common.interaction_compat import (
+    run_plain_streaming,
+    supports_attach_output,
+)
 from jiuwenswarm.server.runtime.a2ui.runtime.call_purpose import call_purpose, call_purpose_var
 from jiuwenswarm.server.hooks.user_hook_rail import UserHookRail
 from jiuwenswarm.agents.harness.common.rails.permissions.owner_scopes import (
@@ -434,8 +444,9 @@ def _set_skill_evolution_triggers(
     signal_trigger: bool,
     review_trigger: bool,
 ) -> None:
-    rail.signal_trigger = signal_trigger
-    rail.review_trigger = review_trigger
+    set_skill_evolution_triggers_compat(
+        rail, signal_trigger=signal_trigger, review_trigger=review_trigger
+    )
 
 
 def _clean_heartbeat_content(content: str) -> str:
@@ -3429,7 +3440,8 @@ class JiuWenSwarmDeepAdapter:
             )
             evolution_auto_save = get_evolution_auto_save_enabled(config)
             model_name = self._default_model_name or config.get("model_name", "gpt-4")
-            skill_evolution_rail = SkillEvolutionRail(
+            skill_evolution_rail = construct_compat(
+                SkillEvolutionRail,
                 skills_dir=str(get_agent_skills_dir()),
                 llm=self._model,
                 model=model_name,
@@ -3470,17 +3482,27 @@ class JiuWenSwarmDeepAdapter:
             if self._skill_manager is not None
             else []
         )
+        # configure_skill_evolution_runtime forwards **rail_kwargs straight
+        # into SkillEvolutionRail's constructor inside openjiuwen itself, so
+        # we can't intercept that construction with construct_compat - pre-
+        # translate/filter signal_trigger/review_trigger here instead.
+        evolution_rail_kwargs = filter_rail_kwargs(
+            SkillEvolutionRail,
+            {
+                "signal_trigger": evolution_signal_trigger,
+                "review_trigger": evolution_review_trigger,
+            },
+        )
         await configure_skill_evolution_runtime(
             self._instance,
             skills_dir=str(get_agent_skills_dir()),
             llm=self._model,
             model=self._default_model_name
             or self._config_cache.get("model_name", "gpt-4"),
-            signal_trigger=evolution_signal_trigger,
-            review_trigger=evolution_review_trigger,
             auto_save=evolution_auto_save,
             disabled_skills=disabled_skills,
             language=resolved_language,
+            **evolution_rail_kwargs,
         )
         self._refresh_active_evolution_rail_refs()
         if self._skill_evolution_rail is not None:
@@ -7252,6 +7274,16 @@ class JiuWenSwarmDeepAdapter:
         collected_content: list[str] = []
         interaction_stream = None
         interaction_stream_abort = True
+        # Imported here (rather than at its first use inside the try block
+        # below) so it's always bound by the time the finally clause runs -
+        # otherwise any exception raised before that point left this name
+        # unbound, and the finally's own call to it masked the real error
+        # with a confusing UnboundLocalError.
+        from jiuwenswarm.agents.harness.agent_observability import (
+            close_agent_run_span,
+            open_agent_run_span,
+            sync_agent_observability,
+        )
         try:
             await self._update_runtime_config(
                 self._RuntimeConfig(
@@ -7291,11 +7323,6 @@ class JiuWenSwarmDeepAdapter:
             # Sync single-agent / coding-agent observability with current
             # config before running, and open a root span so OtelCallbackHandler
             # has a parent for LLM/tool spans (see streaming path for details).
-            from jiuwenswarm.agents.harness.agent_observability import (
-                close_agent_run_span,
-                open_agent_run_span,
-                sync_agent_observability,
-            )
             sync_agent_observability()
             _run_span = open_agent_run_span(session_id=session_id, mode=mode)
             attach_goal = self._wants_attach_goal(request.params)
@@ -7324,6 +7351,8 @@ class JiuWenSwarmDeepAdapter:
                         mode=dispatch_mode,
                     )
                 )
+            elif not supports_attach_output(self._instance):
+                interaction_stream = run_plain_streaming(self._instance, inputs)
             else:
                 interaction_stream = await self._instance.attach_output()
                 if interaction_stream is not None:
@@ -7684,6 +7713,16 @@ class JiuWenSwarmDeepAdapter:
         _debug_trace_token = None  # reset token for the ContextVar-bound logger
         interaction_stream = None
         interaction_stream_abort = True
+        # Imported here (rather than at its first use inside the try block
+        # below) so it's always bound by the time the finally clause runs -
+        # otherwise any exception raised before that point left this name
+        # unbound, and the finally's own call to it masked the real error
+        # with a confusing UnboundLocalError.
+        from jiuwenswarm.agents.harness.agent_observability import (
+            close_agent_run_span,
+            open_agent_run_span,
+            sync_agent_observability,
+        )
         try:
             await self._update_runtime_config(
                 self._RuntimeConfig(
@@ -7744,11 +7783,6 @@ class JiuWenSwarmDeepAdapter:
             )
             # Sync single-agent / coding-agent observability with current config
             # before running.
-            from jiuwenswarm.agents.harness.agent_observability import (
-                close_agent_run_span,
-                open_agent_run_span,
-                sync_agent_observability,
-            )
             sync_agent_observability(force=_dbg_settings.otel_enabled)
             _run_span = open_agent_run_span(session_id=session_id, mode=mode)
             _otel_trace_id = ""
@@ -7929,6 +7963,8 @@ class JiuWenSwarmDeepAdapter:
                         yield chunk
                     interaction_stream_abort = False
                     return
+            elif not supports_attach_output(self._instance):
+                interaction_stream = run_plain_streaming(self._instance, inputs)
             else:
                 interaction_stream = await self._instance.attach_output()
                 if interaction_stream is None:

@@ -33,7 +33,7 @@ from openjiuwen.agent_teams.schema.deep_agent_spec import (
     SubAgentSpec,
 )
 from openjiuwen.agent_teams.rails.builtin_elements import SKILL_USE as CORE_SKILL_USE
-from openjiuwen.core.foundation.kv_cache import KVCacheAffinityConfig
+from jiuwenswarm.common.kv_cache_affinity_fallback import KVCacheAffinityConfig
 from openjiuwen.core.foundation.tool import McpServerConfig
 from openjiuwen.core.single_agent import AgentCard
 from openjiuwen.harness.prompts import resolve_language

@@ -34,20 +34,33 @@ logger = logging.getLogger(__name__)
 #
 # Adding a new task event is now a one-line entry here plus the SDK mapping in
 # ``event_types.py`` — no frontend change required.
+# Built from (name, status) pairs rather than direct MonitorEventType.X
+# attribute access: the pinned openjiuwen commit (see uv.lock) doesn't yet
+# define every member referenced here (TASK_STARTED, TASK_RELEASED,
+# TASK_REVOKED, TASK_SUBMITTED_FOR_REVIEW, TASK_VERIFIED,
+# TASK_REVISION_REQUESTED all raise AttributeError on that build). Skipping
+# undefined members keeps this forward-compatible with the richer enum an
+# upstream openjiuwen upgrade will eventually provide, without hard-crashing
+# the whole app on the current one.
+_TASK_EVENT_STATUS_SOURCE: list[tuple[str, str]] = [
+    ("TASK_CREATED", "pending"),
+    ("TASK_CLAIMED", "in_progress"),
+    ("TASK_STARTED", "in_progress"),
+    ("TASK_PLAN_REQUEST", "planning"),
+    ("TASK_PLAN_RESPONSE", "in_progress"),
+    ("TASK_COMPLETED", "completed"),
+    ("TASK_CANCELLED", "cancelled"),
+    ("TASK_UNBLOCKED", "pending"),
+    ("TASK_RELEASED", "pending"),
+    ("TASK_REVOKED", "pending"),
+    ("TASK_SUBMITTED_FOR_REVIEW", "in_review"),
+    ("TASK_VERIFIED", "completed"),
+    ("TASK_REVISION_REQUESTED", "in_progress"),
+]
 _TASK_EVENT_STATUS: dict[MonitorEventType, str] = {
-    MonitorEventType.TASK_CREATED: "pending",
-    MonitorEventType.TASK_CLAIMED: "in_progress",
-    MonitorEventType.TASK_STARTED: "in_progress",
-    MonitorEventType.TASK_PLAN_REQUEST: "planning",
-    MonitorEventType.TASK_PLAN_RESPONSE: "in_progress",
-    MonitorEventType.TASK_COMPLETED: "completed",
-    MonitorEventType.TASK_CANCELLED: "cancelled",
-    MonitorEventType.TASK_UNBLOCKED: "pending",
-    MonitorEventType.TASK_RELEASED: "pending",
-    MonitorEventType.TASK_REVOKED: "pending",
-    MonitorEventType.TASK_SUBMITTED_FOR_REVIEW: "in_review",
-    MonitorEventType.TASK_VERIFIED: "completed",
-    MonitorEventType.TASK_REVISION_REQUESTED: "in_progress",
+    getattr(MonitorEventType, name): status
+    for name, status in _TASK_EVENT_STATUS_SOURCE
+    if hasattr(MonitorEventType, name)
 }
 
 # Upper bound (chars) for a task's title/content carried on events / snapshots.
