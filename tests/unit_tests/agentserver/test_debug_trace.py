@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -101,6 +103,35 @@ class TestPaths:
         monkeypatch.setattr(paths_mod, "get_user_workspace_dir", lambda: tmp_path)
         assert paths_mod.debug_trace_dir("code.normal") == tmp_path / ".code" / "traces"
 
+    def test_original_agent_plan_keeps_agent_dir_after_code_profile_resolution(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr(paths_mod, "get_user_workspace_dir", lambda: tmp_path)
+        mode = paths_mod.resolve_debug_trace_mode("code.plan", "agent.plan")
+
+        assert paths_mod.debug_trace_file(mode, "sess") == (
+            tmp_path / ".agent" / "traces" / "dump-agent-sess.txt"
+        )
+
+    def test_plain_web_agent_in_code_profile_remains_code_dump(self):
+        assert paths_mod.resolve_debug_trace_mode("code.normal", "agent") == "code.normal"
+
+    def test_explicit_code_plan_remains_code_dump(self):
+        assert paths_mod.resolve_debug_trace_mode("code.plan", "code.plan") == "code.plan"
+
+    def test_original_agent_plan_uses_agent_debug_settings(self, monkeypatch):
+        monkeypatch.setattr(
+            debug_config,
+            "_load_debug_trace_config",
+            lambda: {
+                "agent": {"enabled": True},
+                "code": {"enabled": False},
+            },
+        )
+        mode = paths_mod.resolve_debug_trace_mode("code.plan", "agent.plan")
+
+        assert resolve_debug_trace_settings(mode=mode, request_debug=False).enabled is True
+
     def test_file_names(self, monkeypatch, tmp_path):
         monkeypatch.setattr(paths_mod, "get_user_workspace_dir", lambda: tmp_path)
         assert paths_mod.debug_trace_file("agent.plan", "sess").name == "dump-agent-sess.txt"
@@ -141,11 +172,6 @@ class TestSettings:
         self._cfg(monkeypatch, {"code": {"otel_enabled": False}})
         assert not resolve_debug_trace_settings(mode="code.normal", request_debug=True).otel_enabled
 
-    def test_config_global_enabled(self, monkeypatch):
-        self._cfg(monkeypatch, {"enabled": True})
-        s = resolve_debug_trace_settings(mode="agent.plan", request_debug=False)
-        assert s.enabled and s.dump_enabled
-
     def test_config_mode_enabled(self, monkeypatch):
         # only agent mode enabled -> code disabled
         self._cfg(monkeypatch, {"agent": {"enabled": True}})
@@ -153,32 +179,32 @@ class TestSettings:
         assert not resolve_debug_trace_settings(mode="code.normal", request_debug=False).enabled
 
     def test_config_dump_disabled_escape_hatch(self, monkeypatch):
-        self._cfg(monkeypatch, {"enabled": True, "code": {"dump_enabled": False}})
+        self._cfg(monkeypatch, {"code": {"enabled": True, "dump_enabled": False}})
         s = resolve_debug_trace_settings(mode="code.normal", request_debug=False)
         assert s.enabled and not s.dump_enabled
 
     def test_config_include_toggles(self, monkeypatch):
-        self._cfg(monkeypatch, {"enabled": True, "code": {"include_reasoning": False}})
+        self._cfg(monkeypatch, {"code": {"include_reasoning": False}})
         s = resolve_debug_trace_settings(mode="code.normal", request_debug=False)
         assert s.include_reasoning is False
         assert s.include_model_output is True  # untouched default
 
     def test_config_limits_override(self, monkeypatch):
-        self._cfg(monkeypatch, {"enabled": True, "limits": {"tool_args_max_chars": 100}})
+        self._cfg(monkeypatch, {"limits": {"tool_args_max_chars": 100}})
         s = resolve_debug_trace_settings(mode="agent.plan", request_debug=False)
         assert s.tool_args_max_chars == 100
         assert s.tool_result_max_chars == 8000  # untouched default
 
     def test_config_max_model_output_chars(self, monkeypatch):
-        self._cfg(monkeypatch, {"enabled": True, "limits": {"max_model_output_chars": 500}})
+        self._cfg(monkeypatch, {"limits": {"max_model_output_chars": 500}})
         s = resolve_debug_trace_settings(mode="agent.plan", request_debug=False)
         assert s.max_model_output_chars == 500
         # empty/null -> no cap
-        self._cfg(monkeypatch, {"enabled": True, "limits": {"max_model_output_chars": ""}})
+        self._cfg(monkeypatch, {"limits": {"max_model_output_chars": ""}})
         assert resolve_debug_trace_settings(mode="agent.plan", request_debug=False).max_model_output_chars is None
 
     def test_config_redaction(self, monkeypatch):
-        self._cfg(monkeypatch, {"enabled": True, "redaction": {"redact_completions": True}})
+        self._cfg(monkeypatch, {"redaction": {"redact_completions": True}})
         s = resolve_debug_trace_settings(mode="agent.plan", request_debug=False)
         assert s.redact_completions is True
         assert s.redact_prompts is False
@@ -258,6 +284,119 @@ class TestDebugTraceLoggerFeed:
         assert "input_tokens=100" in out and "model_name=GLM-5.2" in out
 
 
+    def test_answer_chunk_dropped_when_model_output_off(self, tmp_path):
+        # include_model_output=False must suppress the trailing `answer`
+        # chunk too — it re-sends the whole reply and is classified as
+        # text, so without this guard the reply leaks into the dump as a
+        # category=text JSON blob even though llm_output was suppressed.
+        s = debug_config.DebugTraceSettings(
+            mode="code.normal",
+            enabled=True,
+            dump_enabled=True,
+            otel_enabled=False,
+            include_model_output=False,
+        )
+        lg = DebugTraceLogger(
+            file_path=tmp_path / "dump.txt",
+            mode="code.normal",
+            session_id="sess",
+            request_id="req-1",
+            settings=s,
+        )
+        lg.start_run()
+        lg.feed(_chunk("llm_output", {"content": "streamed reply"}))
+        lg.feed(_chunk("answer", {"content": "streamed reply"}))
+        lg.end_run(status="ok")
+        out = _read(lg)
+        assert "streamed reply" not in out
+        assert "category=text" not in out
+
+
+# ── session registry (cross-task logger recovery) ──────────────────────────
+class TestSessionRegistry:
+    """Dispatch sites run in the DeepAgent supervisor task, where the per-request
+    ContextVar is invisible: the agent run moved from in-request streaming to a
+    session-setup supervisor task. They recover the logger by session_id."""
+
+    def test_register_lookup_unregister_roundtrip(self, tmp_path):
+        from jiuwenswarm.server.runtime.debug_trace.context import (
+            get_debug_trace_logger_for_session,
+            register_debug_trace_logger,
+            unregister_debug_trace_logger,
+        )
+
+        lg = _logger(tmp_path, session_id="sess-A")
+        try:
+            register_debug_trace_logger("sess-A", lg)
+            assert get_debug_trace_logger_for_session("sess-A") is lg
+            # unknown session / empty id are safe no-ops
+            assert get_debug_trace_logger_for_session("other") is None
+            assert get_debug_trace_logger_for_session("") is None
+            unregister_debug_trace_logger("sess-A")
+            assert get_debug_trace_logger_for_session("sess-A") is None
+            # unregister of unknown / empty id must not raise
+            unregister_debug_trace_logger("nope")
+            unregister_debug_trace_logger("")
+        finally:
+            lg.flush()  # close the dump file opened on construction
+
+    def test_registry_recovers_logger_when_contextvar_invisible(self, tmp_path):
+        # A task created in a context where the ContextVar was never set (mirrors
+        # the supervisor task, created at session setup before the /debug request)
+        # must NOT see the ContextVar, yet MUST recover the logger via the registry.
+        from jiuwenswarm.server.runtime.debug_trace.context import (
+            get_debug_trace_logger,
+            get_debug_trace_logger_for_session,
+            register_debug_trace_logger,
+            unregister_debug_trace_logger,
+        )
+
+        lg = _logger(tmp_path, session_id="sess-B")
+
+        async def supervisor_like():
+            assert get_debug_trace_logger() is None  # ContextVar not inherited
+            assert get_debug_trace_logger_for_session("sess-B") is lg  # registry works
+
+        async def main():
+            register_debug_trace_logger("sess-B", lg)
+            # Deliberately do NOT set_debug_trace_logger here — the task below is
+            # created in a context with no ContextVar binding, like the real
+            # supervisor task. The registry (a module global) is still visible.
+            await asyncio.create_task(supervisor_like())
+            unregister_debug_trace_logger("sess-B")
+
+        try:
+            asyncio.run(main())
+        finally:
+            lg.flush()  # close the dump file opened on construction
+
+
+# ── OTel single-agent span mechanics ───────────────────────────────────────
+# Root-span fallback, run-output stamping, the single-agent team marker and
+# the create_subagent hook now live in the SDK; they are covered by
+# ``tests/unit_tests/harness/observability`` in the openjiuwen repository.
+
+
+def test_assemble_run_answer_does_not_double_count_the_repeated_final():
+    """An ``answer`` chunk re-sends the whole reply the deltas already carried."""
+    from jiuwenswarm.server.runtime.agent_adapter.interface_deep import (
+        _assemble_run_answer,
+    )
+
+    assert _assemble_run_answer(["hello ", "world"], "hello world") == "hello world"
+
+
+def test_assemble_run_answer_keeps_a_flushed_tail():
+    """A cut-short round flushes only its tail as chat.final — keep both parts."""
+    from jiuwenswarm.server.runtime.agent_adapter.interface_deep import (
+        _assemble_run_answer,
+    )
+
+    assert _assemble_run_answer(["hello "], "world") == "hello world"
+    assert _assemble_run_answer([], "only final") == "only final"
+    assert _assemble_run_answer([], "") == ""
+
+
 # ── truncation / redaction ─────────────────────────────────────────────────
 class TestTruncationAndRedaction:
     def test_tool_args_truncated(self, tmp_path):
@@ -311,6 +450,107 @@ class TestTruncationAndRedaction:
         assert _looks_secret("api-key")
         assert _looks_secret("password")
         assert _looks_secret("set-cookie")
+
+    def test_tool_args_secret_masked_even_when_shown(self, tmp_path):
+        # include_tool_args=True: arguments are SHOWN, yet secret values are
+        # still masked as ***. Arguments are fed as a JSON STRING — the real
+        # shape LLM tool-calls deliver — so this guards the parse-then-mask path
+        # (without it, _mask_secrets would skip the string and leak the secret).
+        s = debug_config.DebugTraceSettings(
+            mode="code.normal",
+            enabled=True,
+            dump_enabled=True,
+            otel_enabled=False,
+            include_tool_args=True,
+        )
+        lg = DebugTraceLogger(
+            file_path=tmp_path / "dump.txt",
+            mode="code.normal",
+            session_id="sess",
+            request_id="req-1",
+            settings=s,
+        )
+        lg.start_run()
+        # Real link delivers arguments as a JSON STRING (not a dict).
+        args_str = json.dumps({
+            "api_key": "sk-secret-12345",
+            "password": "hunter2",
+            "token": "tok-abc",
+            "authorization": "Bearer xyz",
+            "url": "https://example.com",   # not a secret -> stays
+            "tokens_used": 42,               # plural token count -> not masked
+        })
+        lg.feed(_chunk("tool_call", {"tool_call": {
+            "name": "set_credentials", "id": "call_1",
+            "arguments": args_str,
+        }}))
+        lg.end_run(status="ok")
+        out = _read(lg)
+
+        # secret plaintext never appears
+        for secret in ("sk-secret-12345", "hunter2", "tok-abc", "Bearer xyz"):
+            assert secret not in out
+        # secret values masked (key visible, value redacted). This branch masks
+        # as ``******(fp:xxxxxxxx)`` (fingerprint, matches SensitiveDataFilter);
+        # only the format differs from the upstream ``***`` — the key point is
+        # the JSON-string arguments were parsed-then-masked, not leaked.
+        for key in ("api_key", "password", "token", "authorization"):
+            assert re.search(rf'"{key}": "\*+\(fp:[0-9a-f]+\)"', out), (key, out)
+        # non-secret args stay visible -> masking is per-field, not whole-arg redaction
+        assert "https://example.com" in out
+        # plural token count must not be mis-masked
+        assert '"tokens_used": 42' in out
+
+    def test_nested_secrets_masked_and_original_unchanged(self, tmp_path):
+        # Secrets buried deep in nested dict/list must still be masked, AND the
+        # masking must not mutate the original payload (the live chunk is shared
+        # with the agent pipeline / real tool execution — mutating it would
+        # corrupt the run). Dict shape is used so non-mutation is observable.
+        import copy
+        s = debug_config.DebugTraceSettings(
+            mode="code.normal",
+            enabled=True,
+            dump_enabled=True,
+            otel_enabled=False,
+            include_tool_args=True,
+        )
+        lg = DebugTraceLogger(
+            file_path=tmp_path / "dump.txt",
+            mode="code.normal",
+            session_id="sess",
+            request_id="req-1",
+            settings=s,
+        )
+        original = {"tool_call": {
+            "name": "register_service", "id": "call_1",
+            "arguments": {
+                "service": {
+                    "name": "demo",  # not a secret -> stays
+                    "credentials": {"api_key": "sk-real-xxx", "token": "tok-real"},  # dict->dict->dict
+                    "endpoints": [{"url": "https://e.example", "auth": {"password": "pw-real"}}],  # dict->list->dict
+                }
+            },
+        }}
+        snapshot = copy.deepcopy(original)
+
+        lg.start_run()
+        lg.feed(_chunk("tool_call", original))
+        lg.end_run(status="ok")
+        out = _read(lg)
+
+        # 1) recursive masking: deep secret values never appear, leaves masked
+        for secret in ("sk-real-xxx", "tok-real", "pw-real"):
+            assert secret not in out
+        for key in ("api_key", "token", "password"):
+            assert re.search(rf'"{key}": "\*+\(fp:[0-9a-f]+\)"', out), (key, out)
+        # non-secret fields survive and the nested structure is preserved
+        assert '"name": "demo"' in out
+        assert "https://e.example" in out
+
+        # 2) original payload NOT mutated (live data intact for tool execution)
+        assert original == snapshot
+        assert original["tool_call"]["arguments"]["service"]["credentials"]["api_key"] == "sk-real-xxx"
+        assert original["tool_call"]["arguments"]["service"]["endpoints"][0]["auth"]["password"] == "pw-real"
 
 
 # ── error handling / best-effort ───────────────────────────────────────────
@@ -397,22 +637,19 @@ class TestAgentObservabilityForce:
     def _reset(self):
         import jiuwenswarm.agents.harness.agent_observability as ao
         ao._agent_observability_active = False
-        ao._agent_owns_provider = False
         ao._force_ever_enabled = False
 
     def test_force_inits_and_sticky_blocks_teardown(self, monkeypatch):
         import jiuwenswarm.agents.harness.agent_observability as ao
-        import openjiuwen.agent_teams.observability as obs
         self._reset()
         calls = {"init": 0, "shutdown": 0}
-        monkeypatch.setattr(ao, "get_config", lambda: {"agent_observability": {"enabled": False}})
-        monkeypatch.setattr(obs, "is_initialized", lambda: False)
-        monkeypatch.setattr(obs, "ObservabilityConfig", lambda **kw: kw)
 
-        def fake_init(_cfg):
+        def fake_acquire(_cfg):
             calls["init"] += 1
+            return False
 
-        monkeypatch.setattr(obs, "init_observability", fake_init)
+        monkeypatch.setattr(ao, "get_config", lambda: {"agent_observability": {"enabled": False}})
+        monkeypatch.setattr(ao, "acquire_observability", fake_acquire)
         monkeypatch.setattr(
             ao, "shutdown_agent_observability",
             lambda: calls.__setitem__("shutdown", calls["shutdown"] + 1),
@@ -433,7 +670,6 @@ class TestAgentObservabilityForce:
         calls = {"shutdown": 0}
         # simulate a config-gated active provider (force never used)
         ao._agent_observability_active = True
-        ao._agent_owns_provider = True
         ao._force_ever_enabled = False
         monkeypatch.setattr(ao, "get_config", lambda: {"agent_observability": {"enabled": False}})
         monkeypatch.setattr(
@@ -714,85 +950,6 @@ class TestSubagentCapture:
         apply_task_tool_debug_patch()  # second call must be a no-op
         assert getattr(TaskTool, "debug_trace_patch_applied", False) is True
 
-    def test_ensure_observability_rail_attaches_when_obs_up(self, monkeypatch):
-        # When observability is initialized, _ensure_observability_rail must
-        # add_rail() an ObservabilityRail onto the subagent (run-time attachment,
-        # since build-time is unreliable when obs isn't up yet).
-        import types
-
-        from jiuwenswarm.server.runtime.debug_trace import subagent_capture
-
-        sentinel = types.SimpleNamespace(name="OBS_RAIL")
-
-        class FakeObsRail:
-            pass
-
-        # Point the module-level symbols the helper imports at fakes.
-        import sys
-
-        fake_mod = types.ModuleType("fake_obs_rail")
-        fake_mod.ObservabilityRail = FakeObsRail
-        fake_mod.maybe_observability_rail = lambda: sentinel
-        monkeypatch.setitem(sys.modules, "openjiuwen.agent_teams.observability.rail", fake_mod)
-
-        added: list[Any] = []
-
-        class FakeSub:
-            def configured_rails(self):
-                return []  # none yet
-
-            def add_rail(self, rail):
-                added.append(rail)
-
-        subagent_capture._ensure_observability_rail(FakeSub())
-        assert added == [sentinel]
-
-    def test_ensure_observability_rail_skips_when_already_attached(self, monkeypatch):
-        import types, sys
-
-        from jiuwenswarm.server.runtime.debug_trace import subagent_capture
-
-        class FakeObsRail:
-            pass
-
-        sentinel = types.SimpleNamespace(name="OBS_RAIL")
-
-        fake_mod = types.ModuleType("fake_obs_rail")
-        fake_mod.ObservabilityRail = FakeObsRail
-        fake_mod.maybe_observability_rail = lambda: sentinel
-        monkeypatch.setitem(sys.modules, "openjiuwen.agent_teams.observability.rail", fake_mod)
-
-        added: list[Any] = []
-
-        class FakeSub:
-            def configured_rails(self):
-                return [FakeObsRail()]  # already has an ObservabilityRail
-
-            def add_rail(self, rail):
-                added.append(rail)
-
-        subagent_capture._ensure_observability_rail(FakeSub())
-        assert added == []  # idempotent: not re-added
-
-    def test_ensure_observability_rail_noop_when_obs_off(self, monkeypatch):
-        import types, sys
-
-        from jiuwenswarm.server.runtime.debug_trace import subagent_capture
-
-        fake_mod = types.ModuleType("fake_obs_rail")
-        fake_mod.ObservabilityRail = type("ObservabilityRail", (), {})
-        fake_mod.maybe_observability_rail = lambda: None  # obs not initialized
-        monkeypatch.setitem(sys.modules, "openjiuwen.agent_teams.observability.rail", fake_mod)
-
-        added: list[Any] = []
-
-        class FakeSub:
-            def configured_rails(self):
-                return []
-
-            def add_rail(self, rail):
-                added.append(rail)
-
-        subagent_capture._ensure_observability_rail(FakeSub())
-        assert added == []  # no-op when observability is off
-
+    # Sub-agent rail attachment moved into the SDK
+    # (``openjiuwen.harness.observability.rail``); it is covered by
+    # ``tests/unit_tests/harness/observability/test_rail.py`` there.

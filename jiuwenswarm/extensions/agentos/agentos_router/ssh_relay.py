@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from jiuwenswarm.extensions.agentos.agentos_router.logutil import log_agentos
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_SSH_PORT = 2222
@@ -41,7 +43,29 @@ _DEFAULT_CLIENT_KEY_NAMES = (
     "id_rsa",
     "id_dsa",
     "id_ed448",
+    "agent_key",
 )
+# create_sandbox 返回后 frontend bastion / 实例 sshd 可能尚未就绪，对端会
+# 立刻掐连接（asyncssh: "SSH connection closed"）。对齐 chat WS 冷启动重试。
+_SSH_CONNECT_READY_TIMEOUT_SECONDS = 60.0
+_SSH_CONNECT_RETRY_INTERVAL_SECONDS = 1.0
+_SSH_CONNECT_RETRYABLE_TEXT_TOKENS = (
+    "ssh connection closed",
+    "connection closed",
+    "connection reset",
+    "connection refused",
+    "temporarily unavailable",
+    "connect call failed",
+    "timeout",
+)
+
+
+def _is_ssh_connect_retryable(exc: BaseException) -> bool:
+    """冷启动期间 frontend/sshd 未就绪的可重试错误."""
+    if isinstance(exc, (ConnectionError, TimeoutError, asyncio.TimeoutError, OSError)):
+        return True
+    text = str(exc).lower()
+    return any(token in text for token in _SSH_CONNECT_RETRYABLE_TEXT_TOKENS)
 
 
 def _raise_missing_asyncssh(exc: ImportError) -> None:
@@ -133,6 +157,10 @@ class YuanrongSshRelay:
     def backend_port(self) -> int:
         return self._settings.port
 
+    @property
+    def client_keys_dir(self) -> str:
+        return self._settings.client_keys_dir
+
     def backend_username(self, instance_id: str) -> str:
         instance = str(instance_id or "").strip()
         if not instance:
@@ -150,13 +178,28 @@ class YuanrongSshRelay:
 
         Always resolves ``session.done`` and ``session.exit_code`` so the
         northbound channel waiting in ``_wait_relay_done`` is released.
+        Cancellation (northbound timeout / router disconnect) also releases
+        the waiter and tears down the southbound connection.
         """
         exit_code = 1
         try:
             exit_code = await self._relay(session, instance_id, user_id=user_id)
+        except asyncio.CancelledError:
+            log_agentos(
+                logger,
+                logging.INFO,
+                "ssh.south.cancelled",
+                user_id=user_id,
+                session_id=str(session.session_id or ""),
+                sandbox_id=instance_id,
+                instance=instance_id,
+            )
+            exit_code = 130
+            raise
         except Exception as exc:  # noqa: BLE001 - report any relay failure to the client
             logger.exception(
-                "[YuanrongSshRelay] relay failed: session=%s instance=%s",
+                "[AgentOS] ssh.south.fail user_id=%s session_id=%s sandbox_id=%s",
+                user_id,
                 session.session_id,
                 instance_id,
             )
@@ -191,13 +234,31 @@ class YuanrongSshRelay:
             )
         return key_paths
 
-    async def _relay(
+    async def wait_until_ready(
         self,
-        session: Any,
         instance_id: str,
         *,
         user_id: str = "",
-    ) -> int:
+    ) -> None:
+        """Probe southbound SSH until sshd accepts, then close the probe.
+
+        Used by ``3rdagent.switch`` after create so the client does not SSH
+        before the YuanRong instance is reachable.
+        """
+        conn = await self._connect_until_ready(instance_id, user_id=user_id)
+        conn.close()
+        try:
+            await conn.wait_closed()
+        except Exception:  # noqa: BLE001
+            logger.debug("[YuanrongSshRelay] probe close failed", exc_info=True)
+
+    async def _connect_until_ready(
+        self,
+        instance_id: str,
+        *,
+        user_id: str = "",
+        session_id: str = "",
+    ) -> Any:
         asyncssh = _import_asyncssh()
 
         host = self.backend_host
@@ -208,26 +269,84 @@ class YuanrongSshRelay:
             )
         username = self.backend_username(instance_id)
         client_keys = self._resolve_client_keys(user_id)
-
-        logger.info(
-            "[YuanrongSshRelay] connecting: %s@%s:%s session=%s keys_dir=%s keys=%s",
-            username,
-            host,
-            self._settings.port,
-            session.session_id,
-            resolve_client_keys_dir(self._settings.client_keys_dir, user_id),
-            len(client_keys),
+        keys_dir = resolve_client_keys_dir(self._settings.client_keys_dir, user_id)
+        deadline = (
+            asyncio.get_running_loop().time() + _SSH_CONNECT_READY_TIMEOUT_SECONDS
         )
-        conn = await asyncio.wait_for(
-            asyncssh.connect(
-                host,
-                port=self._settings.port,
-                username=username,
-                client_keys=client_keys,
-                agent_path=None,
-                known_hosts=None,
-            ),
-            timeout=self._settings.connect_timeout_s,
+        attempt = 0
+        while True:
+            attempt += 1
+            log_agentos(
+                logger,
+                logging.DEBUG,
+                "ssh.south.connect",
+                user_id=user_id,
+                session_id=session_id,
+                sandbox_id=instance_id,
+                instance=instance_id,
+                attempt=attempt,
+            )
+            logger.debug(
+                "[AgentOS] ssh.south.connect keys_dir=%s keys=%s user_id=%s sandbox_id=%s",
+                keys_dir,
+                len(client_keys),
+                user_id,
+                instance_id,
+            )
+            try:
+                conn = await asyncio.wait_for(
+                    asyncssh.connect(
+                        host,
+                        port=self._settings.port,
+                        username=username,
+                        client_keys=client_keys,
+                        agent_path=None,
+                        known_hosts=None,
+                    ),
+                    timeout=self._settings.connect_timeout_s,
+                )
+            except Exception as exc:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0 or not _is_ssh_connect_retryable(exc):
+                    raise
+                sleep_for = min(_SSH_CONNECT_RETRY_INTERVAL_SECONDS, remaining)
+                log_agentos(
+                    logger,
+                    logging.WARNING,
+                    "ssh.south.retry",
+                    user_id=user_id,
+                    session_id=session_id,
+                    sandbox_id=instance_id,
+                    instance=instance_id,
+                    attempt=attempt,
+                    error=type(exc).__name__,
+                    sleep=f"{sleep_for:.1f}s",
+                )
+                await asyncio.sleep(sleep_for)
+                continue
+            log_agentos(
+                logger,
+                logging.INFO,
+                "ssh.south.ready",
+                user_id=user_id,
+                session_id=session_id,
+                sandbox_id=instance_id,
+                instance=instance_id,
+                attempt=attempt,
+            )
+            return conn
+
+    async def _relay(
+        self,
+        session: Any,
+        instance_id: str,
+        *,
+        user_id: str = "",
+    ) -> int:
+        conn = await self._connect_until_ready(
+            instance_id,
+            user_id=user_id,
+            session_id=str(getattr(session, "session_id", "") or ""),
         )
         try:
             return await self._relay_over_connection(session, conn)
@@ -241,25 +360,88 @@ class YuanrongSshRelay:
     async def _relay_over_connection(self, session: Any, conn: Any) -> int:
         process = session.process
 
-        # Interactive shell only (northbound rejects exec requests).
+        # Interactive shell, or forward northbound exec command into the sandbox.
         kwargs: dict[str, Any] = {"encoding": None}
+        command = str(getattr(session, "command", None) or "").strip() or None
+        if command:
+            kwargs["command"] = command
         term_type = process.get_terminal_type() or "xterm"
         kwargs["term_type"] = term_type
         term_size = process.get_terminal_size()
         if term_size and term_size[0]:
             kwargs["term_size"] = term_size
         backend = await conn.create_process(**kwargs)
-        try:
-            await asyncio.gather(
+
+        # Either side dying must tear down the other: wait FIRST_COMPLETED,
+        # then cancel remaining pumps and close both ends.
+        pumps = [
+            asyncio.create_task(
                 self._pump_client_to_backend(session, backend),
+                name=f"ssh-pump-n2s-{session.session_id[:16]}",
+            ),
+            asyncio.create_task(
                 self._pump_backend_to_client(backend.stdout, process.stdout),
+                name=f"ssh-pump-s2n-out-{session.session_id[:16]}",
+            ),
+            asyncio.create_task(
                 self._pump_backend_to_client(backend.stderr, process.stderr),
+                name=f"ssh-pump-s2n-err-{session.session_id[:16]}",
+            ),
+        ]
+        try:
+            done, pending = await asyncio.wait(
+                pumps, return_when=asyncio.FIRST_COMPLETED
             )
-            await backend.wait_closed()
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            for task in done:
+                exc = task.exception() if not task.cancelled() else None
+                if exc is not None:
+                    logger.debug(
+                        "[YuanrongSshRelay] pump ended with error: %s",
+                        exc,
+                        exc_info=exc,
+                    )
+        except asyncio.CancelledError:
+            for task in pumps:
+                task.cancel()
+            await asyncio.gather(*pumps, return_exceptions=True)
+            raise
         finally:
-            backend.close()
+            await self._close_backend(backend)
+            self._exit_northbound(process, backend.exit_status)
+
         exit_status = backend.exit_status
         return int(exit_status) if exit_status is not None else 0
+
+    @staticmethod
+    async def _close_backend(backend: Any) -> None:
+        try:
+            backend.close()
+        except Exception:  # noqa: BLE001
+            logger.debug("[YuanrongSshRelay] backend.close failed", exc_info=True)
+        try:
+            await backend.wait_closed()
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "[YuanrongSshRelay] backend.wait_closed failed", exc_info=True
+            )
+
+    @staticmethod
+    def _exit_northbound(process: Any, exit_status: Any) -> None:
+        """Force-close the northbound SSH process when the southbound ends."""
+        if process is None:
+            return
+        code = int(exit_status) if exit_status is not None else 0
+        try:
+            process.exit(code)
+        except Exception:  # noqa: BLE001 - channel may already be closed
+            logger.debug(
+                "[YuanrongSshRelay] northbound process.exit failed",
+                exc_info=True,
+            )
 
     @staticmethod
     async def _pump_client_to_backend(session: Any, backend: Any) -> None:
@@ -281,7 +463,10 @@ class YuanrongSshRelay:
                     )
                 continue
             except asyncssh.BreakReceived:
-                backend.stdin.write(b"\x03")
+                try:
+                    backend.stdin.write(b"\x03")
+                except (asyncssh.ConnectionLost, ConnectionError):
+                    break
                 continue
             except (asyncssh.ConnectionLost, ConnectionError):
                 break
@@ -293,8 +478,8 @@ class YuanrongSshRelay:
                         "[YuanrongSshRelay] write_eof failed", exc_info=True
                     )
                 break
-            backend.stdin.write(data)
             try:
+                backend.stdin.write(data)
                 await backend.stdin.drain()
             except (asyncssh.ConnectionLost, ConnectionError):
                 break

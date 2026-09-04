@@ -11,6 +11,9 @@ import json
 import re
 from typing import Any
 
+from jiuwenswarm.agents.harness.code.prompt.plan_approval import (
+    build_plan_approval_actions,
+)
 from jiuwenswarm.agents.harness.code.rails.code_plan_approval_interrupt_rail import (
     build_plan_approval_options_from_message,
     extract_plan_approval_content,
@@ -86,6 +89,7 @@ def build_permission_rail(
     from openjiuwen.harness.security.models import PermissionConfirmResponse
 
     from jiuwenswarm.agents.harness.common.rails.permissions.tool_permission_context import (
+        SKILLS_REBUILD_SILENT,
         TOOL_PERMISSION_CHANNEL_ID,
     )
     from jiuwenswarm.common.config import get_config
@@ -147,8 +151,9 @@ def build_permission_rail(
             Instead of replacing the entire ``permissions`` section with the
             in-memory snapshot (which may contain stale entries that were
             already deleted from config.yaml), we first re-read the current
-            on-disk permissions, then merge only the *approval_overrides*
-            and *external_directory* deltas from ``permissions`` into it.
+            on-disk permissions, then merge only the *approval_overrides*、
+            *file_guard*（及过渡期 *external_directory*）deltas from
+            ``permissions`` into it.
             This prevents re-creating tool-level entries (e.g. ``bash: ask``)
             that the user has already removed via the webui.
             """
@@ -164,13 +169,17 @@ def build_permission_rail(
                 if not isinstance(on_disk_perms, dict):
                     on_disk_perms = {}
 
-                # Only overlay approval_overrides & external_directory;
+                # Overlay path-related deltas + approval_overrides;
                 # keep on-disk tools/defaults/rules to avoid restoring
                 # entries the user already deleted via webui.
                 merged = dict(on_disk_perms)
                 overrides_new = permissions.get("approval_overrides")
                 if overrides_new is not None:
                     merged["approval_overrides"] = overrides_new
+                # 路径信任写 file_guard.paths（agent-core §5.5.6）；过渡期仍接受旧 external_directory
+                fg_new = permissions.get("file_guard")
+                if fg_new is not None:
+                    merged["file_guard"] = fg_new
                 ext_dir_new = permissions.get("external_directory")
                 if ext_dir_new is not None:
                     merged["external_directory"] = ext_dir_new
@@ -199,6 +208,20 @@ def build_permission_rail(
         async def _request_permission_confirmation(
             req: PermissionConfirmationRequest,
         ) -> PermissionConfirmResponse | str | None:
+            # skills.rebuild 静默 follow-up 使用临时 session，无法弹 UI 审批；
+            # 若返回 "interrupt"，Agent 会停在 bash/write 上却仍被当成重建成功。
+            if SKILLS_REBUILD_SILENT.get():
+                tool_name = getattr(getattr(req, "tool_call", None), "name", "") or ""
+                logger.info(
+                    "[InterruptHelpers] auto-approve permission for silent skills.rebuild tool=%s",
+                    tool_name,
+                )
+                return PermissionConfirmResponse(
+                    approved=True,
+                    auto_confirm=False,
+                    feedback="",
+                )
+
             channel = TOOL_PERMISSION_CHANNEL_ID.get() or "web"
             if channel != "acp":
                 return "interrupt"
@@ -280,6 +303,9 @@ def build_permission_rail(
                 )
             return None
 
+        def _is_silent_skills_rebuild_session() -> bool:
+            return bool(SKILLS_REBUILD_SILENT.get())
+
         async def _permission_scene_hook(
             inp: PermissionSceneHookInput,
         ) -> tuple[str, ...] | None:
@@ -288,6 +314,10 @@ def build_permission_rail(
                 check_avatar_permission,
                 _resolve_owner_scope_level,
             )
+
+            # skills.rebuild 静默 Agent 无法弹权限卡片；在 tiered 判定前直接放行。
+            if _is_silent_skills_rebuild_session():
+                return ("approve",)
 
             perm_ctx = TOOL_PERMISSION_CONTEXT.get()
 
@@ -343,6 +373,14 @@ def build_permission_rail(
             return ("reject", f"[PERMISSION_DENIED] 该工具未被授权 (owner_scopes: {owner_level})")
 
         def _get_permissions_snapshot():
+            # skills.rebuild 静默路径：返回 full_access，避免 ASK 中断。
+            if SKILLS_REBUILD_SILENT.get():
+                return {
+                    "enabled": True,
+                    "mode": "full_access",
+                    "defaults": {"*": "allow"},
+                    "file_guard": {"enabled": False},
+                }
             cfg = get_config()
             return cfg.get("permissions") if isinstance(cfg, dict) else {}
 
@@ -397,8 +435,14 @@ def _normalize_tool_args(raw: Any) -> dict | None:
 
 def _is_ask_user_interrupt_value(value_obj: Any) -> bool:
     tool_name = str(_read_value_field(value_obj, "tool_name", "") or "").strip()
-    if tool_name == "ask_user":
-        return True
+    # Prefer the explicit tool identity whenever it is available.  Many tools
+    # (for example memory_search) have a plain ``query`` argument, so treating
+    # every query-only interrupt as ask_user misroutes permission responses.
+    if tool_name:
+        return tool_name == "ask_user"
+
+    # Legacy ask_user interrupt payloads may not carry tool_name.  Keep the
+    # structural fallbacks below only for those identity-less payloads.
     if hasattr(value_obj, "payload_schema") and hasattr(value_obj, "questions"):
         return True
     if isinstance(value_obj, dict) and "payload_schema" in value_obj and "questions" in value_obj:
@@ -581,9 +625,13 @@ def convert_interactions_to_ask_user_question(state_outputs: list) -> dict | Non
             and is_plan_approval_message(message)
         ):
             plan_content, plan_language = extract_plan_approval_content(message)
+            resolved_plan_language = "en" if plan_language == "en" else "cn"
             payload["plan_content"] = plan_content
-            payload["plan_language"] = "en" if plan_language == "en" else "cn"
+            payload["plan_language"] = resolved_plan_language
             payload["plan_approval_kind"] = "plan_approval"
+            # Web 用的动作说明。TUI 忽略该字段，继续使用 questions[].options 的
+            # approve / reject，因此两端行为互不影响。
+            payload["plan_actions"] = build_plan_approval_actions(resolved_plan_language)
         plan_path = str(question_data.get("plan_path") or "").strip()
         plan_slug = str(question_data.get("plan_slug") or "").strip()
         if plan_path:
@@ -667,6 +715,9 @@ def _build_multi_questions(questions_data: list) -> list:
     questions = []
     for q in questions_data:
         raw_options = q.get("options", [])
+        # Non-array options (e.g. "a,b") must not be iterated as characters (#2331).
+        if not isinstance(raw_options, list):
+            raw_options = []
         if raw_options:
             options = [_normalize_question_option(opt) for opt in raw_options if isinstance(opt, dict)]
             options.append({"label": "Other", "description": "Custom input"})

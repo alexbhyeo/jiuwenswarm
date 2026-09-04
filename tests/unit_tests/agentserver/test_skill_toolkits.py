@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from jiuwenswarm.server.runtime.skill.skill_manager import SkillManager
 from jiuwenswarm.agents.harness.common.tools.skill_toolkits import SkillToolkit
@@ -11,7 +10,38 @@ from jiuwenswarm.agents.harness.common.recommendation.situation_report import (
 )
 
 
-def test_uninstall_skill_removes_local_skill_without_plugin_record(tmp_path):
+def test_agent_default_search_never_queries_skillnet(tmp_path, monkeypatch):
+    manager = SkillManager(workspace_dir=str(tmp_path / "workspace"))
+    toolkit = SkillToolkit(manager)
+    queried: list[str] = []
+
+    monkeypatch.setattr(toolkit, "_search_builtin_skills", lambda *_args: [])
+
+    async def _search_clawhub(_params):
+        queried.append("clawhub")
+        return {"success": True, "skills": []}
+
+    async def _search_team_skills_hub(_params):
+        queried.append("teamskillshub")
+        return {"success": True, "skills": []}
+
+    async def _unexpected_skillnet_search(_params):
+        raise AssertionError("agent must not query SkillNet")
+
+    monkeypatch.setattr(manager, "handle_skills_clawhub_search", _search_clawhub)
+    monkeypatch.setattr(manager, "handle_skills_team_skills_hub_search", _search_team_skills_hub)
+    monkeypatch.setattr(manager, "handle_skills_skillnet_search", _unexpected_skillnet_search)
+
+    result = asyncio.run(toolkit.search_skill("pdf"))
+
+    assert result["success"] is True
+    assert result["source"] == "auto"
+    assert queried == ["clawhub", "teamskillshub"]
+
+
+def test_uninstall_skill_removes_local_skill_without_plugin_record(
+    tmp_path, allow_macos_pytest_temp_sources
+):
     manager = SkillManager(workspace_dir=str(tmp_path / "workspace"))
     toolkit = SkillToolkit(manager)
 
@@ -33,6 +63,116 @@ def test_uninstall_skill_removes_local_skill_without_plugin_record(tmp_path):
     assert result["removed"] is True
     assert not (tmp_path / "workspace" / "skills" / "local-only-skill").exists()
     assert manager.get_local_skills() == []
+
+
+def test_uninstall_skill_matches_display_name_case_insensitively(tmp_path, monkeypatch):
+    """UI/Agent 可能传入 Weather，内部规范名是 weather，应能成功卸载。"""
+    import io
+    import zipfile
+
+    manager = SkillManager(workspace_dir=str(tmp_path / "workspace"))
+    toolkit = SkillToolkit(manager)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "weather/SKILL.md",
+            "---\nname: weather\ndescription: Get weather\nversion: 1.0.0\n---\nbody\n",
+        )
+    zip_content = buf.getvalue()
+
+    class _Resp:
+        status_code = 200
+        content = zip_content
+
+        def raise_for_status(self):
+            return None
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, *, params, headers):
+            return _Resp()
+
+    monkeypatch.setattr(
+        "jiuwenswarm.server.runtime.skill.skill_manager.httpx.AsyncClient",
+        lambda timeout: _Client(),
+    )
+    asyncio.run(manager.handle_skills_clawhub_set_token({"token": "t"}))
+    installed = asyncio.run(
+        manager.handle_skills_clawhub_download(
+            {"slug": "weather", "owner_handle": "steipete", "display_name": "Weather"}
+        )
+    )
+    assert installed["success"] is True
+    assert installed["skill"]["name"] == "weather"
+    assert installed["skill"]["display_name"] == "Weather"
+
+    # 用展示名大小写卸载
+    result = asyncio.run(toolkit.uninstall_skill("Weather"))
+    assert result["success"] is True
+    assert result["removed"] is True
+    assert result["name"] == "weather"
+    assert not (tmp_path / "workspace" / "skills" / "weather").exists()
+
+
+def test_find_installed_by_target_clawhub_owner_slug_interops_with_plain_slug(tmp_path):
+    """新 origin=clawhub:owner/slug 时，纯 slug / 旧 origin 都应判已安装。"""
+    manager = SkillManager(workspace_dir=str(tmp_path / "workspace"))
+    toolkit = SkillToolkit(manager)
+    manager._add_local_skill(
+        {
+            "name": "weather",
+            "display_name": "Weather",
+            "origin": "clawhub:steipete/weather",
+            "source": "clawhub",
+        }
+    )
+
+    by_owner = toolkit._find_installed_by_target("steipete/weather", "clawhub")
+    by_slug = toolkit._find_installed_by_target("weather", "clawhub")
+    assert by_owner is not None and by_owner["name"] == "weather"
+    assert by_slug is not None and by_slug["name"] == "weather"
+
+    # 旧版 origin 也应被 owner/slug 与纯 slug 命中
+    manager._add_local_skill(
+        {
+            "name": "legacy-skill",
+            "origin": "clawhub:legacy-skill",
+            "source": "clawhub",
+        }
+    )
+    assert toolkit._find_installed_by_target("alice/legacy-skill", "clawhub") is not None
+    assert toolkit._find_installed_by_target("legacy-skill", "clawhub") is not None
+
+
+def test_install_skill_clawhub_already_installed_when_origin_has_owner(tmp_path, monkeypatch):
+    """Agent 用纯 slug 再装时，应对已有 clawhub:owner/slug 返回 already_installed。"""
+    manager = SkillManager(workspace_dir=str(tmp_path / "workspace"))
+    toolkit = SkillToolkit(manager)
+    manager._add_local_skill(
+        {
+            "name": "weather",
+            "display_name": "Weather",
+            "origin": "clawhub:steipete/weather",
+            "source": "clawhub",
+        }
+    )
+    (tmp_path / "workspace" / "skills" / "weather").mkdir(parents=True)
+
+    async def _should_not_download(_params):
+        raise AssertionError("should skip download when already installed")
+
+    monkeypatch.setattr(manager, "handle_skills_clawhub_download", _should_not_download)
+
+    result = asyncio.run(toolkit.install_skill("weather", source="clawhub"))
+    assert result["success"] is True
+    assert result["already_installed"] is True
+    assert result["name"] == "weather"
 
 
 def test_search_builtin_skills_matches_name_and_description(tmp_path):

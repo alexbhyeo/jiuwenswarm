@@ -10,6 +10,11 @@ Multi-instance management commands:
 - ``--stop <name>``: Stop a running instance
 - ``--restart <name>``: Restart an instance
 - ``--name <name>``: Start a named instance with mode
+
+The ``debug`` mode is a developer shortcut handled by
+``jiuwenswarm.debug_launcher``: it runs ``npm install`` + ``npm run build`` +
+``uv sync``, then starts the services detached with their output redirected to
+``logs/swarm-<timestamp>.log``. ``jiuwenswarm-stop`` terminates that service.
 """
 
 from __future__ import annotations
@@ -419,9 +424,20 @@ def _run_instance_with_pid(commands: list[tuple[str, list[str], Path]],
     processes: dict[str, subprocess.Popen[bytes]] = {}
     try:
         for cmd_name, cmd_args, cwd in commands:
-            processes[cmd_name] = _start_process(cmd_name, cmd_args, cwd)
+            processes[cmd_name] = _start_process(
+                cmd_name,
+                cmd_args,
+                cwd,
+                ports=config.ports,
+            )
 
-        write_pid_file(config, os.getpid(), time.time())
+        launcher_create_time = _launcher_create_time()
+        write_pid_file(
+            config,
+            os.getpid(),
+            launcher_create_time,
+            _instance_process_metadata(processes, launcher_create_time),
+        )
         logging.info(f"[start_services] Instance '{config.name}' started")
 
         _wait_for_services_ready(config.ports, processes)
@@ -439,6 +455,71 @@ def _run_instance_with_pid(commands: list[tuple[str, list[str], Path]],
         return 130
     finally:
         _terminate_processes(processes)
+
+
+def _launcher_create_time() -> float:
+    """Return the launcher process birth time for PID-reuse validation."""
+    import psutil
+
+    return psutil.Process(os.getpid()).create_time()
+
+
+def _instance_process_metadata(
+    processes: dict[str, subprocess.Popen[bytes]], launcher_create_time: float
+) -> dict[str, object]:
+    """Build PID-file ownership evidence for an externally ``setsid`` launcher."""
+    import psutil
+
+    launcher_pid = os.getpid()
+    getpgid = getattr(os, "getpgid", None)
+    getsid = getattr(os, "getsid", None)
+    if getpgid is None or getsid is None:
+        # Windows has no POSIX process-group/session APIs.  The schema v2
+        # record remains useful there for PID birth-time validation, while
+        # stop uses the Windows taskkill process-tree path.
+        pgid = sid = None
+        dedicated_session = False
+    else:
+        try:
+            pgid = getpgid(launcher_pid)
+            sid = getsid(launcher_pid)
+            dedicated_session = pgid == launcher_pid and sid == launcher_pid
+        except OSError:
+            pgid = sid = None
+            dedicated_session = False
+
+    witnesses: list[dict[str, object]] = []
+    for name, process in processes.items():
+        try:
+            process_info = psutil.Process(process.pid)
+            cmdline = process_info.cmdline()
+            dotenv_index = cmdline.index("--dotenv")
+            dotenv_path = os.path.realpath(cmdline[dotenv_index + 1])
+            module_index = cmdline.index("-m")
+            module = cmdline[module_index + 1]
+            witnesses.append(
+                {
+                    "name": name,
+                    "pid": process.pid,
+                    "create_time": process_info.create_time(),
+                    "module": module,
+                    "dotenv": dotenv_path,
+                }
+            )
+        except (IndexError, ValueError, psutil.Error):
+            # A child that exits before its identity can be captured is not a
+            # safe witness.  The supervisor's normal failure handling remains
+            # responsible for terminating the rest of the launch.
+            continue
+
+    return {
+        "schema_version": 2,
+        "launcher": {"pid": launcher_pid, "create_time": launcher_create_time},
+        "pgid": pgid,
+        "sid": sid,
+        "dedicated_session": dedicated_session,
+        "witnesses": witnesses,
+    }
 
 
 def _build_commands(mode: str, dotenv_path: Path | None = None) -> list[tuple[str, list[str], Path]]:
@@ -481,12 +562,36 @@ def _build_commands(mode: str, dotenv_path: Path | None = None) -> list[tuple[st
     return commands
 
 
-def _start_process(name: str, cmd: list[str], cwd: Path) -> subprocess.Popen[bytes]:
+def _start_process(
+    name: str,
+    cmd: list[str],
+    cwd: Path,
+    *,
+    ports: dict[str, int] | None = None,
+) -> subprocess.Popen[bytes]:
     """Start a single subprocess."""
     import json
+    from jiuwenswarm.dotenv_early import CLI_PORTS_ENV_FLAG
+
     logging.info(f"[start_services] starting {name}: {' '.join(cmd)} (cwd={cwd})")
     env = os.environ.copy()
     env["JIUWENSWARM_START_CMD"] = json.dumps(sys.argv[:])
+    if ports:
+        # Inject the resolved port group and mark the child so
+        # load_dotenv_runtime(override=True) cannot clobber it with a stale
+        # ~/.jiuwenswarm/config/.env residue (issue #2749: banner 19001 vs
+        # Gateway bind 20001).
+        env.update(
+            {
+                CLI_PORTS_ENV_FLAG: "1",
+                "AGENT_SERVER_PORT": str(ports["agent_server"]),
+                "AGENT_PORT": str(ports["agent_server"]),
+                "WEB_PORT": str(ports["web"]),
+                "GATEWAY_PORT": str(ports["gateway"]),
+                "FRONTEND_PORT": str(ports["frontend"]),
+            }
+        )
+        env.pop("AGENT_SERVER_URL", None)
     return subprocess.Popen(cmd, cwd=str(cwd), env=env)
 
 
@@ -666,7 +771,10 @@ def _wait_for_services_ready(
         _print_port_banner(targets, ready)
 
 
-def _run_processes(commands: list[tuple[str, list[str], Path]]) -> int:
+def _run_processes(
+    commands: list[tuple[str, list[str], Path]],
+    ports: dict[str, int],
+) -> int:
     """Run processes and wait for them.
 
     Args:
@@ -678,9 +786,9 @@ def _run_processes(commands: list[tuple[str, list[str], Path]]) -> int:
     processes: dict[str, subprocess.Popen[bytes]] = {}
     try:
         for name, cmd, cwd in commands:
-            processes[name] = _start_process(name, cmd, cwd)
+            processes[name] = _start_process(name, cmd, cwd, ports=ports)
 
-        _wait_for_services_ready(_resolve_runtime_ports(), processes)
+        _wait_for_services_ready(ports, processes)
 
         while True:
             for name, proc in processes.items():
@@ -728,7 +836,7 @@ def _run(mode: str) -> int:
     if not commands:
         logging.info(f"[start_services] no commands to run for mode: {mode}")
         return 2
-    return _run_processes(commands)
+    return _run_processes(commands, cmd.config.ports)
 
 
 def _action_list() -> int:
@@ -791,8 +899,8 @@ def _action_stop(name: str) -> int:
     if running is None:
         return 1
     if not running:
-        logging.info(f"[start_services] Instance '{name}' is not running.")
-        return 0
+        logging.info(f"[start_services] Cleaning up stopped instance '{name}'.")
+        return 0 if stop_instance_process(cmd.config, timeout=10.0) else 1
 
     # Execute stop
     return do_stop_instance(cmd)
@@ -816,14 +924,17 @@ def _action_restart(name: str, mode: str = "all") -> int:
     if error is not None:
         return error
 
-    # First stop (only if running)
+    # Stop even when the launcher has exited: a setsid-launched service tree
+    # can still own the instance ports after its leader is gone.
     if cmd.check_running():
         stop_result = do_stop_instance(cmd)
-        if stop_result != 0:
-            logging.info("[start_services] Restart aborted: stop failed.")
-            return stop_result
-        # Wait for process to fully exit
-        time.sleep(1)
+    else:
+        stop_result = 0 if stop_instance_process(cmd.config, timeout=10.0) else 1
+    if stop_result != 0:
+        logging.info("[start_services] Restart aborted: stop failed.")
+        return stop_result
+    # Wait for process to fully exit
+    time.sleep(1)
 
     # Then start
     if cmd.is_default:
@@ -899,8 +1010,14 @@ def _parse_args() -> argparse.Namespace:
         "mode",
         nargs="?",
         default="all",
-        choices=["all", "web", "app", "dev"],
-        help="Start mode: all (default), web, app, or dev.",
+        choices=["all", "web", "app", "dev", "debug"],
+        help=(
+            "Start mode: all (default), web, app, dev, or debug. "
+            "debug runs npm install + npm run build + uv sync, then starts the "
+            "services in the background with output redirected to a timestamped "
+            "logs/swarm-<timestamp>.log; stop it with 'jiuwenswarm-stop', and "
+            "pass --skip-build to reuse the existing frontend build."
+        ),
     )
 
     # Instance specification parameter
@@ -908,6 +1025,16 @@ def _parse_args() -> argparse.Namespace:
         "--name",
         metavar="<name>",
         help="Start a named instance from instances.yaml.",
+    )
+
+    # debug-mode only: reuse the existing frontend build
+    parser.add_argument(
+        "--skip-build",
+        action="store_true",
+        help=(
+            "debug mode only: skip 'npm install' + 'npm run build' and reuse the "
+            "existing frontend/dist. Use when only Python code changed."
+        ),
     )
 
     # Management function parameters (mutually exclusive group)
@@ -946,6 +1073,22 @@ def _validate_args(args: argparse.Namespace) -> int | None:
         logging.info(f"[start_services] ERROR: Invalid mode '{args.mode}' for --restart")
         return 1
 
+    # debug mode always drives the default instance: it rebuilds the frontend
+    # and syncs the repository, neither of which is per-instance state.
+    if args.mode == "debug" and args.name:
+        logging.info("[start_services] ERROR: 'debug' mode cannot be combined with --name")
+        logging.info(
+            "[start_services] Run 'jiuwenswarm-start debug' for the default instance, "
+            f"or 'jiuwenswarm-start --name {args.name}' to start the named one."
+        )
+        return 1
+
+    # --skip-build only means anything for the mode that builds the frontend.
+    if args.skip_build and args.mode != "debug":
+        logging.info("[start_services] ERROR: --skip-build only applies to 'debug' mode")
+        logging.info("[start_services] Run 'jiuwenswarm-start debug --skip-build'.")
+        return 1
+
     return None
 
 
@@ -978,6 +1121,11 @@ def _dispatch_action(args: argparse.Namespace) -> int:
     # --restart <name>: restart specific instance
     if args.restart:
         return _action_restart(args.restart, args.mode)
+
+    # debug: rebuild frontend + sync deps, then run the services in background
+    if args.mode == "debug":
+        from jiuwenswarm.debug_launcher import run_debug
+        return run_debug(skip_build=args.skip_build)
 
     # --name <name>: start named instance
     if args.name:

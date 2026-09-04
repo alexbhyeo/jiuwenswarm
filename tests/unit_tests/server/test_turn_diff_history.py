@@ -15,8 +15,12 @@ from jiuwenswarm.server.runtime.session.git_diff_status import (
     DiffFileEntry,
     DiffStatusService,
 )
-from jiuwenswarm.server.runtime.session.project_git import GitError, GitOperationError
-from jiuwenswarm.server.utils.diff_service import DiffHistoryExpiredError, DiffService
+from jiuwenswarm.server.runtime.session.project_git import GitError
+from jiuwenswarm.server.utils.diff_service import (
+    MAX_DIFF_SIZE_BYTES,
+    DiffHistoryExpiredError,
+    DiffService,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -143,6 +147,140 @@ def test_get_turn_diff_finds_second_turn():
     assert turn["turnIndex"] == 2
     assert "/proj/file_b.py" in turn["files"]
     assert turn["request_id"] == "req-002"
+
+
+def _patch_turn_diff(file_ops: dict) -> tuple:
+    ph = patch.object(DiffService, "_read_history", return_value=_HISTORY)
+    pa = patch.object(DiffService, "_read_agent_history", return_value=file_ops)
+    pl = patch.object(DiffService, "_load_change_sets", return_value=[])
+    ps = patch.object(DiffService, "_save_change_sets", return_value=None)
+    return ph, pa, pl, ps
+
+
+def test_get_turn_diff_large_file_marked_large():
+    """超过 1MB 的 turn 改动标记 isLargeFile、不返回内容（与工作区 diff 对齐）。"""
+    big_content = "".join(f"line {i}: " + "x" * 250 + "\n" for i in range(5000))
+    assert len(big_content.encode("utf-8")) > MAX_DIFF_SIZE_BYTES
+    file_ops = {
+        "/proj/big.py": [{
+            "action": "write",
+            "timestamp": _ts(1784542850.0),
+            "old_content": None,
+            "new_content": big_content,
+        }],
+    }
+    ph, pa, pl, ps = _patch_turn_diff(file_ops)
+    with ph, pa, pl, ps:
+        turn = DiffService().get_turn_diff("sess-1", turn_index=1, project_dir="/proj")
+    assert turn is not None
+    info = turn["files"]["/proj/big.py"]
+    assert info["isLargeFile"] is True
+    assert info["hunks"] == []
+    assert info["isTruncated"] is False
+    assert info["linesAdded"] == 5000
+    assert info["linesRemoved"] == 0
+
+
+def test_get_turn_diff_large_rewrite_marked_large():
+    """实际 diff 超过 1MB 的大文件改写标记为大文件预览。"""
+    old_content = "".join(f"old {i}: " + "x" * 250 + "\n" for i in range(5000))
+    new_content = "".join(f"new {i}: " + "y" * 250 + "\n" for i in range(5000))
+    assert len(old_content) > MAX_DIFF_SIZE_BYTES
+    assert len(new_content) > MAX_DIFF_SIZE_BYTES
+    file_ops = {
+        "/proj/rewrite.py": [{
+            "action": "write",
+            "timestamp": _ts(1784542850.0),
+            "old_content": old_content,
+            "new_content": new_content,
+        }],
+    }
+    ph, pa, pl, ps = _patch_turn_diff(file_ops)
+    with ph, pa, pl, ps:
+        turn = DiffService().get_turn_diff("sess-1", turn_index=1, project_dir="/proj")
+    assert turn is not None
+    info = turn["files"]["/proj/rewrite.py"]
+    assert info["isLargeFile"] is True
+    assert info["hunks"] == []
+    assert info["linesAdded"] == 5000
+    assert info["linesRemoved"] == 5000
+
+
+def test_get_turn_diff_large_file_small_edit_shows_actual_diff():
+    """大文件仅修改一行时，按实际 patch 大小返回预览与行数统计。"""
+    old_lines = [f"line {i}: " + "x" * 250 + "\n" for i in range(5000)]
+    new_lines = old_lines.copy()
+    new_lines[2500] = "line 2500: " + "y" * 250 + "\n"
+    old_content = "".join(old_lines)
+    new_content = "".join(new_lines)
+    assert len(old_content.encode("utf-8")) > MAX_DIFF_SIZE_BYTES
+
+    file_ops = {
+        "/proj/small-edit.py": [{
+            "action": "write",
+            "timestamp": _ts(1784542850.0),
+            "old_content": old_content,
+            "new_content": new_content,
+        }],
+    }
+    ph, pa, pl, ps = _patch_turn_diff(file_ops)
+    with ph, pa, pl, ps:
+        turn = DiffService().get_turn_diff("sess-1", turn_index=1, project_dir="/proj")
+
+    assert turn is not None
+    info = turn["files"]["/proj/small-edit.py"]
+    assert info["isLargeFile"] is False
+    assert info["linesAdded"] == 1
+    assert info["linesRemoved"] == 1
+    assert [line for hunk in info["hunks"] for line in hunk["lines"] if line.startswith("+")] == [
+        "+line 2500: " + "y" * 250
+    ]
+
+
+def test_get_turn_diff_file_under_1mb_shows_full():
+    """1MB 以内的 turn 改动整段返回，不做 400 行截断。"""
+    content = "".join(f"line {i}: " + "y" * 50 + "\n" for i in range(500))
+    assert len(content.encode("utf-8")) < MAX_DIFF_SIZE_BYTES
+    file_ops = {
+        "/proj/small.py": [{
+            "action": "write",
+            "timestamp": _ts(1784542850.0),
+            "old_content": None,
+            "new_content": content,
+        }],
+    }
+    ph, pa, pl, ps = _patch_turn_diff(file_ops)
+    with ph, pa, pl, ps:
+        turn = DiffService().get_turn_diff("sess-1", turn_index=1, project_dir="/proj")
+    assert turn is not None
+    info = turn["files"]["/proj/small.py"]
+    assert info["isLargeFile"] is False
+    assert info["isTruncated"] is False
+    assert len(info["hunks"]) == 1
+    assert len(info["hunks"][0]["lines"]) == 500
+    assert info["linesAdded"] == 500
+
+
+def test_legacy_snapshot_normalizes_oversized_preview():
+    """旧快照也按实际 diff 内容大小限制预览。"""
+    snapshot = {
+        "turnIndex": 1,
+        "files": {
+            "/proj/legacy.py": {
+                "isLargeFile": False,
+                "linesAdded": 1,
+                "linesRemoved": 0,
+                "hunks": [{"lines": ["+" + "x" * MAX_DIFF_SIZE_BYTES]}],
+            }
+        },
+    }
+
+    DiffService._normalize_snapshot_diff_sizes(snapshot)
+
+    entry = snapshot["files"]["/proj/legacy.py"]
+    assert entry["isLargeFile"] is True
+    assert entry["hunks"] == []
+    assert entry["linesAdded"] == 1
 
 
 def test_get_turn_diffs_reads_extra_history_roots(tmp_path, monkeypatch):
@@ -1040,6 +1178,37 @@ def test_get_session_extra_history_roots_adds_spawned_member_workspaces(tmp_path
     assert str(tmp_path / "independent" / "poet-song_workspace") in roots
 
 
+def test_get_session_extra_history_roots_discovers_sub_agent_workspaces(tmp_path):
+    """Single-agent mode (no team_name) should still find sub-agent dirs under workspace/sub_agents."""
+    sub_agents_dir = tmp_path / "workspace" / "sub_agents"
+    sub_agents_dir.mkdir(parents=True)
+    (sub_agents_dir / "sess-1_sub_general-purpose_abc").mkdir()
+    (sub_agents_dir / "sess-1_sub_general-purpose_def").mkdir()
+    (sub_agents_dir / "sess-other_sub_general-purpose_xyz").mkdir()
+    with (
+        patch(
+            "jiuwenswarm.server.runtime.session.session_metadata.get_session_metadata",
+            return_value={
+                "team_name": "",
+                "team_file_monitor_roots": None,
+            },
+        ),
+        patch(
+            "jiuwenswarm.common.utils.get_agent_workspace_dir",
+            return_value=tmp_path / "workspace",
+        ),
+    ):
+        from jiuwenswarm.server.runtime.session.git_diff_status import (
+            get_session_extra_history_roots,
+        )
+
+        roots = get_session_extra_history_roots("sess-1")
+
+    assert str(sub_agents_dir / "sess-1_sub_general-purpose_abc") in roots
+    assert str(sub_agents_dir / "sess-1_sub_general-purpose_def") in roots
+    assert str(sub_agents_dir / "sess-other_sub_general-purpose_xyz") not in roots
+
+
 def test_is_valid_file_ops_file_uses_suffix_match():
     """session_id 后缀匹配,避免子串误匹配其他 session 的 file_ops 文件。"""
     service = DiffService()
@@ -1059,6 +1228,24 @@ def test_is_valid_file_ops_file_uses_suffix_match():
     # require_session=False 且 session_id=None: 接受所有 file_ops 文件
     assert service._is_valid_file_ops_file("file_ops_agent.json", None)
     assert service._is_valid_file_ops_file("file_ops_agent.json", None, require_session=False)
+
+
+def test_is_valid_file_ops_file_matches_sub_agent_sessions():
+    """父 session_id 也应匹配子 agent 会话的 file_ops 文件(后缀 _sub_{type}_{suffix})。"""
+    service = DiffService()
+    parent = "sess_19fa7d326c9_87aa9a3ff27a"
+    sub_name = "file_ops_93eeae01a6bb439eb7e241a9c8d8d375_sess_19fa7d326c9_87aa9a3ff27a_sub_general-purpose_17a7bada.json"
+    assert service._is_valid_file_ops_file(sub_name, parent)
+    assert service._is_valid_file_ops_file(sub_name, parent, require_session=True)
+    exact_name = "file_ops_jiuwenswarm_sess_19fa7d326c9_87aa9a3ff27a.json"
+    assert service._is_valid_file_ops_file(exact_name, parent)
+    other_parent = "sess_other"
+    assert not service._is_valid_file_ops_file(sub_name, other_parent)
+    assert not service._is_valid_file_ops_file("file_ops_agent_sess_10.json", "sess_1")
+    spoofed = "file_ops_abc_sess-1_sub_def_sess-other.json"
+    assert service._is_valid_file_ops_file(spoofed, "sess-1")
+    empty_agent = "file_ops__sess-1_sub_general-purpose_abc.json"
+    assert not service._is_valid_file_ops_file(empty_agent, "sess-1")
 
 
 def test_multi_history_root_first_wins_for_duplicate_entries(tmp_path, monkeypatch):
@@ -1407,7 +1594,12 @@ def test_turn_diff_detail_can_omit_files():
     assert result["files"] == {}
 
 
-def test_turn_diff_detail_rejects_transient_git_state(monkeypatch):
+def test_turn_diff_detail_tolerates_transient_git_state(monkeypatch):
+    """transient 状态不应阻断历史轮次回放。
+
+    历史轮次基于 file_ops + change_set snapshot,不执行 git 命令。
+    transient 时用 project_dir 兜底 repo_context,历史预览仍可用。
+    """
     service = SimpleNamespace(
         status=lambda project: SimpleNamespace(
             error=None,
@@ -1423,11 +1615,82 @@ def test_turn_diff_detail_rejects_transient_git_state(monkeypatch):
     )
     ph, pa, pl, ps = _patch_diff_service()
     with ph, pa, pl, ps:
-        with pytest.raises(GitOperationError) as excinfo:
-            DiffStatusService.get_turn_diff_detail(
-                project=_PROJECT, session_id="sess-1", turn_index=1,
-            )
-    assert excinfo.value.git_error.code == "GIT_TRANSIENT_STATE"
+        result = DiffStatusService.get_turn_diff_detail(
+            project=_PROJECT, session_id="sess-1", turn_index=1,
+        )
+    # 应返回历史数据,而非抛 GIT_TRANSIENT_STATE
+    assert result is not None
+    assert result["turn_index"] == 1
+    # repo_root 用 project_dir 兜底(transient 时无法读 git)
+    assert result["repo_root"] == "/proj"
+    # 历史 turn 的文件应正常返回(路径相对 repo_root)
+    assert "file_a.py" in result["files"]
+
+
+def test_turn_diff_list_tolerates_transient_git_state(monkeypatch):
+    """transient 状态不应阻断历史轮次列表。
+
+    与 turn_diff_detail 同理:list 接口也基于 file_ops + snapshot,
+    transient 时用 project_dir 兜底。
+    """
+    service = SimpleNamespace(
+        status=lambda project: SimpleNamespace(
+            error=None,
+            repo_root="/proj",
+            branch="main",
+            head="abc123",
+            transient=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "jiuwenswarm.server.runtime.session.project_git.get_project_git_service",
+        lambda: service,
+    )
+    ph, pa, pl, ps = _patch_diff_service()
+    with ph, pa, pl, ps:
+        result = DiffStatusService.get_turn_diff_list(
+            project=_PROJECT, session_id="sess-1",
+        )
+    # 应返回历史轮次列表,而非抛 GIT_TRANSIENT_STATE
+    assert result["total"] >= 1
+    assert result["turns"]
+    # repo_root 用 project_dir 兜底
+    assert result["repo_root"] == "/proj"
+
+
+def test_turn_diff_detail_tolerates_git_command_failed(monkeypatch):
+    """非 transient 的 git 错误(如 command_failed)也不应阻断历史预览。
+
+    timeout/command_failed 与 file_ops 历史回放无关,应同样用 project_dir 兜底。
+    """
+    from jiuwenswarm.server.runtime.session.project_git import GitError
+    service = SimpleNamespace(
+        status=lambda project: SimpleNamespace(
+            error=GitError(
+                code="GIT_COMMAND_FAILED",
+                message="git command failed",
+                retryable=True,
+            ),
+            repo_root=None,
+            branch=None,
+            head=None,
+            transient=False,
+        ),
+    )
+    monkeypatch.setattr(
+        "jiuwenswarm.server.runtime.session.project_git.get_project_git_service",
+        lambda: service,
+    )
+    ph, pa, pl, ps = _patch_diff_service()
+    with ph, pa, pl, ps:
+        result = DiffStatusService.get_turn_diff_detail(
+            project=_PROJECT, session_id="sess-1", turn_index=1,
+        )
+    # 应返回历史数据,而非抛 GitOperationError
+    assert result is not None
+    assert result["turn_index"] == 1
+    # repo_root 用 project_dir 兜底
+    assert result["repo_root"] == "/proj"
 
 
 def test_get_turn_diff_change_set_orphan_snapshot_is_expired(monkeypatch):

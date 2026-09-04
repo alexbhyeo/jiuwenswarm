@@ -4,8 +4,12 @@ import react from '@vitejs/plugin-react'
 import svgr from 'vite-plugin-svgr'
 import { spawnSync } from 'child_process'
 import { createHash } from 'node:crypto'
+import { createHmac, timingSafeEqual } from 'node:crypto'
+import https from 'node:https'
+import type { ServerResponse } from 'http'
 import path from 'path'
 import fs from 'fs'
+import os from 'os'
 
 type ConfigWithLogger = { logger?: { error?: (msg: string, opts?: { error?: Error }) => void } }
 
@@ -148,7 +152,7 @@ function safeStringify(v: unknown): string {
 
 
 /**
- * file-api 使用的项目根目录，需与后端 get_root_dir() 一致，前端编辑的 HEARTBEAT.md 才会被心跳读到。
+ * file-api 使用的项目根目录，需与后端 get_root_dir() 一致。
  * 优先级：环境变量 > 已存在的用户工作区 ~/.jiuwenswarm > 仓库根。
  */
 function resolveProjectRootDir(): string {
@@ -216,7 +220,20 @@ function decodeFileContent(raw: Buffer, requestedEncoding: string): { content: s
   throw new Error('Unable to decode file with any known encoding')
 }
 
-const RAW_FILE_CONTENT_TYPES: Record<string, string> = {
+const DOWNLOAD_CONTENT_TYPES: Record<string, string> = {
+  '.md': 'text/markdown; charset=utf-8',
+  '.markdown': 'text/markdown; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.jsonl': 'application/x-ndjson; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.ts': 'text/plain; charset=utf-8',
+  '.tsx': 'text/plain; charset=utf-8',
+  '.py': 'text/plain; charset=utf-8',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -225,10 +242,82 @@ const RAW_FILE_CONTENT_TYPES: Record<string, string> = {
   '.svg': 'image/svg+xml',
   '.bmp': 'image/bmp',
   '.avif': 'image/avif',
+  '.pdf': 'application/pdf',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 }
 
-function rawFileContentType(filePath: string): string {
-  return RAW_FILE_CONTENT_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream'
+function downloadContentType(filePath: string): string {
+  return DOWNLOAD_CONTENT_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream'
+}
+
+function handleFileStreamError(res: ServerResponse, error: NodeJS.ErrnoException): void {
+  if (res.headersSent) {
+    res.destroy(error)
+    return
+  }
+
+  res.statusCode = error.code === 'EACCES' || error.code === 'EPERM' ? 403 : 500
+  res.removeHeader('content-length')
+  res.removeHeader('content-disposition')
+  res.removeHeader('accept-ranges')
+  res.removeHeader('content-range')
+  res.setHeader('content-type', 'application/json; charset=utf-8')
+  res.end(JSON.stringify({
+    error: res.statusCode === 403 ? 'file_access_denied' : 'file_read_failed',
+  }))
+}
+
+function resolveFileDownloadSecret(): string | null {
+  const envSecret = process.env.JIUWENSWARM_FILE_DOWNLOAD_SECRET
+  if (envSecret && envSecret.length >= 32) return envSecret
+
+  const workspace = process.env.JIUWENSWARM_WORKSPACE || path.join(process.env.HOME || process.env.USERPROFILE || '', '.jiuwenswarm')
+  const secretPath = path.join(workspace, 'config', '.file_download_secret')
+  try {
+    const secret = fs.readFileSync(secretPath, 'utf8').trim()
+    return secret.length >= 32 ? secret : null
+  } catch {
+    return null
+  }
+}
+
+function validateFileDownloadToken(token: string): { path: string } | null {
+  const parts = token.split('.')
+  if (parts.length !== 2) return null
+  const [payloadBase64, signature] = parts
+
+  const secret = resolveFileDownloadSecret()
+  if (!secret) return null
+  const expected = createHmac('sha256', secret).update(payloadBase64).digest('hex')
+  const actual = Buffer.from(signature, 'hex')
+  const expectedBuffer = Buffer.from(expected, 'hex')
+  if (actual.length !== expectedBuffer.length || !timingSafeEqual(actual, expectedBuffer)) return null
+
+  try {
+    const payload = JSON.parse(Buffer.from(payloadBase64, 'base64url').toString('utf8')) as Record<string, unknown>
+    // 普通 file download token：携带 path 字段
+    if (typeof payload.path === 'string' && payload.path && typeof payload.sid === 'string') {
+      return { path: payload.path }
+    }
+    // skill_content_image token：携带 name + relative_path，需解析为绝对路径
+    if (String(payload.purpose || '').trim() === 'skill_content_image') {
+      const name = String(payload.name || '').trim()
+      const relativePath = String(payload.relative_path || '').trim()
+      if (!name || !relativePath) return null
+      const rootDir = resolveProjectRootDir()
+      const skillDir = path.resolve(rootDir, 'agent', 'workspace', 'skills', name)
+      const fullPath = path.resolve(skillDir, relativePath)
+      // 安全检查：确保路径在 skills 目录下
+      const skillsRoot = path.resolve(rootDir, 'agent', 'workspace', 'skills')
+      const rel = path.relative(skillsRoot, fullPath)
+      if (rel.startsWith('..') || path.isAbsolute(rel)) return null
+      return { path: fullPath }
+    }
+    return null
+  } catch {
+    return null
+  }
 }
 
 /** WS proxy 中常见的、可安全忽略的 socket 错误码（跨平台） */
@@ -386,6 +475,94 @@ function devFileContentApi(): Plugin {
   return {
     name: 'dev-file-content-api',
     configureServer(server) {
+      // GitCode API 代理（手动实现，支持 GET/POST）
+      server.middlewares.use('/gitcode-api', (req, res) => {
+        const proxyPath = (req.url || '').replace(/^\/gitcode-api/, '');
+        const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer) => chunks.push(chunk));
+        req.on('end', () => {
+          const body = Buffer.concat(chunks);
+          const proxyReq = https.request({
+            method: req.method,
+            hostname: 'gitcode.com',
+            path: proxyPath,
+            headers: { ...req.headers, host: 'gitcode.com' },
+          }, (proxyRes) => {
+            res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
+            proxyRes.pipe(res);
+          });
+          proxyReq.on('error', (err: Error) => {
+            console.error('[vite] gitcode-api proxy error:', err.message);
+            res.writeHead(502, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+          });
+          if (body.length > 0) proxyReq.write(body);
+          proxyReq.end();
+        });
+      });
+
+      // GitHub OAuth token 兑换代理 → github.com（支持 GET/POST）
+      // 用于 POST /login/oauth/access_token（code → access_token）
+      server.middlewares.use('/github-oauth', (req, res) => {
+        const proxyPath = (req.url || '').replace(/^\/github-oauth/, '');
+        const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer) => chunks.push(chunk));
+        req.on('end', () => {
+          const body = Buffer.concat(chunks);
+          const proxyReq = https.request({
+            method: req.method,
+            hostname: 'github.com',
+            path: proxyPath,
+            headers: {
+              ...req.headers,
+              host: 'github.com',
+              accept: 'application/json',
+            },
+          }, (proxyRes) => {
+            res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
+            proxyRes.pipe(res);
+          });
+          proxyReq.on('error', (err: Error) => {
+            console.error('[vite] github-oauth proxy error:', err.message);
+            res.writeHead(502, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+          });
+          if (body.length > 0) proxyReq.write(body);
+          proxyReq.end();
+        });
+      });
+
+      // GitHub API 代理 → api.github.com（支持 GET/POST）
+      // 用于 GET /user（access_token → 用户信息）
+      server.middlewares.use('/github-api', (req, res) => {
+        const proxyPath = (req.url || '').replace(/^\/github-api/, '');
+        const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer) => chunks.push(chunk));
+        req.on('end', () => {
+          const body = Buffer.concat(chunks);
+          const proxyReq = https.request({
+            method: req.method,
+            hostname: 'api.github.com',
+            path: proxyPath,
+            headers: {
+              ...req.headers,
+              host: 'api.github.com',
+              accept: 'application/json',
+              'user-agent': 'jiuwenswarm-web',
+            },
+          }, (proxyRes) => {
+            res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
+            proxyRes.pipe(res);
+          });
+          proxyReq.on('error', (err: Error) => {
+            console.error('[vite] github-api proxy error:', err.message);
+            res.writeHead(502, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+          });
+          if (body.length > 0) proxyReq.write(body);
+          proxyReq.end();
+        });
+      });
       server.middlewares.use('/share-api/snapshot', (req, res) => {
         const writeJson = (statusCode: number, payload: unknown) => {
           res.statusCode = statusCode
@@ -650,6 +827,95 @@ function devFileContentApi(): Plugin {
         }
       })
 
+      server.middlewares.use('/file-api/download', (req, res) => {
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+          res.statusCode = 405
+          res.setHeader('content-type', 'application/json; charset=utf-8')
+          res.end(JSON.stringify({ error: 'method_not_allowed' }))
+          return
+        }
+
+        const url = new URL(req.url || '/file-api/download', 'http://localhost')
+        const token = url.searchParams.get('token') || ''
+        const payload = validateFileDownloadToken(token)
+        if (!payload) {
+          res.statusCode = 403
+          res.setHeader('content-type', 'application/json; charset=utf-8')
+          res.end(JSON.stringify({ error: 'invalid_or_expired_token' }))
+          return
+        }
+
+        let stat: fs.Stats
+        try {
+          stat = fs.statSync(payload.path)
+        } catch {
+          res.statusCode = 404
+          res.setHeader('content-type', 'application/json; charset=utf-8')
+          res.end(JSON.stringify({ error: 'file_not_found' }))
+          return
+        }
+        if (!stat.isFile()) {
+          res.statusCode = 404
+          res.setHeader('content-type', 'application/json; charset=utf-8')
+          res.end(JSON.stringify({ error: 'file_not_found' }))
+          return
+        }
+
+        const fileSize = stat.size
+        let start = 0
+        let end = Math.max(0, fileSize - 1)
+        let partial = false
+        const range = req.headers.range
+        if (range) {
+          if (!range.startsWith('bytes=') || range.includes(',') || fileSize === 0) {
+            res.statusCode = 416
+            res.setHeader('content-range', `bytes */${fileSize}`)
+            res.end()
+            return
+          }
+          const [startText, endText] = range.slice(6).split('-', 2)
+          try {
+            if (startText) {
+              start = Number(startText)
+              end = endText ? Number(endText) : end
+            } else {
+              const suffixLength = Number(endText)
+              if (!Number.isInteger(suffixLength) || suffixLength <= 0) throw new Error('invalid_suffix')
+              start = Math.max(0, fileSize - suffixLength)
+            }
+            if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || start >= fileSize || end < start) throw new Error('invalid_range')
+            end = Math.min(end, fileSize - 1)
+            partial = true
+          } catch {
+            res.statusCode = 416
+            res.setHeader('content-range', `bytes */${fileSize}`)
+            res.end()
+            return
+          }
+        }
+
+        const contentLength = fileSize === 0 ? 0 : end - start + 1
+        const inline = ['1', 'true'].includes((url.searchParams.get('inline') || '').toLowerCase())
+        const fileName = path.basename(payload.path)
+        res.statusCode = partial ? 206 : 200
+        res.setHeader('content-type', downloadContentType(payload.path))
+        res.setHeader('content-length', String(contentLength))
+        res.setHeader('accept-ranges', 'bytes')
+        res.setHeader('content-disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(fileName)}`)
+        res.setHeader('cache-control', 'no-store')
+        if (partial) res.setHeader('content-range', `bytes ${start}-${end}/${fileSize}`)
+        if (req.method === 'HEAD') {
+          res.end()
+          return
+        }
+        const fileStream = fs.createReadStream(payload.path, fileSize === 0 ? undefined : { start, end })
+        fileStream.once('error', (error) => {
+          server.config.logger.error(`[file-api] Failed to read ${payload.path}: ${(error as Error).message}`)
+          handleFileStreamError(res, error)
+        })
+        fileStream.pipe(res)
+      })
+
       server.middlewares.use('/file-api/raw-file', (req, res) => {
         if (req.method !== 'GET' && req.method !== 'HEAD') {
           res.statusCode = 405
@@ -683,18 +949,133 @@ function devFileContentApi(): Plugin {
           }
 
           res.statusCode = 200
-          res.setHeader('content-type', rawFileContentType(fullPath))
+          res.setHeader('content-type', downloadContentType(fullPath))
           res.setHeader('cache-control', 'no-store')
           if (req.method === 'HEAD') {
             res.end()
             return
           }
-          fs.createReadStream(fullPath).pipe(res)
+          const fileStream = fs.createReadStream(fullPath)
+          fileStream.once('error', (error) => {
+            server.config.logger.error(`[file-api] Failed to read ${fullPath}: ${(error as Error).message}`)
+            handleFileStreamError(res, error)
+          })
+          fileStream.pipe(res)
         } catch (error) {
           res.statusCode = 500
           res.setHeader('content-type', 'application/json; charset=utf-8')
           res.end(JSON.stringify({ error: (error as Error).message }))
         }
+      })
+
+      // SkillHub API 代理 → teamskills.openjiuwen.com
+      // 用于前端直接 POST FormData 发布技能（与 skillhub 架构对齐）
+      const hubBaseUrl = process.env.VITE_HUB_API_BASE_URL || 'https://teamskills.openjiuwen.com'
+      server.middlewares.use('/hub-api', (req, res) => {
+        const proxyPath = (req.url || '').replace(/^\/hub-api/, '');
+        const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer) => chunks.push(chunk));
+        req.on('end', () => {
+          const body = Buffer.concat(chunks);
+          const proxyReq = https.request({
+            method: req.method,
+            hostname: new URL(hubBaseUrl).hostname,
+            path: proxyPath,
+            headers: { ...req.headers, host: new URL(hubBaseUrl).host },
+          }, (proxyRes) => {
+            res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
+            proxyRes.pipe(res);
+          });
+          proxyReq.on('error', (err: Error) => {
+            console.error('[vite] hub-api proxy error:', err.message);
+            res.writeHead(502, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+          });
+          if (body.length > 0) proxyReq.write(body);
+          proxyReq.end();
+        });
+      });
+
+      // 技能上传：接收 multipart 文件，保存到临时目录，返回文件路径
+      // 前端拿到路径后再通过 WebSocket 调用 skills.import_upload / skills.create_from_knowledge
+      server.middlewares.use('/file-api/skills/upload-temp', (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405
+          res.setHeader('content-type', 'application/json; charset=utf-8')
+          res.end(JSON.stringify({ error: 'method_not_allowed' }))
+          return
+        }
+
+        const contentType = req.headers['content-type'] || ''
+        const chunks: Buffer[] = []
+
+        req.on('data', (chunk: Buffer) => chunks.push(chunk))
+        req.on('end', () => {
+          try {
+            const body = Buffer.concat(chunks)
+            const tmpDir = path.join(os.tmpdir(), 'jiuwenswarm_skill_upload')
+            if (!fs.existsSync(tmpDir)) {
+              fs.mkdirSync(tmpDir, { recursive: true })
+            }
+
+            let fileBuffer: Buffer | null = null
+            let filename = 'upload.zip'
+
+            if (contentType.includes('multipart/form-data')) {
+              const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/)
+              if (boundaryMatch) {
+                const boundary = boundaryMatch[1] || boundaryMatch[2]
+                const boundaryBuf = Buffer.from(`--${boundary}`)
+                const parts: Buffer[] = []
+                let start = body.indexOf(boundaryBuf) + boundaryBuf.length
+
+                while (start < body.length) {
+                  const nextBoundary = body.indexOf(boundaryBuf, start)
+                  if (nextBoundary === -1) break
+                  parts.push(body.slice(start, nextBoundary))
+                  start = nextBoundary + boundaryBuf.length
+                }
+
+                for (const part of parts) {
+                  const headerEnd = part.indexOf('\r\n\r\n')
+                  if (headerEnd === -1) continue
+                  const header = part.slice(0, headerEnd).toString('utf-8')
+                  const content = part.slice(headerEnd + 4, part.length - 2)
+                  const nameMatch = header.match(/name="([^"]+)"/)
+                  const filenameMatch = header.match(/filename="([^"]+)"/)
+                  if (nameMatch && nameMatch[1] === 'file') {
+                    fileBuffer = content
+                    if (filenameMatch) filename = filenameMatch[1]
+                  }
+                }
+              }
+            } else {
+              fileBuffer = body
+              const url = new URL(req.url || '/file-api/skills/upload-temp', 'http://localhost')
+              const nameParam = url.searchParams.get('filename')
+              if (nameParam) filename = nameParam
+            }
+
+            if (!fileBuffer) {
+              res.statusCode = 400
+              res.setHeader('content-type', 'application/json; charset=utf-8')
+              res.end(JSON.stringify({ error: 'no_file_found' }))
+              return
+            }
+
+            const safeName = path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, '_')
+            const tempPath = path.join(tmpDir, `${Date.now()}_${safeName}`)
+            fs.writeFileSync(tempPath, fileBuffer)
+
+            res.statusCode = 200
+            res.setHeader('content-type', 'application/json; charset=utf-8')
+            res.end(JSON.stringify({ path: tempPath }))
+          } catch (error) {
+            res.statusCode = 500
+            res.setHeader('content-type', 'application/json; charset=utf-8')
+            res.end(JSON.stringify({ error: (error as Error).message }))
+          }
+        })
       })
 
       server.middlewares.use('/file-api/file-content', (req, res) => {
@@ -832,23 +1213,46 @@ function devFileContentApi(): Plugin {
 }
 
 // https://vitejs.dev/config/
+function portFromEnv(name: string, fallback: number): number {
+  const value = Number.parseInt(process.env[name] ?? '', 10)
+  return Number.isInteger(value) && value > 0 && value <= 65535 ? value : fallback
+}
+
+const frontendPort = portFromEnv('FRONTEND_PORT', 5173)
+const webPort = portFromEnv('WEB_PORT', 19000)
+const webTarget = `http://127.0.0.1:${webPort}`
+
 export default defineConfig({
   plugins: [suppressWsProxySocketErrors(), devWsTrafficLogger(), devFileContentApi(), react(), svgr()],
+  optimizeDeps: {
+    include: ['exceljs', 'jszip', 'saxes', 'ssf'],
+  },
   resolve: {
+    dedupe: ['react', 'react-dom'],
     alias: {
       '@': path.resolve(__dirname, './src'),
+      'lucide-react': path.resolve(__dirname, './node_modules/lucide-react'),
+      react: path.resolve(__dirname, './node_modules/react'),
+      'react-dom': path.resolve(__dirname, './node_modules/react-dom'),
     },
   },
   server: {
-    port: 5173,  // 默认端口
-    strictPort: true,  // 强制使用 5173 端口
+    host: true,
+    allowedHosts: ['127.0.0.1'],
+    port: frontendPort,
+    strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:19000',
+        target: webTarget,
         changeOrigin: true,
       },
+      '/skillhub-api': {
+        target: 'http://119.8.233.112:8080',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/skillhub-api/, '/api/v1'),
+      },
       '/ws': {
-        target: 'http://127.0.0.1:19000',
+        target: webTarget, 
         ws: true,
         changeOrigin: true,
         configure: (proxy) => {

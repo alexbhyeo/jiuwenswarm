@@ -9,6 +9,7 @@ import copy
 import json
 import logging
 import os
+import re
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -26,7 +27,6 @@ INTERNAL_UNTRACKED_DIRS = {".agent_history"}
 
 MAX_FILES = 50
 MAX_DIFF_SIZE_BYTES = 1_000_000
-MAX_LINES_PER_FILE = 400
 MAX_FILES_FOR_DETAILS = 500
 HISTORY_PRIORITY_PROJECT_ROOT = 0
 HISTORY_PRIORITY_SHARED_WORKSPACE = 10
@@ -39,6 +39,16 @@ WORKTREE_HISTORY_CONTAINERS: tuple[tuple[str, ...], ...] = (
 
 # change_sets.json 写入锁:保证同一进程内多线程惰性回填时不互相覆盖。
 _CHANGE_SET_LOCK = threading.Lock()
+
+# file_ops 条目上的软删除标记。被 conversation 回退"截断"掉的快照打上此标记后
+# 对 turn diff 显示层不可见，但仍保留 old_content，从而不丢失文件回滚能力。
+_REWOUND_KEY = "rewound_out"
+
+# file_ops 条目上的 discard 软删除标记。由 ``discard_turn_changes`` 打上,
+# 与 conversation rewind 的 ``rewound_out`` 区分:redo 只恢复 ``discarded_out``,
+# 不会误暴露 rewind 软隐藏的"未来"条目。两者都对显示层不可见
+# (见 ``_read_agent_history`` 的 ``include_rewound`` 过滤)。
+_DISCARDED_KEY = "discarded_out"
 
 
 class DiffHistoryExpiredError(RuntimeError):
@@ -255,27 +265,44 @@ class DiffService:
                         "lastEditTime": None,
                     }
 
+                file_entry = turn["files"][file_path]
+                # 累积本文件本轮全部 hunk 并按字节统一判定大文件（与工作区
+                # diff 的 _split_large_file_diffs 口径一致）：超过
+                # MAX_DIFF_SIZE_BYTES 标记 isLargeFile、不返回内容，但仍计入
+                # 完整行数 stats，与 tracked/untracked 大文件口径对齐。
+                file_hunks: list[dict[str, Any]] = []
+                file_diff_bytes = 0
                 for op in edit_info["operations"]:
-                    hunks, truncated = self._compute_hunks(
+                    remaining_bytes = max(MAX_DIFF_SIZE_BYTES - file_diff_bytes, 0)
+                    (
+                        op_hunks,
+                        op_lines_added,
+                        op_lines_removed,
+                        op_diff_bytes,
+                        op_is_large,
+                    ) = self._compute_hunks(
                         op["old_content"],
                         op["new_content"],
+                        max_diff_bytes=remaining_bytes,
                     )
-                    turn["files"][file_path]["hunks"].extend(hunks)
-                    turn["files"][file_path]["lastEditTime"] = op["timestamp"]
-                    if truncated:
-                        turn["files"][file_path]["isTruncated"] = True
+                    file_entry["lastEditTime"] = op["timestamp"]
 
                     if op["action"] == "write" and op["old_content"] is None:
-                        turn["files"][file_path]["isNewFile"] = True
+                        file_entry["isNewFile"] = True
                     if op["new_content"] is None and op["old_content"] is not None:
-                        turn["files"][file_path]["isDeletedFile"] = True
+                        file_entry["isDeletedFile"] = True
 
-                    for hunk in hunks:
-                        for line in hunk["lines"]:
-                            if line.startswith("+") and not line.startswith("+++"):
-                                turn["files"][file_path]["linesAdded"] += 1
-                            elif line.startswith("-") and not line.startswith("---"):
-                                turn["files"][file_path]["linesRemoved"] += 1
+                    file_entry["linesAdded"] += op_lines_added
+                    file_entry["linesRemoved"] += op_lines_removed
+                    file_diff_bytes += op_diff_bytes
+                    if not op_is_large and file_diff_bytes <= MAX_DIFF_SIZE_BYTES:
+                        file_hunks.extend(op_hunks)
+
+                if file_diff_bytes > MAX_DIFF_SIZE_BYTES:
+                    file_entry["isLargeFile"] = True
+                    file_entry["hunks"] = []
+                else:
+                    file_entry["hunks"] = file_hunks
 
             turn["stats"]["filesChanged"] = len(turn["files"])
             turn["stats"]["linesAdded"] = sum(
@@ -343,10 +370,53 @@ class DiffService:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
+                # Snapshots may have been created before the per-file preview
+                # limit existed.  Normalize them on every read so historical
+                # previews obey the same bound as newly computed diffs.
+                self._normalize_snapshot_diff_sizes(data)
                 return data
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Failed to read change_set snapshot (%s): %s", path, exc)
         return None
+
+    @staticmethod
+    def _normalize_snapshot_diff_sizes(turn: dict[str, Any]) -> None:
+        """Apply the per-file preview limit to a persisted turn snapshot.
+
+        A snapshot contains the structured hunk lines sent to clients, so its
+        byte accounting deliberately matches ``_compute_hunks`` rather than
+        the size of the source file.  This also makes snapshots written by
+        older versions safe to serve after an upgrade.
+        """
+        files = turn.get("files")
+        if not isinstance(files, dict):
+            return
+        for entry in files.values():
+            if not isinstance(entry, dict) or bool(entry.get("isLargeFile", False)):
+                continue
+            hunks = entry.get("hunks")
+            if not isinstance(hunks, list):
+                continue
+            diff_bytes = 0
+            is_large = False
+            for hunk in hunks:
+                if not isinstance(hunk, dict):
+                    continue
+                lines = hunk.get("lines")
+                if not isinstance(lines, list):
+                    continue
+                for line in lines:
+                    if not isinstance(line, str):
+                        continue
+                    diff_bytes += len(line.encode("utf-8", errors="replace"))
+                    if diff_bytes > MAX_DIFF_SIZE_BYTES:
+                        is_large = True
+                        break
+                if is_large:
+                    break
+            if is_large:
+                entry["isLargeFile"] = True
+                entry["hunks"] = []
 
     def _save_turn_snapshot(self, session_id: str, turn: dict[str, Any]) -> None:
         change_set_id = str(turn.get("change_set_id") or "")
@@ -483,6 +553,71 @@ class DiffService:
             self._save_turn_snapshot(session_id, snapshot)
         return change_set_id
 
+    def unmark_turn_discarded(
+        self,
+        session_id: str,
+        turn_index: int,
+        project_dir: str | None = None,
+        *,
+        extra_history_roots: list[str] | None = None,
+    ) -> str | None:
+        """将指定 turn 的 status 恢复为 completed(与 ``mark_turn_discarded`` 对称).
+
+        1. 将 change_sets.json 中该 entry 的 status 显式设回 ``"completed"``
+           (而非 pop 掉——缺少 status 字段的 turn 在按 change_set_id 读取
+           snapshot 时会与其他路径默认值不一致,显式写回保持状态模型一致)
+        2. 将 snapshot 的 status 同样设回 ``"completed"``
+        3. 去掉 file_ops 中该轮条目的 ``discarded_out`` 标记
+           (只恢复 discard 标记,不触碰 rewind 的 ``rewound_out``,避免
+           误暴露此前 conversation rewind 软隐藏的"未来"条目)
+        """
+        if turn_index <= 0:
+            return None
+        target = self.get_turn_diff(
+            session_id, turn_index=turn_index, project_dir=project_dir,
+            extra_history_roots=extra_history_roots,
+        )
+        change_set_id = str((target or {}).get("change_set_id") or "")
+        if not change_set_id:
+            return None
+
+        # 1. 将 change_sets 的 status 显式设回 completed
+        with _CHANGE_SET_LOCK:
+            entries = self._load_change_sets(session_id)
+            changed = False
+            for entry in entries:
+                if entry.get("change_set_id") == change_set_id:
+                    entry["status"] = "completed"
+                    changed = True
+                    break
+            if changed:
+                self._save_change_sets(session_id, entries)
+
+        # 2. 将 snapshot 的 status 显式设回 completed
+        snapshot = self._load_turn_snapshot(session_id, change_set_id) or target
+        if snapshot is not None:
+            snapshot["status"] = "completed"
+            self._save_turn_snapshot(session_id, snapshot)
+
+        # 3. 去掉 file_ops 中该轮条目的 discarded_out 标记
+        history = self._read_history(session_id)
+        user_count = 0
+        target_timestamp: float | None = None
+        for record in history:
+            if record.get("role") == "user":
+                user_count += 1
+                if user_count == turn_index:
+                    target_timestamp = record.get("timestamp")
+                    break
+        if target_timestamp is not None:
+            self.restore_rewound_entries_by_timestamp(
+                session_id, target_timestamp, project_dir=project_dir,
+                extra_history_roots=extra_history_roots,
+                discarded=True,
+            )
+
+        return change_set_id
+
     def _enrich_with_change_sets(
         self,
         session_id: str,
@@ -570,6 +705,18 @@ class DiffService:
             return []
 
     @staticmethod
+    def resolve_project_dir(session_id: str) -> str | None:
+        """解析 session 的项目目录(``_get_project_dir_from_metadata`` 的公开入口).
+
+        调用方若随后会写 ``metadata.json``(如 ``rewind_session`` 调
+        ``update_session_metadata``)，**必须在写之前**调用本函数并把结果显式
+        传给下游，不要让下游自己去推断：``metadata.json`` 是非原子的原地覆写
+        且由后台线程执行，下游读到半截文件会 ``JSONDecodeError`` → 静默返回
+        ``None`` → 扫不到项目目录下的 file_ops → 整个清理变成无声的空操作。
+        """
+        return DiffService._get_project_dir_from_metadata(session_id)
+
+    @staticmethod
     def _get_project_dir_from_metadata(session_id: str) -> str | None:
         """从 session metadata.json 中读取项目目录.
 
@@ -618,6 +765,10 @@ class DiffService:
         文件名约定: ``file_ops_{agent_id}_{session_id}.json``,其中 session_id
         始终是 ``.json`` 前的最后一段。使用 ``_{session_id}.json`` 后缀匹配替代
         子串匹配,避免短 session_id 误匹配其他 agent 的 file_ops 文件。
+
+        当 session_id 对应的是父会话时,也接受子 agent 会话(后缀形如
+        ``_sub_{type}_{suffix}``)的 file_ops 文件,使 diff 统计能覆盖子 agent
+        的文件变更。
         """
         if not name.startswith("file_ops_"):
             return False
@@ -625,7 +776,15 @@ class DiffService:
             return False
         if not session_id:
             return not require_session
-        return name.endswith(f"_{session_id}.json")
+        suffix = f"_{session_id}.json"
+        if name.endswith(suffix):
+            return True
+        sub_marker = f"_{session_id}_sub_"
+        marker_pos = name.find(sub_marker, len("file_ops_"))
+        if marker_pos < 0:
+            return False
+        agent_id = name[len("file_ops_"):marker_pos]
+        return bool(agent_id) and "_" not in agent_id
 
     @staticmethod
     def _agent_history_dirs_for_roots(
@@ -761,6 +920,7 @@ class DiffService:
         project_dir: str | None = None,
         *,
         extra_history_roots: list[str] | None = None,
+        include_rewound: bool = False
     ) -> dict[str, Any]:
         """读取 .agent_history（同时读取全局与 session-specific 文件并合并）.
 
@@ -768,6 +928,12 @@ class DiffService:
             session_id: 若提供，额外扫描匹配该 session 的 file_ops 文件。
             project_dir: 项目目录路径，若提供则也从项目目录读取 .agent_history。
             extra_history_roots: 额外写入根目录，例如 team/member workspace。
+            include_rewound: 是否包含被标记为 ``rewound_out`` / ``discarded_out``
+                的条目(软删除快照)。默认 ``False``——**显示层**(turn diff)不应
+                看到它们,否则会展示已被回退掉的 turn 的改动。**还原层**
+                (``get_files_to_restore`` / ``get_files_to_redo``) 必须传 ``True``:
+                这些快照仍持有文件的原始/修改后内容,是回滚/重做能力的唯一来源。
+                详见 ``truncate_file_ops_by_timestamp`` 的 ``soft`` 参数。
         """
         result: dict[str, Any] = {}
         history_file_priorities: dict[str, int] = {}
@@ -891,6 +1057,11 @@ class DiffService:
                             result_entry_priorities[normalized_path] = []
                         # 合并条目，避免时间戳相近的重复记录
                         for entry in entries:
+                            # 软删除的快照默认对显示层不可见（见 include_rewound）
+                            if not include_rewound and (
+                                entry.get(_REWOUND_KEY) or entry.get(_DISCARDED_KEY)
+                            ):
+                                continue
                             # 检查是否已存在相同时间戳（±1秒）的相同操作
                             ts = entry.get("timestamp", "")
                             action = entry.get("action", "")
@@ -976,53 +1147,83 @@ class DiffService:
         dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
         return dt.isoformat()
 
+    # 与 str.splitlines() 一致的换行符集合（\r\n 计作一个换行）。
+    _LINE_BREAK_RE = re.compile(r"\r\n|[\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029]")
+    _LINE_BREAK_CHARS = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
+
+    @staticmethod
+    def _count_text_lines(content: str) -> int:
+        """Return ``str.splitlines()``'s line count without allocating a line list."""
+        if not content:
+            return 0
+
+        count = sum(1 for _ in DiffService._LINE_BREAK_RE.finditer(content))
+        return count if content[-1] in DiffService._LINE_BREAK_CHARS else count + 1
+
     @staticmethod
     def _compute_hunks(
         old_content: str | None,
         new_content: str | None,
-        max_lines: int = MAX_LINES_PER_FILE,
-    ) -> tuple[list[dict[str, Any]], bool]:
-        """计算结构化 diff hunks.
+        *,
+        max_diff_bytes: int | None = None,
+    ) -> tuple[list[dict[str, Any]], int, int, int, bool]:
+        """计算结构化 diff hunks（与 ``git diff --unified=3`` 对齐）。
 
-        Returns:
-            (hunks, truncated): hunks 列表和是否被截断的标志。
+        返回 ``(hunks, lines_added, lines_removed, diff_bytes, is_large)``。
+        ``max_diff_bytes`` 用于历史 diff：超过额度时立即停止构造 hunk，避免先
+        展开整份大文件预览再丢弃；行数统计仍按完整改动返回。
         """
         # 处理删除文件的情况：new_content 为 None
         if new_content is None:
             if old_content is None:
-                return [], False
+                return [], 0, 0, 0, False
+            # 对单边变更而言，字符数超过额度已经足以判定为大文件。先在此处
+            # 返回，避免 splitlines/f-string 为超大历史写入额外分配整份内容。
+            if max_diff_bytes is not None and len(old_content) > max_diff_bytes:
+                return [], 0, DiffService._count_text_lines(old_content), max_diff_bytes + 1, True
             # 文件被删除：显示所有行被移除
             lines = old_content.splitlines()
-            truncated = len(lines) > max_lines
-            if truncated:
-                lines = lines[:max_lines]
+            diff_bytes = sum(
+                len(f"-{line}".encode("utf-8", errors="replace")) for line in lines
+            )
+            if max_diff_bytes is not None and diff_bytes > max_diff_bytes:
+                return [], 0, len(lines), max_diff_bytes + 1, True
             return [{
                 "oldStart": 1,
                 "oldLines": len(lines),
                 "newStart": 0,
                 "newLines": 0,
                 "lines": [f"-{line}" for line in lines],
-            }], truncated
+            }], 0, len(lines), diff_bytes, False
 
         # 处理新建文件的情况：old_content 为 None
         if old_content is None:
+            # 同删除路径：新建大文件无需构造 hunk，统计行数以无额外大列表的
+            # 方式计算。
+            if max_diff_bytes is not None and len(new_content) > max_diff_bytes:
+                return [], DiffService._count_text_lines(new_content), 0, max_diff_bytes + 1, True
             lines = new_content.splitlines()
-            truncated = len(lines) > max_lines
-            if truncated:
-                lines = lines[:max_lines]
+            diff_bytes = sum(
+                len(f"+{line}".encode("utf-8", errors="replace")) for line in lines
+            )
+            if max_diff_bytes is not None and diff_bytes > max_diff_bytes:
+                return [], len(lines), 0, max_diff_bytes + 1, True
             return [{
                 "oldStart": 0,
                 "oldLines": 0,
                 "newStart": 1,
                 "newLines": len(lines),
                 "lines": [f"+{line}" for line in lines],
-            }], truncated
+            }], len(lines), 0, diff_bytes, False
+
+        if old_content == new_content:
+            return [], 0, 0, 0, False
 
         old_lines = old_content.splitlines(keepends=True)
         new_lines = new_content.splitlines(keepends=True)
 
         if not old_lines and not new_lines:
-            return [], False
+            return [], 0, 0, 0, False
 
         # Emit unified hunks with context_lines of surrounding context and
         # merge adjacent changes whose context windows overlap, matching
@@ -1037,8 +1238,15 @@ class DiffService:
         n_new = len(new_lines)
 
         hunks: list[dict[str, Any]] = []
-        total_lines = 0
-        truncated = False
+        lines_added = sum(
+            j2 - j1 for tag, _i1, _i2, j1, j2 in opcodes
+            if tag in ("insert", "replace")
+        )
+        lines_removed = sum(
+            i2 - i1 for tag, i1, i2, _j1, _j2 in opcodes
+            if tag in ("delete", "replace")
+        )
+        diff_bytes = 0
 
         i = 0
         while i < len(opcodes):
@@ -1050,7 +1258,6 @@ class DiffService:
             # First change of this hunk is at opcodes[i]; absorb following
             # changes whose separating equal run is short enough that their
             # context windows bridge the gap (run length <= 2*context_lines).
-            change_start = i
             o_lo = max(0, i1 - context_lines)
             n_lo = max(0, j1 - context_lines)
             last_i2 = i2
@@ -1087,40 +1294,38 @@ class DiffService:
                 tag2, ii1, ii2, jj1, jj2 = opcodes[idx]
                 if tag2 == "equal":
                     for m in range(max(ii1, o_lo), min(ii2, o_hi)):
-                        if total_lines >= max_lines:
-                            truncated = True
-                            break
-                        lines.append(f" {old_lines[m].rstrip()}")
-                        total_lines += 1
+                        rendered = f" {old_lines[m].rstrip()}"
+                        diff_bytes += len(rendered.encode("utf-8", errors="replace"))
+                        if max_diff_bytes is not None and diff_bytes > max_diff_bytes:
+                            return [], lines_added, lines_removed, max_diff_bytes + 1, True
+                        lines.append(rendered)
                 elif tag2 == "delete":
                     for m in range(max(ii1, o_lo), min(ii2, o_hi)):
-                        if total_lines >= max_lines:
-                            truncated = True
-                            break
-                        lines.append(f"-{old_lines[m].rstrip()}")
-                        total_lines += 1
+                        rendered = f"-{old_lines[m].rstrip()}"
+                        diff_bytes += len(rendered.encode("utf-8", errors="replace"))
+                        if max_diff_bytes is not None and diff_bytes > max_diff_bytes:
+                            return [], lines_added, lines_removed, max_diff_bytes + 1, True
+                        lines.append(rendered)
                 elif tag2 == "insert":
                     for m in range(max(jj1, n_lo), min(jj2, n_hi)):
-                        if total_lines >= max_lines:
-                            truncated = True
-                            break
-                        lines.append(f"+{new_lines[m].rstrip()}")
-                        total_lines += 1
+                        rendered = f"+{new_lines[m].rstrip()}"
+                        diff_bytes += len(rendered.encode("utf-8", errors="replace"))
+                        if max_diff_bytes is not None and diff_bytes > max_diff_bytes:
+                            return [], lines_added, lines_removed, max_diff_bytes + 1, True
+                        lines.append(rendered)
                 else:  # replace
                     for m in range(max(ii1, o_lo), min(ii2, o_hi)):
-                        if total_lines >= max_lines:
-                            truncated = True
-                            break
-                        lines.append(f"-{old_lines[m].rstrip()}")
-                        total_lines += 1
+                        rendered = f"-{old_lines[m].rstrip()}"
+                        diff_bytes += len(rendered.encode("utf-8", errors="replace"))
+                        if max_diff_bytes is not None and diff_bytes > max_diff_bytes:
+                            return [], lines_added, lines_removed, max_diff_bytes + 1, True
+                        lines.append(rendered)
                     for m in range(max(jj1, n_lo), min(jj2, n_hi)):
-                        if total_lines >= max_lines:
-                            truncated = True
-                            break
-                        lines.append(f"+{new_lines[m].rstrip()}")
-                        total_lines += 1
-                if truncated:
-                    break
+                        rendered = f"+{new_lines[m].rstrip()}"
+                        diff_bytes += len(rendered.encode("utf-8", errors="replace"))
+                        if max_diff_bytes is not None and diff_bytes > max_diff_bytes:
+                            return [], lines_added, lines_removed, max_diff_bytes + 1, True
+                        lines.append(rendered)
 
             hunks.append({
                 "oldStart": o_lo + 1,
@@ -1129,11 +1334,9 @@ class DiffService:
                 "newLines": n_hi - n_lo,
                 "lines": lines,
             })
-            if truncated:
-                break
             i = k
 
-        return hunks, truncated
+        return hunks, lines_added, lines_removed, diff_bytes, False
 
     @staticmethod
     def _decode_c_escaped(inner: str) -> str:
@@ -1241,6 +1444,53 @@ class DiffService:
             return None
 
     @staticmethod
+    def _run_git_diff_limited(
+        project_dir: str,
+        args: list[str],
+        *,
+        max_bytes: int = MAX_DIFF_SIZE_BYTES,
+    ) -> tuple[str | None, bool]:
+        """运行单文件 ``git diff``，并在超过阈值时停止保留输出。
+
+        stdout 仍会被持续读取直至子进程退出，以免 Git 因管道写满而阻塞；但
+        超过 ``max_bytes`` 后不再在 Python 中累积内容。返回 ``(output,
+        is_large)``；执行失败时返回 ``(None, False)``。
+        """
+        import subprocess
+
+        try:
+            process = subprocess.Popen(
+                ["git", *args],
+                cwd=project_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            if process.stdout is None:
+                return None, False
+
+            output = bytearray()
+            is_large = False
+            while True:
+                chunk = process.stdout.read(64 * 1024)
+                if not chunk:
+                    break
+                if is_large:
+                    continue
+                if len(output) + len(chunk) > max_bytes:
+                    output.clear()
+                    is_large = True
+                else:
+                    output.extend(chunk)
+
+            if process.wait(timeout=10) != 0:
+                return None, False
+            if is_large:
+                return None, True
+            return output.decode("utf-8", errors="replace"), False
+        except Exception:
+            return None, False
+
+    @staticmethod
     def _get_git_toplevel(project_dir: str) -> str | None:
         """返回 git 仓库根目录；project_dir 可以是仓库内任意子目录."""
         import subprocess
@@ -1306,8 +1556,6 @@ class DiffService:
         返回:
             { "/abs/path/file.py": {"added": 3, "removed": 2, "isBinary": false}, ... }
         """
-        import re
-
         result: dict[str, dict[str, int | bool]] = {}
         for line in output.strip().splitlines():
             if not line.strip():
@@ -1409,8 +1657,6 @@ class DiffService:
         格式: " N files changed, N insertions(+), N deletions(-)"
         用于在加载完整 diff 前快速探测规模。
         """
-        import re
-
         match = re.match(
             r"(\d+)\s+files?\s+changed(?:,\s+(\d+)\s+insertions?\(\+\))?(?:,\s+(\d+)\s+deletions?\(-\))?",
             output.strip(),
@@ -1434,13 +1680,9 @@ class DiffService:
                 "lines": ["-removed line", "+added line", " context line"],
             }
         """
-        import re
-
         files: dict[str, list[dict[str, Any]]] = {}
         current_file: str | None = None
         current_hunk: dict[str, Any] | None = None
-        line_counts: dict[str, int] = {}
-        truncated: set[str] = set()
 
         # 匹配 diff 头部: --- a/path, +++ b/path
         # 控制字符路径会被整体加引号（如 +++ "b/dir\tfile.txt"），b/ 前缀在引号内，
@@ -1464,7 +1706,6 @@ class DiffService:
                     current_file = resolved
                     if current_file not in files:
                         files[current_file] = []
-                        line_counts[current_file] = 0
                     current_hunk = None
                 continue
 
@@ -1477,7 +1718,6 @@ class DiffService:
                     current_file = resolved
                     if current_file not in files:
                         files[current_file] = []
-                        line_counts[current_file] = 0
                     current_hunk = None
                 continue
 
@@ -1505,15 +1745,13 @@ class DiffService:
             if current_hunk is None:
                 continue
 
-            # 收集 hunk 行（+, -, 空格前缀的上下文行）
+            # 收集 hunk 行（+, -, 空格前缀的上下文行）。超过 MAX_DIFF_SIZE_BYTES
+            # 的大文件 diff 块已在 _split_large_file_diffs 整体剔除，此处剩余 diff
+            # 均 ≤ 1MB，整段返回不做行截断，与 untracked 大文件口径对齐。
             if line.startswith("+") or line.startswith("-") or line.startswith(" "):
-                if line_counts[current_file] >= MAX_LINES_PER_FILE:
-                    truncated.add(current_file)
-                    continue
                 current_hunk["lines"].append(line)
-                line_counts[current_file] += 1
 
-        return files, truncated
+        return files
 
     @staticmethod
     def _split_large_file_diffs(
@@ -1524,8 +1762,6 @@ class DiffService:
         返回 (过滤后的 diff 输出, 被跳过的大文件路径集合)。
         被跳过的文件不参与 hunk 解析，但 numstat 统计仍会保留。
         """
-        import re
-
         if not output:
             return "", set()
         # 以 "diff --git " 为分隔切分（首段通常为空）
@@ -1555,7 +1791,12 @@ class DiffService:
         return "".join(kept), large_files
 
     def _get_untracked_files(
-        self, project_dir: str, max_files: int = MAX_FILES
+        self,
+        project_dir: str,
+        max_files: int = MAX_FILES,
+        *,
+        include_hunks: bool = True,
+        hunk_paths: set[str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """获取未跟踪文件列表，并读取内容计算行数与 hunk.
 
@@ -1567,9 +1808,10 @@ class DiffService:
         栏目看不到行数变化。此处将整文件视为新增 hunk，给出与 tracked
         文件一致的 stats 口径。
 
-        二进制文件（前 8KB 出现 NUL 字节）不计行数；大文件按
-        ``MAX_LINES_PER_FILE`` 截断并标记 ``isTruncated``，与
-        ``_compute_hunks`` 的截断口径一致。
+        二进制文件（前 8KB 出现 NUL 字节）不计行数；超过
+        ``MAX_DIFF_SIZE_BYTES`` 的大文件标记 ``isLargeFile`` 且不返回内容，
+        与 tracked 文件 ``_split_large_file_diffs`` 口径一致；1MB 以内整
+        文件作为新增 hunk 返回，不做行截断。
         """
         # core.quotepath=false 让 git 对非 ASCII 字节直接输出原始 UTF-8 文件名
         # （而非八进制转义串），否则中文路径无法对应磁盘真实路径。但 ASCII 控制字符
@@ -1626,29 +1868,46 @@ class DiffService:
                 continue
 
             # 流式逐行读取：完整行数计入 stats（与 tracked 文件 git numstat
-            # 口径一致），但 hunk lines 只保留前 MAX_LINES_PER_FILE 行用于展示，
-            # 避免大文件爆内存。
+            # 口径一致）。大文件判定与 tracked/turn diff 口径一致：累加渲染后
+            # diff（"+{line}"）的 UTF-8 字节数，超过 MAX_DIFF_SIZE_BYTES 标记
+            # isLargeFile、不返回内容（hunks 留空），不用磁盘文件大小近似。
+            # 仅在 detail 层需要该文件时保留 hunk lines，避免 summary/files
+            # 层为未展开文件构造整文件 hunk。
             hunk_lines: list[str] = []
             total_lines = 0
+            diff_bytes = 0
+            is_large = False
+            wants_hunks = include_hunks and (
+                hunk_paths is None or rel_path in hunk_paths or abs_path in hunk_paths
+            )
             try:
                 with open(abs_path, "r", encoding="utf-8", errors="replace", newline="") as f:
                     for line in f:
                         total_lines += 1
-                        if total_lines <= MAX_LINES_PER_FILE:
-                            hunk_lines.append(line.rstrip("\r\n"))
+                        if is_large:
+                            continue
+                        stripped = line.rstrip("\r\n")
+                        diff_bytes += len(f"+{stripped}".encode("utf-8", errors="replace"))
+                        if diff_bytes > MAX_DIFF_SIZE_BYTES:
+                            is_large = True
+                            hunk_lines.clear()
+                        elif wants_hunks:
+                            hunk_lines.append(stripped)
             except OSError:
                 files[abs_path] = entry
                 continue
 
-            truncated = total_lines > MAX_LINES_PER_FILE
-            entry["hunks"] = [{
-                "oldStart": 0,
-                "oldLines": 0,
-                "newStart": 1,
-                "newLines": len(hunk_lines),
-                "lines": [f"+{line}" for line in hunk_lines],
-            }]
-            entry["isTruncated"] = truncated
+            if is_large:
+                entry["isLargeFile"] = True
+            elif wants_hunks:
+                entry["hunks"] = [{
+                    "oldStart": 0,
+                    "oldLines": 0,
+                    "newStart": 1,
+                    "newLines": len(hunk_lines),
+                    "lines": [f"+{line}" for line in hunk_lines],
+                }]
+            entry["isTruncated"] = False
             entry["linesAdded"] = total_lines
             files[abs_path] = entry
 
@@ -1659,7 +1918,38 @@ class DiffService:
         parts = Path(rel_path).parts
         return any(part in INTERNAL_UNTRACKED_DIRS for part in parts)
 
-    def get_git_diff(self, project_dir: str | None) -> dict[str, Any] | None:
+    @staticmethod
+    def _normalize_hunk_paths(
+        repo_dir: str,
+        hunk_paths: list[str] | set[str] | tuple[str, ...] | None,
+    ) -> set[str] | None:
+        """Normalize requested detail paths to repo-relative POSIX-style paths."""
+        if not hunk_paths:
+            return None
+        result: set[str] = set()
+        for raw in hunk_paths:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            candidate = Path(text)
+            rel = text
+            if candidate.is_absolute():
+                try:
+                    rel = os.path.relpath(str(candidate), repo_dir)
+                except ValueError:
+                    rel = text
+            rel = rel.replace("\\", "/").lstrip("/")
+            result.add(rel)
+        return result or None
+
+    def get_git_diff(
+        self,
+        project_dir: str | None,
+        *,
+        include_files: bool = True,
+        include_hunks: bool = True,
+        hunk_paths: list[str] | set[str] | tuple[str, ...] | None = None,
+    ) -> dict[str, Any] | None:
         """获取工作区相对于 HEAD 的 git diff，含未跟踪文件行数.
 
         已跟踪文件走 ``git diff HEAD``；untracked 文件（含 unborn HEAD
@@ -1685,6 +1975,8 @@ class DiffService:
             return None
         if self._is_in_transient_git_state(repo_dir):
             return None
+        effective_include_files = include_files or include_hunks
+        requested_hunk_paths = self._normalize_hunk_paths(repo_dir, hunk_paths)
 
         files: dict[str, dict[str, Any]] = {}
         total_files_changed = 0
@@ -1709,30 +2001,65 @@ class DiffService:
                 "files": {},
             }
 
-        if has_tracked_changes:
+        if has_tracked_changes and not effective_include_files and shortstat_stats:
+            total_files_changed += shortstat_stats["filesChanged"]
+            total_added += shortstat_stats["linesAdded"]
+            total_removed += shortstat_stats["linesRemoved"]
+        elif has_tracked_changes:
             numstat_output = self._run_git_command(repo_dir, ["diff", "HEAD", "--numstat"])
-            name_status_output = self._run_git_command(repo_dir, ["diff", "HEAD", "--name-status"])
-            porcelain_status_output = self._run_git_command(
-                repo_dir, ["-c", "core.quotepath=false", "status", "--porcelain=v1"]
-            )
-            diff_output = self._run_git_command(repo_dir, ["diff", "HEAD"])
-            if numstat_output and diff_output:
+            if numstat_output:
                 per_file_stats = self._parse_git_numstat(numstat_output)
-                per_file_status = self._parse_git_name_status(name_status_output or "")
-                per_file_status.update(
-                    self._parse_git_porcelain_status(porcelain_status_output or "")
-                )
                 total_files_changed += len(per_file_stats)
                 total_added += sum(int(stats["added"]) for stats in per_file_stats.values())
                 total_removed += sum(int(stats["removed"]) for stats in per_file_stats.values())
-                filtered_output, large_files = self._split_large_file_diffs(diff_output)
-                all_hunks, truncated_files = self._parse_git_diff_hunks(filtered_output)
 
+                if effective_include_files:
+                    name_status_output = self._run_git_command(repo_dir, ["diff", "HEAD", "--name-status"])
+                    porcelain_status_output = self._run_git_command(
+                        repo_dir, ["-c", "core.quotepath=false", "status", "--porcelain=v1"]
+                    )
+                    per_file_status = self._parse_git_name_status(name_status_output or "")
+                    per_file_status.update(
+                        self._parse_git_porcelain_status(porcelain_status_output or "")
+                    )
+                else:
+                    per_file_status = {}
+
+                all_hunks: dict[str, list[dict[str, Any]]] = {}
+                large_files: set[str] = set()
+                if include_hunks:
+                    # 一次 ``git diff`` 会先把所有文件的 patch 聚合到一个字符串，
+                    # 即使稍后跳过 >1MB 的文件也已经造成峰值内存。按文件流式获取，
+                    # 超过阈值后停止保留 stdout；前端详情层通常只传当前选中的路径，
+                    # 因此也避免为未查看文件生成 patch。
+                    if requested_hunk_paths is None:
+                        detail_paths = list(per_file_stats)[:MAX_FILES]
+                    else:
+                        detail_paths = sorted(
+                            path for path in requested_hunk_paths
+                            if path in per_file_stats
+                        )
+                    for rel_path in detail_paths:
+                        diff_output, is_large = self._run_git_diff_limited(
+                            repo_dir,
+                            ["--literal-pathspecs", "diff", "HEAD", "--", rel_path],
+                        )
+                        if is_large:
+                            large_files.add(rel_path)
+                            continue
+                        if not diff_output:
+                            continue
+                        filtered_output, file_large = self._split_large_file_diffs(diff_output)
+                        large_files.update(file_large)
+                        if filtered_output:
+                            all_hunks.update(self._parse_git_diff_hunks(filtered_output))
+
+                if not effective_include_files:
+                    per_file_stats = {}
                 for rel_path, stats in list(per_file_stats.items())[:MAX_FILES]:
                     abs_path = str(Path(repo_dir) / rel_path)
                     is_binary = bool(stats.get("isBinary", False))
                     is_large = rel_path in large_files
-                    is_truncated = rel_path in truncated_files
                     if is_binary or is_large:
                         hunks = []
                     else:
@@ -1748,24 +2075,34 @@ class DiffService:
                         "isDeletedFile": per_file_status.get(rel_path) == "deleted",
                         "isBinary": is_binary,
                         "isLargeFile": is_large,
-                        "isTruncated": is_truncated,
+                        "isTruncated": False,
                         "isUntracked": False,
                         "linesAdded": lines_added,
                         "linesRemoved": lines_removed,
                         "lastEditTime": None,
                     }
 
-        untracked_files = self._get_untracked_files(repo_dir, max_files=max(0, MAX_FILES - len(files)))
+        untracked_files = self._get_untracked_files(
+            repo_dir,
+            max_files=max(0, MAX_FILES - len(files)) if effective_include_files else MAX_FILES,
+            include_hunks=include_hunks,
+            hunk_paths=requested_hunk_paths,
+        )
+        if not effective_include_files:
+            untracked_stats_files = untracked_files
+            untracked_files = {}
+        else:
+            untracked_stats_files = untracked_files
         for file_path, entry in untracked_files.items():
             entry["status"] = "added"
             files[file_path] = entry
-        total_files_changed += len(untracked_files)
+        total_files_changed += len(untracked_stats_files)
         # untracked 文件无 git diff 可统计，_get_untracked_files 已按文件内容
         # 计算行数；此处补回 stats，避免 unborn HEAD 等场景下 lines_added 恒为 0。
-        total_added += sum(int(f.get("linesAdded", 0) or 0) for f in untracked_files.values())
-        total_removed += sum(int(f.get("linesRemoved", 0) or 0) for f in untracked_files.values())
+        total_added += sum(int(f.get("linesAdded", 0) or 0) for f in untracked_stats_files.values())
+        total_removed += sum(int(f.get("linesRemoved", 0) or 0) for f in untracked_stats_files.values())
 
-        if not files:
+        if total_files_changed <= 0 and not files:
             return None
 
         return {
@@ -1829,9 +2166,11 @@ class DiffService:
             return {}
 
         # 2. 读取 file_ops 日志
+        #    include_rewound=True: 之前的 conversation 回退只截断了对话、没有动
+        #    工作区，那些被软删除的快照仍是对应文件唯一的原始内容来源，必须纳入，
+        #    否则文件会永久失去回滚能力。
         agent_history = self._read_agent_history(
-            session_id,
-            project_dir,
+            session_id, project_dir, include_rewound=True,
             extra_history_roots=extra_history_roots,
         )
 
@@ -1858,40 +2197,92 @@ class DiffService:
 
         return files_to_restore
 
-
-    def truncate_file_ops_by_timestamp(
+    def get_files_to_redo(
         self,
         session_id: str,
-        cutoff_ts: float,
+        turn_index: int,
         project_dir: str | None = None,
         *,
         extra_history_roots: list[str] | None = None,
-    ) -> None:
-        """截断 file_ops 日志，移除 timestamp >= cutoff_ts 的条目.
+    ) -> dict[str, dict[str, Any]]:
+        """返回需要重新应用的文件及其新内容(与 ``get_files_to_restore`` 对称).
 
-        在 rewind / discard_turn_changes 操作后调用，确保 file_ops 日志与
-        截断后的 history.json / 实际工作区一致。
-
-        清理范围:
-          - **session-specific file_ops**(文件名包含 session_id):
-            全部条目按 timestamp 过滤(因为这些条目只属于该 session)。
-          - **全局 file_ops**(文件名不含 session_id,如 ``file_ops_jiuwenswarm.json``):
-            **不清理**。全局 file_ops 缺少 session 归属字段,若按路径 + timestamp
-            清理会误伤其他 session 在同一文件上的后续修改(详见 P1 修复)。
-            撤销后 last_turn diff 可能残留历史全局记录,这是已知局限——
-            用户撤销本轮后一般不需要查看 last_turn,且 session-specific 日志
-            已足够支撑单 session 场景的精确恢复。
+        discard(soft) 后 file_ops 中 timestamp >= target 的条目被标记
+        ``discarded_out``。本方法找出这些条目,返回它们的 ``new_content``
+        (即 agent 修改后的内容),供 redo 写回文件。
 
         Args:
             session_id: 会话 ID
-            cutoff_ts: 截断阈值（Unix timestamp），>= 此时间的条目将被移除
-            project_dir: 项目目录路径。显式传入可避免底层从 metadata 推断,
-                覆盖 ``channel_metadata.cwd`` 缺失的场景(如 Web/code 模式新会话)。
-                为 ``None`` 时底层从 session metadata 推断(读取顺序见
-                ``_get_project_dir_from_metadata``)。
-        """
+            turn_index: 目标重新应用轮次(1-based)
+            project_dir: 项目目录路径(可选)
 
-        # 收集所有 session-specific file_ops 文件
+        Returns:
+            { file_path: { "content": str | None, "action": "write" | "delete" } }
+            content 为 None 表示文件被 agent 删除,redo 时应删除文件。
+        """
+        history = self._read_history(session_id)
+        if not history:
+            return {}
+
+        # 1. 找到目标 turn 的起始时间(第 N 条 user 消息的 timestamp)
+        user_count = 0
+        target_timestamp: float | None = None
+        for record in history:
+            if record.get("role") == "user":
+                user_count += 1
+                if user_count == turn_index:
+                    target_timestamp = record.get("timestamp")
+                    break
+
+        if target_timestamp is None:
+            return {}
+
+        # 2. 读取 file_ops 日志(include_rewound=True 才能看到 discarded_out 条目)
+        agent_history = self._read_agent_history(
+            session_id, project_dir, include_rewound=True,
+            extra_history_roots=extra_history_roots,
+        )
+
+        # 3. 对每个文件,遍历所有 timestamp >= target_timestamp 且被 discard 标记
+        #    的 entry,取**最后一条**的 new_content(即 agent 修改后的最终态)。
+        #    不能取第一条就 break——同一 turn 内同一文件可能被多次编辑,
+        #    取中间态写回会导致 redo 后文件内容与 discard 前不一致。
+        files_to_redo: dict[str, dict[str, Any]] = {}
+        for file_path, entries in agent_history.items():
+            last_entry: dict[str, Any] | None = None
+            for entry in entries:
+                if not entry.get(_DISCARDED_KEY):
+                    continue  # 只看被 discard 标记的条目(非 rewind 的 rewound_out)
+                edit_time = self._iso_to_timestamp(entry["timestamp"])
+                if edit_time >= target_timestamp:
+                    last_entry = entry  # 持续覆盖,保留最后一条
+            if last_entry is not None:
+                if last_entry.get("new_content") is not None:
+                    files_to_redo[file_path] = {
+                        "content": last_entry["new_content"],
+                        "action": "write",
+                    }
+                else:
+                    # new_content 为 None: 文件被 agent 删除,redo 时应删除
+                    files_to_redo[file_path] = {
+                        "content": None,
+                        "action": "delete",
+                    }
+
+        return files_to_redo
+
+    def _collect_session_file_ops_paths(
+        self,
+        session_id: str,
+        project_dir: str | None = None,
+        *,
+        extra_history_roots: list[str] | None = None,
+    ) -> list[Path]:
+        """收集所有 session-specific file_ops 文件路径。
+
+        扫描范围与 ``truncate_file_ops_by_timestamp`` 一致:
+        agent/user workspace、project_dir、extra_history_roots(含 worktree 容器)。
+        """
         file_ops_paths: list[Path] = []
 
         for base_dir in (get_agent_workspace_dir(), get_user_workspace_dir()):
@@ -1902,7 +2293,6 @@ class DiffService:
                 if self._is_valid_file_ops_file(f.name, session_id, require_session=True):
                     file_ops_paths.append(f)
 
-        # 也从项目目录/额外写入根扫描(显式传入优先,否则从 metadata 推断)
         resolved_project_dir = project_dir or self._get_project_dir_from_metadata(session_id)
         if resolved_project_dir:
             project_hist_dir = Path(resolved_project_dir) / ".agent_history"
@@ -1926,6 +2316,73 @@ class DiffService:
                         if f not in file_ops_paths:
                             file_ops_paths.append(f)
 
+        return file_ops_paths
+
+    def truncate_file_ops_by_timestamp(
+        self,
+        session_id: str,
+        cutoff_ts: float,
+        project_dir: str | None = None,
+        soft: bool = False,
+        *,
+        extra_history_roots: list[str] | None = None,
+        discarded: bool = False,
+    ) -> None:
+        """截断 file_ops 日志，移除 timestamp >= cutoff_ts 的条目.
+
+        ``soft`` 决定"截断"的含义，取值应与调用方**是否同时还原了工作区文件**一致:
+
+           - ``soft=False``(硬删除,默认): 条目被物理移除。仅当调用方已经把这些
+             文件写回原始内容时才正确(如 ``discard_turn_changes``)——文件已回到
+             旧状态，快照失去意义。
+           - ``soft=True``(软删除): 条目保留 ``old_content``，只打上软删除标记。
+             用于**只回退对话、不动文件**的场景(``rewind_session`` 的
+             conversation 模式、``compact_partial_session``)或需要保留快照供
+             redo 的场景(``discard_turn_changes``)。此时硬删除会让文件
+             陷入"已被修改、但系统不再持有其原始内容"的状态，后续任何 /rewind 都
+             无法还原它，且不会报错(issue #2241)。标记后显示层照旧看不到这些条目，
+             还原层仍可用——显示一致性与回滚能力各取所需。
+
+        ``discarded`` 控制 ``soft=True`` 时使用哪种标记(仅 ``soft=True`` 时有意义):
+
+           - ``discarded=False``(默认): 打 ``rewound_out`` 标记(conversation
+             rewind / compact 路径)。``restore_rewound_entries_by_timestamp``
+             默认也只恢复 ``rewound_out``。
+           - ``discarded=True``: 打 ``discarded_out`` 标记(``discard_turn_changes``
+             路径)。与 ``rewound_out`` 区分后,``redo_turn_changes`` 只恢复
+             ``discarded_out`` 条目,不会误暴露此前 conversation rewind 软隐藏的
+             "未来"条目,避免 last turn diff 混入不属于当前 history 的修改。
+
+        在 rewind / discard_turn_changes 操作后调用，确保 file_ops 日志与
+        截断后的 history.json / 实际工作区一致。
+
+        清理范围:
+          - **session-specific file_ops**(文件名包含 session_id):
+            全部条目按 timestamp 过滤(因为这些条目只属于该 session)。
+          - **全局 file_ops**(文件名不含 session_id,如 ``file_ops_jiuwenswarm.json``):
+            **不清理**。全局 file_ops 缺少 session 归属字段,若按路径 + timestamp
+            清理会误伤其他 session 在同一文件上的后续修改(详见 P1 修复)。
+            撤销后 last_turn diff 可能残留历史全局记录,这是已知局限——
+            用户撤销本轮后一般不需要查看 last_turn,且 session-specific 日志
+            已足够支撑单 session 场景的精确恢复。
+
+        Args:
+            session_id: 会话 ID
+            cutoff_ts: 截断阈值（Unix timestamp），>= 此时间的条目将被移除
+            project_dir: 项目目录路径。显式传入可避免底层从 metadata 推断,
+                覆盖 ``channel_metadata.cwd`` 缺失的场景(如 Web/code 模式新会话)。
+                为 ``None`` 时底层从 session metadata 推断(读取顺序见
+                ``_get_project_dir_from_metadata``)。
+            soft: 见上文。调用方未还原工作区文件时必须传 ``True``。
+            discarded: 见上文。``soft=True`` 时决定标记类型。
+        """
+
+        marker = _DISCARDED_KEY if discarded else _REWOUND_KEY
+
+        file_ops_paths = self._collect_session_file_ops_paths(
+            session_id, project_dir, extra_history_roots=extra_history_roots,
+        )
+
         for file_ops_path in file_ops_paths:
             try:
                 data = json.loads(file_ops_path.read_text(encoding="utf-8"))
@@ -1946,6 +2403,14 @@ class DiffService:
                             continue
                         if entry_ts < cutoff_ts:
                             filtered.append(e)
+                        elif soft:
+                            # 保留快照(old_content)，仅对显示层隐藏
+                            if not e.get(marker):
+                                e[marker] = True
+                                truncated = True
+                            filtered.append(e)
+                        else:
+                            truncated = True
                     if len(filtered) != len(entries):
                         truncated = True
                     if filtered:
@@ -1957,12 +2422,87 @@ class DiffService:
                         encoding="utf-8",
                     )
                     logger.info(
-                        "truncate_file_ops: cleaned %s (cutoff_ts=%s)",
-                        file_ops_path.name, cutoff_ts,
+                        "truncate_file_ops: cleaned %s (cutoff_ts=%s, soft=%s, marker=%s)",
+                        file_ops_path.name, cutoff_ts, soft, marker,
                     )
             except Exception as exc:
                 logger.warning(
                     "truncate_file_ops: failed to process %s: %s",
+                    file_ops_path, exc,
+                )
+
+    def restore_rewound_entries_by_timestamp(
+        self,
+        session_id: str,
+        cutoff_ts: float,
+        project_dir: str | None = None,
+        *,
+        extra_history_roots: list[str] | None = None,
+        discarded: bool = False,
+    ) -> None:
+        """去掉 file_ops 中 timestamp >= cutoff_ts 的条目的软删除标记.
+
+        与 ``truncate_file_ops_by_timestamp(soft=True)`` 对称:
+        后者加标记(隐藏条目),本方法去标记(恢复条目可见性)。
+        用于 ``redo_turn_changes`` 恢复被 ``discard(soft)`` 隐藏的 file_ops 条目。
+
+        ``discarded`` 控制恢复哪种标记,应与当初打标记时一致:
+
+           - ``discarded=False``(默认): 恢复 ``rewound_out`` 条目
+             (conversation rewind 路径)。
+           - ``discarded=True``: 恢复 ``discarded_out`` 条目
+             (``discard_turn_changes`` → ``redo_turn_changes`` 路径)。
+             只恢复 discard 标记,不触碰 rewind 标记,避免误暴露此前
+             conversation rewind 软隐藏的"未来"条目。
+
+        Args:
+            session_id: 会话 ID
+            cutoff_ts: 阈值(Unix timestamp),>= 此时间的匹配标记条目将被恢复
+            project_dir: 项目目录路径(可选)
+        """
+        marker = _DISCARDED_KEY if discarded else _REWOUND_KEY
+
+        file_ops_paths = self._collect_session_file_ops_paths(
+            session_id, project_dir, extra_history_roots=extra_history_roots,
+        )
+
+        for file_ops_path in file_ops_paths:
+            try:
+                data = json.loads(file_ops_path.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    continue
+
+                restored = False
+                new_data: dict[str, Any] = {}
+                for file_path, entries in data.items():
+                    if not isinstance(entries, list):
+                        continue
+                    filtered = []
+                    for e in entries:
+                        try:
+                            entry_ts = self._iso_to_timestamp(e.get("timestamp", ""))
+                        except (ValueError, TypeError):
+                            filtered.append(e)
+                            continue
+                        if entry_ts >= cutoff_ts and e.get(marker):
+                            e.pop(marker, None)
+                            restored = True
+                        filtered.append(e)
+                    if filtered:
+                        new_data[file_path] = filtered
+
+                if restored:
+                    file_ops_path.write_text(
+                        json.dumps(new_data, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    logger.info(
+                        "restore_rewound_entries: restored %s (cutoff_ts=%s, marker=%s)",
+                        file_ops_path.name, cutoff_ts, marker,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "restore_rewound_entries: failed to process %s: %s",
                     file_ops_path, exc,
                 )
 

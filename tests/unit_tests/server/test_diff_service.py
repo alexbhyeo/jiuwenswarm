@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from jiuwenswarm.server.utils.diff_service import DiffService
+from jiuwenswarm.server.utils.diff_service import MAX_DIFF_SIZE_BYTES, DiffService
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -163,6 +163,252 @@ def test_git_diff_staged_rename_brace_form_keeps_hunks(tmp_path):
     # brace 简写 numstat key "a/{b => c}/d.txt" 需展开为 "a/c/d.txt" 与 hunk key 对齐
     assert len(file_info["hunks"]) == 1
     assert file_info["hunks"][0]["lines"]  # 非空
+
+
+def test_git_diff_summary_does_not_run_full_patch(monkeypatch):
+    from jiuwenswarm.server.utils import diff_service as ds_mod
+
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run_git_command(project_dir, args):
+        calls.append(tuple(args))
+        if args == ["diff", "HEAD", "--shortstat"]:
+            return " 1 file changed, 2 insertions(+), 1 deletion(-)\n"
+        if args == ["-c", "core.quotepath=false", "ls-files", "--others", "--exclude-standard"]:
+            return ""
+        raise AssertionError(f"unexpected git command: {args}")
+
+    monkeypatch.setattr(ds_mod.DiffService, "_get_git_toplevel", staticmethod(lambda p: "/repo"))
+    monkeypatch.setattr(ds_mod.DiffService, "_is_in_transient_git_state", staticmethod(lambda p: False))
+    monkeypatch.setattr(ds_mod.DiffService, "_run_git_command", staticmethod(fake_run_git_command))
+    diff = ds_mod.DiffService().get_git_diff(
+        "/repo",
+        include_files=False,
+        include_hunks=False,
+    )
+
+    assert diff == {
+        "stats": {"filesChanged": 1, "linesAdded": 2, "linesRemoved": 1},
+        "files": {},
+    }
+    assert ("diff", "HEAD") not in calls
+    assert ("diff", "HEAD", "--numstat") not in calls
+
+
+def test_git_diff_files_layer_does_not_run_full_patch(monkeypatch):
+    from jiuwenswarm.server.utils import diff_service as ds_mod
+
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run_git_command(project_dir, args):
+        calls.append(tuple(args))
+        if args == ["diff", "HEAD", "--shortstat"]:
+            return " 1 file changed, 2 insertions(+), 1 deletion(-)\n"
+        if args == ["diff", "HEAD", "--numstat"]:
+            return "2\t1\ta.txt\n"
+        if args == ["diff", "HEAD", "--name-status"]:
+            return "M\ta.txt\n"
+        if args == ["-c", "core.quotepath=false", "status", "--porcelain=v1"]:
+            return " M a.txt\n"
+        if args == ["-c", "core.quotepath=false", "ls-files", "--others", "--exclude-standard"]:
+            return ""
+        raise AssertionError(f"unexpected git command: {args}")
+
+    monkeypatch.setattr(ds_mod.DiffService, "_get_git_toplevel", staticmethod(lambda p: "/repo"))
+    monkeypatch.setattr(ds_mod.DiffService, "_is_in_transient_git_state", staticmethod(lambda p: False))
+    monkeypatch.setattr(ds_mod.DiffService, "_run_git_command", staticmethod(fake_run_git_command))
+
+    diff = ds_mod.DiffService().get_git_diff(
+        "/repo",
+        include_files=True,
+        include_hunks=False,
+    )
+
+    assert diff is not None
+    assert diff["files"][str(Path("/repo") / "a.txt")]["hunks"] == []
+    assert ("diff", "HEAD") not in calls
+
+
+def test_git_diff_detail_layer_limits_patch_to_requested_paths(monkeypatch):
+    from jiuwenswarm.server.utils import diff_service as ds_mod
+
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run_git_command(project_dir, args):
+        calls.append(tuple(args))
+        if args == ["diff", "HEAD", "--shortstat"]:
+            return " 2 files changed, 2 insertions(+), 2 deletions(-)\n"
+        if args == ["diff", "HEAD", "--numstat"]:
+            return "1\t1\ta.txt\n1\t1\tb.txt\n"
+        if args == ["diff", "HEAD", "--name-status"]:
+            return "M\ta.txt\nM\tb.txt\n"
+        if args == ["-c", "core.quotepath=false", "status", "--porcelain=v1"]:
+            return " M a.txt\n M b.txt\n"
+        if args == ["--literal-pathspecs", "diff", "HEAD", "--", "a.txt"]:
+            return (
+                "diff --git a/a.txt b/a.txt\n"
+                "--- a/a.txt\n"
+                "+++ b/a.txt\n"
+                "@@ -1 +1 @@\n"
+                "-old\n"
+                "+new\n"
+            )
+        if args == ["-c", "core.quotepath=false", "ls-files", "--others", "--exclude-standard"]:
+            return ""
+        raise AssertionError(f"unexpected git command: {args}")
+
+    monkeypatch.setattr(ds_mod.DiffService, "_get_git_toplevel", staticmethod(lambda p: "/repo"))
+    monkeypatch.setattr(ds_mod.DiffService, "_is_in_transient_git_state", staticmethod(lambda p: False))
+    monkeypatch.setattr(ds_mod.DiffService, "_run_git_command", staticmethod(fake_run_git_command))
+    monkeypatch.setattr(
+        ds_mod.DiffService,
+        "_run_git_diff_limited",
+        staticmethod(lambda project_dir, args: (fake_run_git_command(project_dir, args), False)),
+    )
+
+    diff = ds_mod.DiffService().get_git_diff(
+        "/repo",
+        include_files=True,
+        include_hunks=True,
+        hunk_paths=["a.txt"],
+    )
+
+    assert diff is not None
+    assert diff["files"][str(Path("/repo") / "a.txt")]["hunks"]
+    assert diff["files"][str(Path("/repo") / "b.txt")]["hunks"] == []
+    assert ("diff", "HEAD") not in calls
+    assert ("--literal-pathspecs", "diff", "HEAD", "--", "a.txt") in calls
+
+
+def _init_repo(repo: Path) -> None:
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test User")
+
+
+def test_git_diff_untracked_large_file_marked_large(tmp_path):
+    """超过 1MB 的 untracked 文件标记 isLargeFile、不返回内容（与 tracked 大文件对齐）。"""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _git(repo, "add", "seed.txt")
+    _git(repo, "commit", "-m", "init")
+
+    big = repo / "big.txt"
+    content = "\n".join(f"line {i}: " + "x" * 250 for i in range(5000)) + "\n"
+    big.write_bytes(content.encode("utf-8"))
+    assert big.stat().st_size > MAX_DIFF_SIZE_BYTES
+
+    diff = DiffService().get_git_diff(str(repo))
+    assert diff is not None
+    info = diff["files"][str(big)]
+    assert info["isUntracked"] is True
+    assert info["isLargeFile"] is True
+    assert info["hunks"] == []
+    assert info["isTruncated"] is False
+    assert info["linesAdded"] == 5000
+
+
+def test_git_diff_untracked_file_under_1mb_shows_full(tmp_path):
+    """1MB 以内的 untracked 文件整文件返回，不做 400 行截断。"""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _git(repo, "add", "seed.txt")
+    _git(repo, "commit", "-m", "init")
+
+    small = repo / "small.txt"
+    content = "\n".join(f"line {i}: " + "y" * 50 for i in range(500)) + "\n"
+    small.write_bytes(content.encode("utf-8"))
+    assert small.stat().st_size < MAX_DIFF_SIZE_BYTES
+
+    diff = DiffService().get_git_diff(str(repo))
+    assert diff is not None
+    info = diff["files"][str(small)]
+    assert info["isUntracked"] is True
+    assert info["isLargeFile"] is False
+    assert info["isTruncated"] is False
+    assert len(info["hunks"]) == 1
+    assert len(info["hunks"][0]["lines"]) == 500
+    assert info["linesAdded"] == 500
+
+
+def test_git_diff_tracked_large_file_marked_large(tmp_path):
+    """超过 1MB 的 tracked 改动标记 isLargeFile、不返回内容。"""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    tracked = repo / "tracked.txt"
+    tracked.write_bytes(b"initial\n")
+    _git(repo, "add", "tracked.txt")
+    _git(repo, "commit", "-m", "init")
+
+    content = "\n".join(f"line {i}: " + "x" * 250 for i in range(5000)) + "\n"
+    tracked.write_bytes(content.encode("utf-8"))
+    assert tracked.stat().st_size > MAX_DIFF_SIZE_BYTES
+
+    diff = DiffService().get_git_diff(str(repo))
+    assert diff is not None
+    info = diff["files"][str(tracked)]
+    assert info["isLargeFile"] is True
+    assert info["hunks"] == []
+    assert info["isTruncated"] is False
+
+
+def test_git_diff_tracked_file_under_1mb_shows_full(tmp_path):
+    """1MB 以内的 tracked 改动整段返回，不做 400 行截断。"""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    tracked = repo / "tracked.txt"
+    tracked.write_bytes(b"initial\n")
+    _git(repo, "add", "tracked.txt")
+    _git(repo, "commit", "-m", "init")
+
+    content = "\n".join(f"line {i}: " + "y" * 50 for i in range(500)) + "\n"
+    tracked.write_bytes(content.encode("utf-8"))
+    assert tracked.stat().st_size < MAX_DIFF_SIZE_BYTES
+
+    diff = DiffService().get_git_diff(str(repo))
+    assert diff is not None
+    info = diff["files"][str(tracked)]
+    assert info["isLargeFile"] is False
+    assert info["isTruncated"] is False
+    assert len(info["hunks"]) == 1
+    added = [
+        line for line in info["hunks"][0]["lines"]
+        if line.startswith("+") and not line.startswith("+++")
+    ]
+    assert len(added) == 500
+
+
+def test_git_diff_tracked_large_file_small_edit_shows_preview(tmp_path):
+    """磁盘文件超过 1MB 但实际 diff 很小：按 diff 大小判定，仍返回预览。"""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    tracked = repo / "tracked.txt"
+    content = "\n".join(f"line {i}: " + "x" * 250 for i in range(5000)) + "\n"
+    tracked.write_bytes(content.encode("utf-8"))
+    assert tracked.stat().st_size > MAX_DIFF_SIZE_BYTES
+    _git(repo, "add", "tracked.txt")
+    _git(repo, "commit", "-m", "init")
+
+    lines = content.splitlines()
+    lines[2500] = "line 2500: " + "y" * 250
+    tracked.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
+
+    diff = DiffService().get_git_diff(str(repo))
+    assert diff is not None
+    info = diff["files"][str(tracked)]
+    assert info["isLargeFile"] is False
+    assert info["isTruncated"] is False
+    assert info["linesAdded"] == 1
+    assert info["linesRemoved"] == 1
+    assert info["hunks"]
+    added = [
+        line for line in info["hunks"][0]["lines"]
+        if line.startswith("+") and not line.startswith("+++")
+    ]
+    assert added == ["+line 2500: " + "y" * 250]
 
 
 @pytest.fixture

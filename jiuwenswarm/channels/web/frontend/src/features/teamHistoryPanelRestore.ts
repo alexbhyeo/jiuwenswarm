@@ -8,6 +8,10 @@ import type {
 } from '../stores/sessionStore';
 import { normalizeFinalContent } from '../utils/finalContent';
 import {
+  findOverlappingFileExecutionEvent,
+  mergeFileDownloadItems,
+} from '../utils/fileDownloadDedup';
+import {
   createTaskProgressBaseline,
   registerConfirmedTaskCreation,
   type TaskProgressBaseline,
@@ -21,6 +25,8 @@ interface TeamMember {
   name?: string;
   execution_status?: string | null;
   mode?: string;
+  role?: string;
+  cli_agent?: string | null;
 }
 
 interface TeamTaskEvent {
@@ -452,6 +458,7 @@ function collectTeamState(records: Record<string, unknown>[], sessionId: string)
       timestamp: Math.max(existing?.timestamp || 0, nextTimestamp),
       skills: skills || existing?.skills,
       files: files || existing?.files,
+      workflow_run_id: pickString(rawTask, ['workflow_run_id']) || existing?.workflow_run_id,
       // Truncation flags: read raw with explicit guards so a status-only
       // record (no flags) falls back to `existing?` — never resets to false.
       // Mirrors the title/content `|| existing?` pattern above.
@@ -605,18 +612,25 @@ function collectTeamState(records: Record<string, unknown>[], sessionId: string)
                 size: typeof file.size === 'number' ? file.size : undefined,
                 mime_type: pickString(file, ['mime_type']) || undefined,
                 download_url: pickString(file, ['download_url']) || undefined,
+                path: pickString(file, ['path']) || undefined,
               }))
             : [];
           if (files.length > 0) {
-            const id = eventId('hist-file', record.id, memberId, timestamp, files.map((file) => file.name).join(','));
+            const existing = findOverlappingFileExecutionEvent(
+              Array.from(executionEvents.values()),
+              files,
+              (event) => event.member_id === memberId && event.kind === 'file'
+            );
+            const mergedFiles = mergeFileDownloadItems(existing?.files, files);
+            const id = existing?.id || eventId('hist-file', record.id, memberId, timestamp, files.map((file) => file.name).join(','));
             executionEvents.set(id, {
               id,
               member_id: memberId,
               kind: 'file',
               timestamp,
               title: '发送文件',
-              content: files.map((file) => file.name).join('\n'),
-              files,
+              content: mergedFiles.map((file) => file.name).join('\n'),
+              files: mergedFiles,
             });
           }
         }
@@ -714,14 +728,20 @@ function collectTeamState(records: Record<string, unknown>[], sessionId: string)
       if (shouldKeepMember(memberId)) {
         hasSeenMember = true;
       }
+      // 回放是逐条覆盖同一个 member 记录的，而只有部分事件带 name / mode
+      // （registered 带，spawned / status_changed 不带）。后到的事件不能把先前
+      // 学到的展示名冲掉，否则恢复出来的面板会退回显示 member_id。
+      const knownMember = members.get(memberId);
       members.set(memberId, {
         id: `hist-member-${memberId}`,
         member_id: memberId,
         status: pickString(event, ['status', 'new_status']) || 'idle',
         timestamp: eventTimestamp,
-        name: pickString(event, ['name']) || undefined,
+        name: pickString(event, ['name']) || knownMember?.name || undefined,
         execution_status: pickString(event, ['execution_status', 'new_status']) || 'idle',
-        mode: pickString(event, ['mode']) || undefined,
+        mode: pickString(event, ['mode']) || knownMember?.mode || undefined,
+        role: pickString(event, ['role']) || knownMember?.role || undefined,
+        cli_agent: pickString(event, ['cli_agent']) || knownMember?.cli_agent || undefined,
       });
       continue;
     }
