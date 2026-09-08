@@ -1699,40 +1699,27 @@ export function SkillPanel({
     };
   }, [evolutionEntries, detailTab, selectedSkill, saveEvolutionEntries]);
 
-  /** 上传技能 .zip 包：先上传到临时目录，再通过 WebSocket 调用 skills.import_upload */
+  /** 上传技能 .zip 包：直接以 multipart 表单 POST 到 /file-api/skills/import（生产/开发环境均由 app_web.py 提供，一次请求完成上传+安装）。 */
   const handleSkillUpload = useCallback(
     async (file: File) => {
       setActionTarget('import_local');
       setMessage(null);
       setMessageType(null);
       try {
-        // Step 1: 上传文件到 Vite dev server 临时目录
-        const form = new FormData();
-        form.append('file', file);
-        const uploadResp = await fetch('/file-api/skills/upload-temp', { method: 'POST', body: form });
-        const uploadData = await uploadResp.json();
-        if (!uploadResp.ok || !uploadData.path) {
-          throw new Error(uploadData.error || t('skills.errors.importFailed'));
-        }
-        const tempPath = uploadData.path;
-
-        // Step 2: 通过 WebSocket 调用 skills.import_upload
         const doImport = async (overwrite: boolean) => {
-          const data = await webRequest<{
-            success: boolean;
-            detail?: string;
+          const form = new FormData();
+          form.append('file', file);
+          form.append('overwrite', overwrite ? 'true' : 'false');
+          const resp = await fetch('/file-api/skills/import', { method: 'POST', body: form });
+          const data = (await resp.json()) as {
+            success?: boolean;
             message?: string;
+            error?: string;
             skill?: { name?: string };
             code?: string;
-          }>(
-            'skills.import_upload',
-            withSession({
-              path: tempPath,
-              overwrite,
-            }),
-          );
-          if (!data.success) {
-            const err = new Error(data.detail || data.message || t('skills.errors.importFailed')) as Error & {
+          };
+          if (!resp.ok || data.success === false) {
+            const err = new Error(data.message || data.error || t('skills.errors.importFailed')) as Error & {
               code?: string;
             };
             err.code = data.code;
@@ -1769,7 +1756,7 @@ export function SkillPanel({
         setActionTarget(null);
       }
     },
-    [fetchSkills, fetchSkillDetail, t, withSession],
+    [fetchSkills, fetchSkillDetail, t],
   );
 
   /** 知识转技能：先上传文件到临时目录（如有），再通过 WebSocket 调用 skills.create_from_knowledge */
