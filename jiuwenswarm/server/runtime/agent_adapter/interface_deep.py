@@ -198,7 +198,6 @@ from jiuwenswarm.agents.harness.common.rails.interrupt.interrupt_helpers import 
     build_permission_rail,
     convert_interactions_to_ask_user_question,
 )
-from jiuwenswarm.common.cron_session import is_cron_execution_session
 from jiuwenswarm.agents.harness.common.tools.todo_compat import (
     CompatibleTodoModifyTool,
     install_todo_modify_compat_patch,
@@ -1678,6 +1677,7 @@ class JiuWenSwarmDeepAdapter:
         self._send_file_toolkit: SendFileToolkit | None = None
         self._runtime_state_write_task: asyncio.Task[None] | None = None
         self._channel_id: str | None = None
+        self._is_cron_execution: bool = False
         # (name, load_record, manifest.version)
         self._loaded_agent_template: tuple[str, Any, str] | None = None
         # name → (load_record, manifest.version)
@@ -7794,7 +7794,7 @@ class JiuWenSwarmDeepAdapter:
         self, config_base: dict[str, Any]
     ) -> list[_RailBuildInfo]:
         """PermissionInterruptRail recipe, omitted for unattended cron sessions."""
-        if is_cron_execution_session(self._parent_session_id):
+        if self._is_cron_execution:
             logger.info(
                 "[JiuWenSwarmDeepAdapter] skip PermissionInterruptRail for cron session %s",
                 self._parent_session_id,
@@ -7817,7 +7817,7 @@ class JiuWenSwarmDeepAdapter:
 
     def _update_permission_rail(self, config_base: dict[str, Any] | None) -> None:
         """原地更新已有 PermissionRail 配置，或在首次启用时新建。"""
-        if is_cron_execution_session(self._parent_session_id):
+        if self._is_cron_execution:
             logger.info(
                 "[JiuWenSwarmDeepAdapter] skip PermissionInterruptRail hot-update "
                 "for cron session %s",
@@ -8341,6 +8341,7 @@ class JiuWenSwarmDeepAdapter:
             (config or {}).get("channel_id") if isinstance(config, dict) else ""
             or ""
         ).strip() or getattr(self, "_channel_id", "")
+        self._is_cron_execution = self._channel_id == "__cron__"
 
         await self.set_checkpoint()
         await asyncio.sleep(0)
