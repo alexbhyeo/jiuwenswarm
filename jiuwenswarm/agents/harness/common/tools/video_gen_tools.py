@@ -199,7 +199,7 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
     prompt: str,
     aspect_ratio: str = "16:9",
     resolution: str = "480p",
-    duration_seconds: int = 5,
+    duration_seconds: int = 15,
     first_frame_path: str | None = None,
     generate_audio: bool = False,
     save_dir: str | None = None,
