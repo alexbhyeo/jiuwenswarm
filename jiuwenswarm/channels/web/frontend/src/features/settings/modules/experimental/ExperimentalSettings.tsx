@@ -24,6 +24,10 @@ import { useSettingsFormDialogClose } from '../../services/useSettingsFormDialog
 import { useSettingsServices } from '../../services/SettingsServicesProvider';
 import { useSettingsSource } from '../../services/SettingsSourceProvider';
 import { useUnsavedChanges } from '../../services/useUnsavedChanges';
+import {
+  applyExternalCliPendingChoices,
+  hasUnsavedExternalCliChanges,
+} from './externalCliInstallState';
 
 const CLI_DEFAULTS: Record<string, string> = Object.fromEntries(
   EXTERNAL_CLI_AGENT_KINDS.flatMap((agent) => [
@@ -107,6 +111,10 @@ function ProactiveLimitsDialog({
               label: t('settingsPanel.fields.proactive_recommendation_max_recommend_per_day.title'),
               component: 'input',
               type: 'number',
+              min: 1,
+              max: 50,
+              step: 1,
+              changeOnBlur: true,
               required: true,
             },
             {
@@ -114,6 +122,10 @@ function ProactiveLimitsDialog({
               label: t('settingsPanel.fields.proactive_recommendation_max_rounds_per_tick.title'),
               component: 'input',
               type: 'number',
+              min: 1,
+              max: 50,
+              step: 1,
+              changeOnBlur: true,
               required: true,
             },
           ]}
@@ -165,8 +177,16 @@ function ExternalCliSettings({
       Object.fromEntries(Object.entries(CLI_DEFAULTS).map(([key, fallback]) => [key, String(config[key] ?? fallback)])),
     [config],
   );
+  // User choices deferred behind a dependency install. Held at the App layer
+  // and session storage so they survive navigation and full page refreshes.
+  const pendingChoices = externalCliPendingChoices ?? {};
+  const setPendingChoices = onExternalCliPendingChoicesChange;
+  const restoredDraftValues = useMemo(
+    () => applyExternalCliPendingChoices(sourceValues, pendingChoices),
+    [pendingChoices, sourceValues],
+  );
   const [savedValues, setSavedValues] = useState(sourceValues);
-  const [draftValues, setDraftValues] = useState(sourceValues);
+  const [draftValues, setDraftValues] = useState(restoredDraftValues);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   // Latest CLI detect results, held at the App layer (via services) so they
@@ -175,13 +195,13 @@ function ExternalCliSettings({
   const detectResults = externalCliDetectResults ?? {};
   const setDetectResults = onExternalCliDetectResultsChange;
   const installDialogRestoredRef = useRef(false);
-  // User choices deferred behind a dependency install. Held at the App layer
-  // (via services) so they survive unmounting the Settings page while the
-  // install keeps running; replayed automatically once it reports success.
-  const pendingChoices = externalCliPendingChoices ?? {};
-  const setPendingChoices = onExternalCliPendingChoicesChange;
   const [autoSavedAgents, setAutoSavedAgents] = useState<string[]>([]);
-  const changed = Object.keys(savedValues).some((key) => draftValues[key] !== savedValues[key]);
+  const changed = hasUnsavedExternalCliChanges(
+    savedValues,
+    draftValues,
+    pendingChoices,
+    externalCliInstallStatuses,
+  );
   useEffect(() => {
     if (!saveError) return undefined;
     const timer = window.setTimeout(() => setSaveError(''), NOTICE_AUTO_DISMISS_MS);
@@ -204,9 +224,9 @@ function ExternalCliSettings({
   useEffect(() => {
     if (!changed) {
       setSavedValues(sourceValues);
-      setDraftValues(sourceValues);
+      setDraftValues(restoredDraftValues);
     }
-  }, [changed, sourceValues]);
+  }, [changed, restoredDraftValues, sourceValues]);
 
   useEffect(() => {
     if (!installBusy) {
