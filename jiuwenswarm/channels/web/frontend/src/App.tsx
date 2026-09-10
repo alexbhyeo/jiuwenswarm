@@ -743,7 +743,7 @@ function AppContent({
   const prependMessages = useChatStore((s) => s.prependMessages);
   const isProcessing = useChatStore((s) => s.runtimes[sessionId]?.isProcessing ?? false);
   const isPaused = useChatStore((s) => s.runtimes[sessionId]?.isPaused ?? false);
-  const hasPendingQuestion = useChatStore((s) => Boolean(s.runtimes[sessionId]?.pendingQuestion));
+  const hasPendingQuestion = useChatStore((s) => Boolean(s.runtimes[sessionId]?.pendingQuestions[0]));
   const setProcessing = useChatStore((s) => s.setProcessing);
   const setThinking = useChatStore((s) => s.setThinking);
   const setLoadingHistory = useChatStore((s) => s.setLoadingHistory);
@@ -2306,6 +2306,10 @@ function AppContent({
     // 开关打开，跟 initialInputValue 走的是同一条通道。
     options.initialEnabledPlugins?.forEach((id) => useSessionStore.getState().addEnabledPlugin(NEW_CONVERSATION_ID, id));
     options.initialEnabledMcps?.forEach((name) => useSessionStore.getState().addEnabledMcp(NEW_CONVERSATION_ID, name));
+    if (options.metadata) {
+      useSessionStore.getState().ensureRuntime(NEW_CONVERSATION_ID);
+      useSessionStore.getState().setSessionMetadata(NEW_CONVERSATION_ID, options.metadata);
+    }
     if (options.preserveProject) {
       preserveSelectedProjectOnChatNewRef.current = true;
       newConversationProjectRef.current = selectedProject
@@ -2644,8 +2648,10 @@ function AppContent({
 
   const handleUserAnswer = useCallback((requestId: string, answers: UserAnswer[], source?: string) => {
     const currentSessionId = sessionIdRef.current;
-    if (!currentSessionId || currentSessionId === NEW_CONVERSATION_ID) return;
-    void sendUserAnswer(currentSessionId, requestId, answers, source);
+    if (!currentSessionId || currentSessionId === NEW_CONVERSATION_ID) {
+      return Promise.resolve(false);
+    }
+    return sendUserAnswer(currentSessionId, requestId, answers, source);
   }, [sendUserAnswer]);
 
   const handleLoadMoreHistory = useCallback(async () => {
@@ -2851,7 +2857,7 @@ function AppContent({
   const handleDeleteConversation = useCallback(async () => {
     if (!deleteTarget) return;
     const runtime = useChatStore.getState().getRuntime(deleteTarget.session_id);
-    if (runtime?.isProcessing || runtime?.pendingQuestion) {
+    if (runtime?.isProcessing || runtime?.pendingQuestions[0]) {
       setDialogError(t('multiSession.deleteRunningDisabled'));
       return;
     }
@@ -3394,8 +3400,13 @@ const showWorkspaceDivider = effectiveTeamAreaExpanded && !showConversationNotFo
                     metadata: { scene: 'create_plugin' },
                   },
                 }))}
-                onUseExample={(initialInputValue, mcpName) =>
-                  requestSessionNavigation('new', { initialInputValue, initialEnabledMcps: [mcpName], forceMode: 'agent' })
+                onUseExample={(initialInputValue, mcpName, displayName) =>
+                  requestSessionNavigation('new', {
+                    initialInputValue,
+                    initialEnabledMcps: [mcpName],
+                    forceMode: 'agent',
+                    metadata: { prefer_mcp: { id: mcpName, display_name: displayName ?? mcpName } },
+                  })
                 }
                 onUsePluginExample={(initialInputValue, pluginId) =>
                   requestSessionNavigation('new', { initialInputValue, initialEnabledPlugins: [pluginId], forceMode: 'agent' })

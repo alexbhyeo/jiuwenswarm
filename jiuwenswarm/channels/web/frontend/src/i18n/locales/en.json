@@ -4,6 +4,7 @@
     "confirm": "Confirm",
     "cancel": "Cancel",
     "close": "Close",
+    "clear": "Clear",
     "refresh": "Refresh",
     "refreshing": "Refreshing...",
     "loading": "Loading...",
@@ -494,6 +495,7 @@
       "created": "Task created",
       "cancelled": "Task cancelled",
       "unblocked": "Task unblocked",
+      "paused": "Task paused",
       "updated": "Task status updated"
     },
     "taskDetail": {
@@ -1202,7 +1204,7 @@
       "codexHint": "The SDK is installed automatically when needed; use the built-in CLI, a CLI from PATH, or a specified path.",
       "useBuiltin": "Use built-in CLI",
       "detect": "Detect",
-      "detectHint": "Find the CLI in PATH or at the given path and check version compatibility",
+      "detectHint": "Leave the path empty to search the system PATH, or enter a CLI executable path to validate it and check its version",
       "selectFile": "Choose file",
       "selectFileTitle": "Choose {{agent}} command",
       "selectFileFailed": "Failed to choose file",
@@ -1221,6 +1223,7 @@
       "windowsScriptPath": "The selected file is a Windows script. Choose a real executable, or select \"Use built-in CLI\".",
       "missingInPath": "{{agent}} CLI was not found in the system PATH. Enter an executable path, or select \"Use built-in CLI\".",
       "missingPath": "Path does not exist: {{path}}. Check the path, or select \"Use built-in CLI\".",
+      "directoryPath": "The entered path is a directory: {{path}}. Enter the full path to the CLI executable, or select \"Use built-in CLI\".",
       "unavailableCli": "Failed to run {{agent}} CLI ({{reason}}). Check the executable, or select \"Use built-in CLI\".",
       "autoSaved": "{{agents}} dependencies finished installing. Your configuration has been saved automatically.",
       "installDialogTitle": "Install optional components",
@@ -2425,6 +2428,8 @@
       "skillNetInstallFailedHint": "SkillNet install failed. Check the skill URL or dependencies.",
       "importFailed": "Import failed",
       "importFailedHint": "Import failed. Check the path or permissions.",
+      "knowledgeSkillExists": "Skill \"{{name}}\" already exists. Use another name or uninstall it first.",
+      "knowledgeSkillExistsGeneric": "A skill with this name already exists. Use another name or uninstall it first.",
       "uploadFailed": "File upload failed. Please try again.",
       "uploadUnsafePath": "The filename contains disallowed characters or uses a reserved system name. Rename the file and upload it again.",
       "uploadInvalidRequest": "The upload request is invalid or missing a file. Select the file again and upload it.",
@@ -3198,6 +3203,8 @@
       "content-creation": "Content Creation",
       "security": "Security",
       "communication": "Communication",
+      "Engineering": "Engineering",
+      "Design": "Design",
       "other": "Other"
     },
     "search": {
@@ -3418,7 +3425,7 @@
     "schedule": {
       "tab": { "interval": "Interval", "cron": "Cron expression", "once": "Once" },
       "interval": { "label": "Every", "unit": "minutes, return to this session" },
-      "cron": { "hint": "Standard 5-field format: minute hour day month weekday (e.g. 0 9 * * 1-5 = weekdays at 9am)" },
+      "cron": { "hint": "Supports 5 fields (minute hour day month weekday) or the same 7-field format used by Cron tasks (second minute hour day month weekday year)." },
       "once": { "hint": "Pick a date and time; the job fires once at that moment and is then marked completed", "dateLabel": "Date", "timeLabel": "Time" },
       "summary": {
         "interval": "Return to this session every {{minutes}} min",
@@ -3427,7 +3434,7 @@
       }
     },
     "errors": {
-      "cronFieldCount": "Heartbeat cron expressions must have 5 fields (minute hour day month weekday)"
+      "cronFieldCount": "Heartbeat cron expressions must have 5 fields (minute hour day month weekday) or 7 fields (second minute hour day month weekday year)"
     },
     "drawer": {
       "fieldName": "Task name",
@@ -3544,6 +3551,13 @@
     "layoutGraph": "Flow Graph",
     "pauseResumeHint": "Pause / Resume",
     "stopHint": "Stop",
+    "controlAlreadyCompleted": "Workflow already completed",
+    "controlAlreadyStopped": "Workflow already stopped",
+    "controlAlreadyFailed": "Workflow already failed",
+    "controlAlreadyPaused": "Workflow already paused",
+    "controlUnavailable": "Workflow is running; control unavailable",
+    "controlNotFound": "Workflow run not found",
+    "controlsDisabledHint": "Team is not running, so this workflow can't be controlled here. Send a message in the main session to resume or stop it.",
     "sessionBudget": "Session budget (team-wide, never resets)",
     "runBudget": "Run budget (META.workflow_token_limit)",
     "sessionBudgetShort": "Session",
