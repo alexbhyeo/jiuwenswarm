@@ -9,6 +9,7 @@ import {
   nodeStageSpec,
   presentRsiNode,
   scoreScale,
+  actionsForStatus,
 } from '../node_modules/.cache/rsi-presentation/rsiPresentation.mjs';
 
 const context = (scenario, artifactType, nodes, taskRunning = false) => ({
@@ -146,6 +147,24 @@ test('paper score_overall is rendered and rejected reason is human-readable', ()
   assert.deepEqual(nodeScoreLines(rejected)[0], { value: '0.8', label: '分数' });
 });
 
+test('paper tasks can pause but do not expose an unsupported resume action', () => {
+  assert.deepEqual(actionsForStatus('RUNNING', 'ARTIFACT', false, null, 'PAPER'), [
+    'config',
+    'delete',
+    'pause',
+  ]);
+  assert.deepEqual(actionsForStatus('PAUSED', 'ARTIFACT', false, null, 'PAPER'), [
+    'config',
+    'delete',
+    'stop',
+  ]);
+  assert.deepEqual(actionsForStatus('PAUSED', 'ARTIFACT', false, null, 'PROGRAM'), [
+    'config',
+    'delete',
+    'resume',
+  ]);
+});
+
 test('parallel program candidates get attempt numbering without exposing provider ids', () => {
   const nodes = [
     {
@@ -216,6 +235,27 @@ test('runtime failures are separated from score-based rejection', () => {
   assert.equal(presentation.reasonLabel, '管理器决策失败');
 });
 
+test('pruned paper nodes expose a concise user-facing reason', () => {
+  const pruned = {
+    node_id: 'paper-pruned',
+    iteration: 4,
+    parent_id: 'ROOT',
+    type: 'PRUNED',
+    adopted: false,
+    score: null,
+    description: null,
+    failure_reason: '资料获取质量不佳，已剪枝。',
+    failure_class: 'pipeline_failed',
+    changes: [],
+    extra: { paper: { round_index: 4, attempt: 1, outcome: 'failed' } },
+  };
+
+  const presentation = presentRsiNode(pruned, context('ARTIFACT', 'PAPER', [pruned], false));
+  assert.equal(presentation.lifecycle, 'pruned');
+  assert.equal(presentation.reasonLabel, '资料获取质量不佳，已剪枝。');
+  assert.equal(presentation.reasonDetail, null);
+});
+
 test('structured harness stage payloads localize by status instead of using the provider name', () => {
   const node = {
     node_id: 'rsi:node:case',
@@ -271,6 +311,21 @@ test('structured harness stage payloads localize by status instead of using the 
   const presentation = presentRsiNode(node, context('HARNESS', null, [node], true));
   assert.equal(presentation.lifecycle, 'evaluating');
   assert.equal(presentation.runtimeLabel, '评测中');
+});
+
+test('parallel evaluation displays completed count rather than last finished case index', () => {
+  const node = {
+    node_id: 'epoch-001', iteration: 1, parent_id: 'ROOT', type: 'PROVISIONAL', adopted: false,
+    score: null, changes: [], extra: { stage: {
+      id: 'evaluate.parallel', name: 'Cases 1/5 completed', status: 'running',
+      case_index: 4, case_id: 'fourth', total_cases: 5, completed_cases: 1, score: 1,
+    } },
+  };
+  const presentation = presentRsiNode(node, context('HARNESS', null, [node], true));
+  assert.equal(presentation.lifecycle, 'evaluating');
+  assert.equal(presentation.stageLabel, 'Cases 1/5 completed');
+  const label = nodeStageLocalizedLabel(node, () => 'wrong case index') ?? presentation.stageLabel;
+  assert.equal(label, 'Cases 1/5 completed');
 });
 
 test('program scores are shown out of 100; other scenarios are unchanged', () => {

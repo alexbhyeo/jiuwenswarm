@@ -32,10 +32,20 @@ export function RsiDetail() {
     if (!selectedTaskId) return;
     const status = detail?.task?.status;
     if (status !== 'CREATED' && status !== 'QUEUED' && status !== 'RUNNING') return;
-    const timer = window.setInterval(() => {
-      void refreshDetail(selectedTaskId);
-    }, 3000);
-    return () => window.clearInterval(timer);
+    let cancelled = false;
+    let timer: number;
+    const poll = async () => {
+      try {
+        await refreshDetail(selectedTaskId);
+      } finally {
+        if (!cancelled) timer = window.setTimeout(poll, 3000);
+      }
+    };
+    timer = window.setTimeout(poll, 3000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [selectedTaskId, detail?.task?.status, refreshDetail]);
 
   if ((detailLoading && !detail) || !detail?.task) {
@@ -59,7 +69,16 @@ export function RsiDetail() {
         }}
       />
       <div className="rsi-stage">
-        <RsiResultSummary task={detail.task} report={detail.report} usage={detail.usage} />
+        <RsiResultSummary
+          task={detail.task}
+          report={detail.report}
+          usage={detail.usage}
+          onOpenArtifact={(path, title) => {
+            if (!selectedTaskId) return;
+            setArtifactTitle(title);
+            setArtifactSource({ taskId: selectedTaskId, path, initialFilePath: null });
+          }}
+        />
         <RsiCanvasArea task={detail.task} tree={detail.tree} />
       </div>
       <ConfigInfoDialog open={configOpen} task={detail.task} onClose={() => setConfigOpen(false)} />

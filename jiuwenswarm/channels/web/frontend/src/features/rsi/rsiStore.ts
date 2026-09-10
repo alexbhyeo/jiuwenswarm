@@ -10,6 +10,7 @@ import type {
   RsiTreeGetResult,
   RsiReportGetResult,
   RsiUsageGetResult,
+  RsiUsage,
   RsiTaskStatus,
   RsiTrainingStatusChangedPayload,
   RsiTrainingProgressPayload,
@@ -28,6 +29,7 @@ interface RsiDetailState {
     total: number;
     score: number | null;
     baseline: number | null;
+    usage: RsiUsage | null;
     usageCost: number | null;
   } | null;
   // P3 可能先于首次 tree.get 到达；先缓存，避免丢掉实时节点。
@@ -81,6 +83,9 @@ function emptyDetail(): RsiDetailState {
   };
 }
 
+// Polling and push-triggered refreshes share one in-flight request per task.
+const detailRequests = new Map<string, Promise<void>>();
+
 export const useRsiStore = create<RsiState>((set, get) => ({
   list: [],
   listLoading: false,
@@ -108,39 +113,49 @@ export const useRsiStore = create<RsiState>((set, get) => ({
     set({ selectedTaskId: taskId });
   },
 
-  refreshDetail: async (taskId) => {
-    set({ detailLoading: true });
-    try {
-      const [{ rsiTaskGet, rsiReportGet, rsiUsageGet, rsiTreeGet }] = await Promise.all([import('./rsiApi')]);
-      const [taskResult, reportResult, usageResult, treeResult] = await Promise.allSettled([
-        rsiTaskGet(taskId),
-        rsiReportGet(taskId),
-        rsiUsageGet(taskId),
-        rsiTreeGet(taskId),
-      ]);
-      if (taskResult.status === 'rejected') throw taskResult.reason;
-      const task = taskResult.value;
-      const report = reportResult.status === 'fulfilled' ? reportResult.value : null;
-      const usage = usageResult.status === 'fulfilled' ? usageResult.value : null;
-      const tree = treeResult.status === 'fulfilled' ? treeResult.value : null;
-      set((state) => ({
-        detail: {
-          ...state.detail,
-          [taskId]: {
-            ...(state.detail[taskId] ?? emptyDetail()),
-            task,
-            report,
-            usage,
-            tree: tree ? mergeTree(tree, state.detail[taskId]?.pendingTreeNodes ?? []) : null,
-            pendingTreeNodes: tree ? [] : (state.detail[taskId]?.pendingTreeNodes ?? []),
-          },
-        },
-        detailLoading: false,
-      }));
-    } catch (e) {
-      set({ detailLoading: false });
-      console.error('[rsi] refreshDetail failed', e);
-    }
+  refreshDetail: (taskId) => {
+    const pending = detailRequests.get(taskId);
+    if (pending) return pending;
+    const request = Promise.resolve()
+      .then(async () => {
+        set({ detailLoading: true });
+        try {
+          const [{ rsiTaskGet, rsiReportGet, rsiUsageGet, rsiTreeGet }] = await Promise.all([import('./rsiApi')]);
+          const [taskResult, reportResult, usageResult, treeResult] = await Promise.allSettled([
+            rsiTaskGet(taskId),
+            rsiReportGet(taskId),
+            rsiUsageGet(taskId),
+            rsiTreeGet(taskId),
+          ]);
+          if (taskResult.status === 'rejected') throw taskResult.reason;
+          const task = taskResult.value;
+          const report = reportResult.status === 'fulfilled' ? reportResult.value : null;
+          const usage = usageResult.status === 'fulfilled' ? usageResult.value : null;
+          const tree = treeResult.status === 'fulfilled' ? treeResult.value : null;
+          set((state) => ({
+            detail: {
+              ...state.detail,
+              [taskId]: {
+                ...(state.detail[taskId] ?? emptyDetail()),
+                task,
+                report,
+                usage,
+                tree: tree ? mergeTree(tree, state.detail[taskId]?.pendingTreeNodes ?? []) : null,
+                pendingTreeNodes: tree ? [] : (state.detail[taskId]?.pendingTreeNodes ?? []),
+              },
+            },
+            detailLoading: false,
+          }));
+        } catch (e) {
+          set({ detailLoading: false });
+          console.error('[rsi] refreshDetail failed', e);
+        }
+      })
+      .finally(() => {
+        detailRequests.delete(taskId);
+      });
+    detailRequests.set(taskId, request);
+    return request;
   },
 
   setSelectedNode: (nodeId) => {
@@ -233,6 +248,7 @@ export const useRsiStore = create<RsiState>((set, get) => ({
               total: payload.total_iterations,
               score: payload.score,
               baseline: payload.baseline,
+              usage: payload.usage ?? cur.liveProgress?.usage ?? null,
               usageCost: payload.usage?.cost_estimate ?? cur.liveProgress?.usageCost ?? null,
             },
           },
