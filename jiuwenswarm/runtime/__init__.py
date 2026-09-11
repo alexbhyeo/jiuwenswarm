@@ -34,6 +34,10 @@ _EXPORTS = {
         "jiuwenswarm.runtime.session_provisioner",
         "SessionDeleteResult",
     ),
+    "SessionDescriptor": (
+        "jiuwenswarm.runtime.session_provisioner",
+        "SessionDescriptor",
+    ),
     "SessionForkInput": (
         "jiuwenswarm.runtime.session_provisioner",
         "SessionForkInput",
@@ -81,6 +85,10 @@ _EXPORTS = {
     "SessionSwitchResult": (
         "jiuwenswarm.runtime.session_provisioner",
         "SessionSwitchResult",
+    ),
+    "RuntimeSessionCoordinator": (
+        "jiuwenswarm.runtime.session",
+        "RuntimeSessionCoordinator",
     ),
     "RuntimeExecutionContext": (
         "jiuwenswarm.runtime.context",

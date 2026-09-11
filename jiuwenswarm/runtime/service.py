@@ -18,9 +18,10 @@ from jiuwenswarm.common.schema.message import ReqMethod
 from jiuwenswarm.runtime.session_provisioner import (
     PreparedSessionProvision,
     RuntimeSessionProvisioner,
-    SessionDeleteResult,
     SessionCreateInput,
     SessionCreateResult,
+    SessionDeleteResult,
+    SessionDescriptor,
     SessionForkInput,
     SessionForkResult,
     SessionProvisionCommitContext,
@@ -29,6 +30,12 @@ from jiuwenswarm.runtime.session_provisioner import (
     SessionProvisionState,
     SessionSwitchInput,
     SessionSwitchResult,
+)
+from jiuwenswarm.runtime.session import (
+    RuntimeSessionCoordinator,
+    RuntimeSessionState,
+    SessionPersistencePolicy,
+    SessionWorkKind,
 )
 from jiuwenswarm.server.runtime.agent_manager import AgentManager
 
@@ -264,6 +271,7 @@ class AgentRuntime:
         admission_controller: Any | None = None,
         session_delete_lifecycle: SessionDeleteLifecycle | None = None,
         enable_kvc_tracking: bool = False,
+        session_coordinator: RuntimeSessionCoordinator | None = None,
     ) -> None:
         self._agent_manager = agent_manager or AgentManager()
         self._initializer = initializer or _initialize_runtime_dependencies
@@ -285,6 +293,7 @@ class AgentRuntime:
             delete_lifecycle=session_delete_lifecycle,
         )
         self._enable_kvc_tracking = bool(enable_kvc_tracking)
+        self._session_coordinator = session_coordinator or RuntimeSessionCoordinator()
         self._stateless_agents: dict[str, Any] = {}
         self._lifecycle_lock = asyncio.Lock()
         self._session_provision_prepares = 0
@@ -302,6 +311,10 @@ class AgentRuntime:
     @property
     def plan_controller(self) -> PlanModeController:
         return self._plan_controller
+
+    @property
+    def session_coordinator(self) -> RuntimeSessionCoordinator:
+        return self._session_coordinator
 
     def set_admission_controller(self, controller: Any | None) -> None:
         """Attach optional host-owned scheduling admission to chat execution."""
@@ -398,9 +411,60 @@ class AgentRuntime:
 
             if not is_valid_session_id(requested):
                 raise ValueError("invalid session_id")
-        return await self._agent_manager.create_session(
+        resolved_session_id = await self._agent_manager.create_session(
             channel_id=channel_id,
             session_id=requested or None,
+        )
+        await self.register_session(
+            session_id=resolved_session_id,
+            channel_id=channel_id,
+        )
+        return resolved_session_id
+
+    async def describe_session(
+        self,
+        *,
+        session_id: str,
+    ) -> SessionDescriptor | None:
+        """Return persisted routing facts without exposing storage internals.
+
+        This transport-neutral lookup lets local Runtime clients validate an
+        explicit resume target without importing storage helpers or relying on
+        AgentServer's ``session.list`` handler.
+        """
+        self._require_started()
+        target = str(session_id or "").strip()
+        if not target:
+            return None
+
+        from jiuwenswarm.common.utils import get_agent_sessions_dir
+        from jiuwenswarm.server.runtime.session.session_history import (
+            resolve_session_dir,
+        )
+
+        session_dir, _invalid_reason = resolve_session_dir(
+            target,
+            sessions_root=get_agent_sessions_dir(),
+        )
+        if session_dir is None or not session_dir.is_dir():
+            return None
+
+        from jiuwenswarm.server.runtime.session.session_metadata import (
+            get_session_metadata,
+        )
+
+        metadata = get_session_metadata(
+            target,
+            cache_bust=True,
+            enable_writeback=False,
+        )
+        return SessionDescriptor(
+            session_id=target,
+            channel_id=str(metadata.get("channel_id") or "").strip(),
+            mode=str(metadata.get("mode") or "").strip(),
+            work_mode=str(metadata.get("work_mode") or "").strip().lower(),
+            project_id=str(metadata.get("project_id") or "").strip(),
+            project_dir=str(metadata.get("project_dir") or "").strip(),
         )
 
     async def prepare_session_fork(
@@ -474,11 +538,29 @@ class AgentRuntime:
         async with self._lifecycle_lock:
             self._require_started()
         try:
-            return await self._session_provisioner.commit_session_provision(
+            result = await self._session_provisioner.commit_session_provision(
                 prepared,
                 timing=timing,
                 context=context,
             )
+            if isinstance(result, SessionCreateResult):
+                mode = result.canonical_mode
+                work_mode = result.work_mode
+            elif isinstance(result, SessionSwitchResult):
+                mode = result.mode
+                work_mode = None
+            else:
+                mode = None
+                work_mode = None
+            if mode is not None and self.is_single_agent_session_mode(
+                mode,
+                work_mode=work_mode,
+            ):
+                await self.register_session(
+                    session_id=result.session_id,
+                    channel_id=result.channel_id,
+                )
+            return result
         finally:
             self._discard_finalized_session_provision(prepared)
 
@@ -503,6 +585,53 @@ class AgentRuntime:
             SessionProvisionState.ABORTED,
         }:
             self._pending_session_provisions.discard(prepared)
+
+    async def register_session(self, *, session_id: str, channel_id: str) -> None:
+        """Adopt an existing product Session into this Runtime.
+
+        Product create/switch and direct process callers converge here after
+        durable lifecycle work, without reallocating the ID or touching
+        metadata.
+        """
+        if self._closed:
+            raise RuntimeStateError("runtime is already closed")
+        await self._session_coordinator.register_session(
+            session_id,
+            channel_id,
+            SessionPersistencePolicy.PERSISTENT,
+        )
+
+    def owns_session(self, session_id: str | None) -> bool:
+        """Return whether the Coordinator owns the current Session generation."""
+        snapshot = (
+            self._session_coordinator.snapshot_session(session_id)
+            if session_id
+            else None
+        )
+        return bool(snapshot and snapshot.state is not RuntimeSessionState.CLOSED)
+
+    @staticmethod
+    def is_single_agent_session_mode(
+        mode: object,
+        *,
+        work_mode: object = None,
+    ) -> bool:
+        """Return whether a mode uses the single-Agent Session Runtime."""
+        from jiuwenswarm.common.mode_matrix import (
+            NEW_AGENT_CODE_NORMAL,
+            NEW_AGENT_WORK_NORMAL,
+            deprecate_mode,
+        )
+        from jiuwenswarm.runtime.request import resolve_agent_request_mode
+
+        _mode, _sub_mode, canonical = resolve_agent_request_mode(
+            mode,
+            work_mode=work_mode,
+        )
+        return deprecate_mode(canonical) in {
+            NEW_AGENT_WORK_NORMAL,
+            NEW_AGENT_CODE_NORMAL,
+        }
 
     async def prepare_chat_turn(
         self,
@@ -559,6 +688,13 @@ class AgentRuntime:
         ):
             await self._clear_pending_interaction(
                 request.session_id or "default"
+            )
+        if request.session_id and self.owns_session(request.session_id):
+            params = request.params if isinstance(request.params, dict) else {}
+            target_request_id = str(params.get("target_request_id") or "").strip()
+            await self._session_coordinator.cancel_execution(
+                request.session_id,
+                request_id=target_request_id or None,
             )
         return response
 
@@ -624,6 +760,27 @@ class AgentRuntime:
 
         token = set_runtime_context(self, self._agent_manager)
         try:
+            work_kind = self.session_work_kind(request)
+            if work_kind is not None:
+                await self._ensure_session_registered(request)
+                if self._has_control_target(request):
+                    return await self._session_coordinator.deliver_control(
+                        request.session_id or "default",
+                        self._control_request_id(request),
+                        lambda: self._deliver_control_started(request),
+                        suspension_key=self._waiting_control_id,
+                    )
+                return await self._session_coordinator.run_unary(
+                    request.session_id or "default",
+                    request.request_id,
+                    work_kind,
+                    lambda: self._invoke_started(
+                        request,
+                        trigger_hook=trigger_hook,
+                        on_control_event=on_control_event,
+                    ),
+                    suspension_key=self._waiting_control_id,
+                )
             return await self._invoke_started(
                 request,
                 trigger_hook=trigger_hook,
@@ -706,7 +863,10 @@ class AgentRuntime:
                         events=events,
                         handler=on_control_event,
                     )
-            response = await agent.process_message(request)
+            if self.uses_session_runtime(request):
+                response = await agent.execute_message(request)
+            else:
+                response = await agent.process_message(request)
             response_event = RuntimeEvent.from_agent_message(
                 response,
                 request_id=request.request_id,
@@ -841,13 +1001,40 @@ class AgentRuntime:
             set_runtime_context,
         )
 
-        stream = self._stream_started(
-            request,
-            trigger_hook=trigger_hook,
-            on_control_event=on_control_event,
-            background=background,
-            on_agent_ready=on_agent_ready,
-        )
+        work_kind = self.session_work_kind(request, background=background)
+        if work_kind is not None:
+            await self._ensure_session_registered(request)
+            if self._has_control_target(request):
+                events = await self._session_coordinator.deliver_control(
+                    request.session_id or "default",
+                    self._control_request_id(request),
+                    lambda: self._deliver_control_started(request),
+                    suspension_key=self._waiting_control_id,
+                )
+                for event in events:
+                    yield event
+                return
+            stream = self._session_coordinator.run_stream(
+                request.session_id or "default",
+                request.request_id,
+                work_kind,
+                lambda: self._stream_started(
+                    request,
+                    trigger_hook=trigger_hook,
+                    on_control_event=on_control_event,
+                    background=background,
+                    on_agent_ready=on_agent_ready,
+                ),
+                suspension_key=self._waiting_control_id,
+            )
+        else:
+            stream = self._stream_started(
+                request,
+                trigger_hook=trigger_hook,
+                on_control_event=on_control_event,
+                background=background,
+                on_agent_ready=on_agent_ready,
+            )
         try:
             while True:
                 # Never keep a ContextVar token across a yield boundary.  An
@@ -1078,6 +1265,50 @@ class AgentRuntime:
                 metadata=request.metadata,
             )
 
+    async def _deliver_control_started(
+        self,
+        request: AgentRequest,
+    ) -> list[RuntimeEvent]:
+        """Inject control input without opening another Session work turn."""
+        from jiuwenswarm.runtime.events import RuntimeEvent
+
+        channel_id = request.channel_id or "default"
+        await self._clear_pending_interaction(
+            request.session_id or "default",
+            self._control_request_id(request),
+        )
+        lookup = getattr(self._agent_manager, "get_agent_for_session_nowait", None)
+        agent = (
+            lookup(channel_id, request.session_id or "")
+            if callable(lookup)
+            else None
+        )
+        if agent is None:
+            raise RuntimeError(
+                f"session has no active agent: {request.session_id or 'default'}"
+            )
+        deliver = getattr(agent, "deliver_control_input", None)
+        if not callable(deliver):
+            raise RuntimeError("active agent does not accept control input")
+        events: list[RuntimeEvent] = []
+        response_stream = deliver(request)
+        try:
+            async for chunk in response_stream:
+                events.append(
+                    RuntimeEvent.from_agent_message(
+                        chunk,
+                        request_id=request.request_id,
+                        channel_id=channel_id,
+                        session_id=request.session_id,
+                        default_agent_ref=request.agent_ref,
+                    )
+                )
+        finally:
+            close_stream = getattr(response_stream, "aclose", None)
+            if callable(close_stream):
+                await close_stream()
+        return events
+
     async def cleanup_session(
         self,
         *,
@@ -1100,6 +1331,8 @@ class AgentRuntime:
         """
         if self._closed:
             raise RuntimeStateError("runtime is already closed")
+        if self.owns_session(session_id):
+            await self._session_coordinator.close_session(session_id)
         cleaned = await self._agent_manager.cleanup_session_runtime(
             channel_id=channel_id,
             session_id=session_id,
@@ -1152,6 +1385,10 @@ class AgentRuntime:
                     "commit or abort them before close"
                 )
             cleanup_errors: list[BaseException] = []
+            try:
+                await self._session_coordinator.close()
+            except BaseException as exc:
+                cleanup_errors.append(exc)
             try:
                 await self._session_provisioner.close_background_tasks()
             except BaseException as exc:
@@ -1275,6 +1512,100 @@ class AgentRuntime:
             work_mode=work_mode,
         )
         return is_team_mode(canonical)
+
+    @classmethod
+    def uses_session_runtime(
+        cls,
+        request: AgentRequest,
+        *,
+        background: bool = False,
+    ) -> bool:
+        """Return whether the Session Runtime owns this execution."""
+        return cls.session_work_kind(request, background=background) is not None
+
+    @classmethod
+    def session_work_kind(
+        cls,
+        request: AgentRequest,
+        *,
+        background: bool = False,
+    ) -> SessionWorkKind | None:
+        """Classify product Session work at the Runtime boundary."""
+        if background or not request.session_id:
+            return None
+        params = request.params if isinstance(request.params, dict) else {}
+        if not cls.is_single_agent_session_mode(
+            params.get("mode"),
+            work_mode=params.get("work_mode"),
+        ):
+            return None
+        if cls._is_interrupt_resume_request(request):
+            return SessionWorkKind.CONTROL_INPUT
+        if request.req_method is ReqMethod.COMMAND_GOAL:
+            action = str(params.get("action") or "get").strip().lower()
+            return (
+                SessionWorkKind.GOAL_STREAM
+                if action in {"set", "resume"}
+                else SessionWorkKind.GOAL_CONTROL
+            )
+        if request.req_method not in cls._chat_turn_methods():
+            return None
+        if params.get("attach_goal") is True:
+            return SessionWorkKind.GOAL_ATTACH
+        input_mode = str(
+            params.get("input_mode") or params.get("runtime_mode") or ""
+        ).strip().lower()
+        if input_mode in {"follow_up", "steer"}:
+            return SessionWorkKind.CONTROL_INPUT
+        return (
+            SessionWorkKind.CHAT_STREAM
+            if request.is_stream
+            else SessionWorkKind.CHAT_UNARY
+        )
+
+    async def _ensure_session_registered(self, request: AgentRequest) -> None:
+        """Idempotently adopt direct callers that already own a product ID."""
+        session_id = str(request.session_id or "").strip()
+        if self.owns_session(session_id):
+            return
+        await self.register_session(
+            session_id=session_id,
+            channel_id=request.channel_id or "default",
+        )
+
+    @staticmethod
+    def _control_request_id(request: AgentRequest) -> str:
+        params = request.params if isinstance(request.params, dict) else {}
+        return str(params.get("request_id") or request.request_id or "")
+
+    def _has_control_target(self, request: AgentRequest) -> bool:
+        return self._is_interrupt_resume_request(
+            request
+        ) and self._session_coordinator.has_control_target(
+            request.session_id or "default",
+            self._control_request_id(request),
+        )
+
+    @staticmethod
+    def _waiting_control_id(value: object) -> str | None:
+        events = value if isinstance(value, (list, tuple)) else (value,)
+        for event in events:
+            payload = getattr(event, "payload", None)
+            if not isinstance(payload, dict):
+                continue
+            event_type = getattr(event, "event_type", "")
+            key = (
+                "request_id"
+                if event_type == "chat.ask_user_question"
+                else "interaction_id"
+                if event_type == "harness.activate_interaction"
+                else None
+            )
+            if key is not None:
+                control_id = str(payload.get(key) or "").strip()
+                if control_id:
+                    return control_id
+        return None
 
     async def _record_kvc_chat_started(self, request: AgentRequest) -> None:
         """Record a best-effort KVC task fact without changing chat success."""

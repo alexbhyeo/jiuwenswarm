@@ -78,6 +78,7 @@ from jiuwenswarm.common.config import (
     update_updater_in_config,
     update_proactive_recommendation_in_config,
     update_trajectory_ui_in_config,
+    update_task_full_duplex_in_config,
     update_skill_evolution_enabled_in_config,
 )
 from jiuwenswarm.common.kv_cache_affinity_config import (
@@ -119,6 +120,10 @@ from jiuwenswarm.common.work_mode import (
     is_default_project_id,
 )
 from jiuwenswarm.common.version import __version__
+from jiuwenswarm.gateway.channel_manager.web.task_asr import (
+    TaskAsrError,
+    transcribe_task_audio,
+)
 
 for _jiuwen_log in LogManager.get_all_loggers().values():
     _jiuwen_log.set_level(logging.INFO)
@@ -168,6 +173,11 @@ _MULTIMODAL_RELOAD_ENV_KEYS = {
     "VISUAL_GEN_PROVIDER",
     "VISUAL_GEN_PROTOCOL",
 }
+_ASR_ENV_KEYS = {
+    "ASR_API_BASE",
+    "ASR_API_KEY",
+    "ASR_MODEL_NAME",
+}
 
 
 @dataclass(frozen=True)
@@ -191,6 +201,8 @@ class _ConfigChangeSet:
             scopes.add("model")
         if _MULTIMODAL_RELOAD_ENV_KEYS & set(self.env_updates):
             scopes.add("multimodal")
+        if _ASR_ENV_KEYS & set(self.env_updates):
+            scopes.add("web_ui")
         if _SEARCH_RELOAD_ENV_KEYS & set(self.env_updates):
             scopes.add("search")
         for key in self.yaml_updated:
@@ -209,6 +221,8 @@ class _ConfigChangeSet:
                 scopes.add("agent_runtime")
             elif key_text == "trajectory_ui_enabled":
                 scopes.update({"agent_runtime", "web_ui"})
+            elif key_text == "task_full_duplex_enabled":
+                scopes.add("web_ui")
             elif key_text.startswith("a2ui_") or key_text == "setup_guide_enabled":
                 scopes.add("web_ui")
             else:
@@ -602,7 +616,9 @@ def _merge_models_for_replace_all(
                 or not _values_match(item["model_provider"], resolved_mcc.get("client_provider"))
             ):
                 new_mcc["client_provider"] = item["model_provider"]
-            if not _values_match(item["temperature"], resolved_mco.get("temperature")):
+            if item["temperature"] is None:
+                new_mco.pop("temperature", None)
+            elif not _values_match(item["temperature"], resolved_mco.get("temperature")):
                 new_mco["temperature"] = item["temperature"]
             reasoning_level = str(item.get("reasoning_level") or "").strip()
             # 不能用 _values_match：legacy YAML 1.1 会把裸 on/off 读成布尔，
@@ -660,7 +676,7 @@ def _merge_models_for_replace_all(
                     **({"endpoint_profile": item["endpoint_profile"]} if item.get("endpoint_profile") else {}),
                 },
                 "model_config_obj": {
-                    "temperature": item["temperature"],
+                    **({"temperature": item["temperature"]} if item["temperature"] is not None else {}),
                     **({"reasoning_level": _serialize_reasoning_level(item.get("reasoning_level"))}
                        if item.get("reasoning_level") else {}),
                 },
@@ -1077,6 +1093,10 @@ _CONFIG_SET_ENV_MAP = {
     "free_search_ddg_enabled": "FREE_SEARCH_DDG_ENABLED",
     "free_search_bing_enabled": "FREE_SEARCH_BING_ENABLED",
     "free_search_proxy_url": "FREE_SEARCH_PROXY_URL",
+    # General ASR used by regular task chat. JoyAI keeps its VOICE_ASR_* settings.
+    "asr_api_base": "ASR_API_BASE",
+    "asr_api_key": "ASR_API_KEY",
+    "asr_model": "ASR_MODEL_NAME",
     # agents
     "skills": "SKILLS",
     "max_iterations": "MAX_ITERATIONS",
@@ -1105,6 +1125,7 @@ _CONFIG_YAML_KEYS = frozenset({
     "memory_forbidden_description",
     "a2ui_enabled",
     "trajectory_ui_enabled",
+    "task_full_duplex_enabled",
     "proactive_recommendation_enabled",
     "proactive_recommendation_max_recommend_per_day",
     "proactive_recommendation_max_rounds_per_tick",
@@ -2991,6 +3012,10 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             payload["trajectory_ui_enabled"] = (
                 "true" if trajectory_cfg.get("enabled", False) else "false"
             )
+            experimental_cfg = raw.get("experimental") or {}
+            payload["task_full_duplex_enabled"] = (
+                "true" if experimental_cfg.get("task_full_duplex_enabled", False) else "false"
+            )
             payload.update(_flatten_swarmflow_for_config_panel(raw))
             payload.update(_flatten_external_cli_agents_for_config_panel(raw))
             payload.update(_flatten_symphony_for_config_panel(raw))
@@ -3008,7 +3033,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             payload["proactive_recommendation_max_rounds_per_tick"] = str(
                 proactive_cfg.get("max_rounds_per_tick", 20))
             models_cfg = resolved.get("models") or {}
-            payload["enable_free_models"] = "true" if models_cfg.get("enable_free_models", True) else "false"
+            payload["enable_free_models"] = "true" if models_cfg.get("enable_free_models", False) else "false"
         except Exception:  # noqa: BLE001
             payload.setdefault("context_engine_enabled", "false")
             payload.setdefault("kv_cache_affinity_enabled", "false")
@@ -3021,6 +3046,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             for key, value in get_default_a2ui_config_payload().items():
                 payload.setdefault(key, value)
             payload.setdefault("trajectory_ui_enabled", "false")
+            payload.setdefault("task_full_duplex_enabled", "false")
             for key, (_, value_type, default) in {
                 **_SYMPHONY_CONFIG_SPECS,
                 **_SKILL_RETRIEVAL_CONFIG_SPECS,
@@ -3035,7 +3061,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             payload.setdefault("proactive_recommendation_enabled", "false")
             payload.setdefault("proactive_recommendation_max_recommend_per_day", "10")
             payload.setdefault("proactive_recommendation_max_rounds_per_tick", "20")
-            payload.setdefault("enable_free_models", "true")
+            payload.setdefault("enable_free_models", "false")
         await channel.send_response(ws, req_id, ok=True, payload=payload)
 
     async def _external_cli_detect(ws, req_id, params, session_id):
@@ -3288,6 +3314,8 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
                     update_a2ui_in_config(update)
                 elif param_key == "trajectory_ui_enabled":
                     update_trajectory_ui_in_config(parsed)
+                elif param_key == "task_full_duplex_enabled":
+                    update_task_full_duplex_in_config(parsed)
                 elif param_key == "proactive_recommendation_enabled":
                     update_proactive_recommendation_in_config({"enabled": parsed})
                 elif param_key == "proactive_recommendation_max_recommend_per_day":
@@ -3412,10 +3440,16 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
                 raise _ConfigBadRequest(f"models[{idx}].api_key is required")
             if model_provider and model_provider not in available_model_providers:
                 raise _ConfigBadRequest(f"models[{idx}].model_provider must be one of: {available_model_providers}")
-            try:
-                temperature = float(item.get("temperature", 0.95))
-            except (ValueError, TypeError):
-                temperature = 0.95
+            raw_temperature = item.get("temperature")
+            if raw_temperature is None or raw_temperature == "":
+                temperature = None
+            else:
+                try:
+                    temperature = float(raw_temperature)
+                except (ValueError, TypeError) as exc:
+                    raise _ConfigBadRequest(
+                        f"models[{idx}].temperature must be a number or empty"
+                    ) from exc
             try:
                 timeout = int(item.get("timeout", 1800))
             except (ValueError, TypeError):
@@ -3758,7 +3792,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
                     "api_base": mcc.get("api_base", ""),
                     "api_key": mcc.get("api_key", ""),
                     "model_provider": mcc.get("client_provider", ""),
-                    "temperature": mco.get("temperature", 0.95),
+                    "temperature": mco.get("temperature"),
                     "reasoning_level": _reasoning_level_display(mco.get("reasoning_level")),
                     "is_default": is_default,
                     # agentos 备份模型标记：由 get_default_models 经 _source=="agentos"
@@ -3793,7 +3827,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
                         "api_base": mcc.get("api_base", ""),
                         "api_key": mcc.get("api_key", ""),
                         "model_provider": mcc.get("client_provider", ""),
-                        "temperature": mco.get("temperature", 0.95),
+                        "temperature": mco.get("temperature"),
                         "reasoning_level": _reasoning_level_display(mco.get("reasoning_level")),
                         "is_default": entry.get("is_default"),
                         "is_agentos": False,
@@ -3977,6 +4011,28 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
         else:
             channels = []
         await channel.send_response(ws, req_id, ok=True, payload={"channels": channels})
+
+    async def _task_asr_transcribe(ws, req_id, params, session_id):
+        del session_id
+        if not isinstance(params, dict):
+            await channel.send_response(
+                ws, req_id, ok=False, error="params must be object", code="BAD_REQUEST"
+            )
+            return
+        try:
+            text = await transcribe_task_audio(params)
+        except TaskAsrError as exc:
+            await channel.send_response(
+                ws, req_id, ok=False, error=str(exc), code=exc.code
+            )
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[task.asr.transcribe] unexpected failure")
+            await channel.send_response(
+                ws, req_id, ok=False, error=str(exc), code="INTERNAL_ERROR"
+            )
+            return
+        await channel.send_response(ws, req_id, ok=True, payload={"text": text})
 
     # ── vendors.* handlers ──────────────
 
@@ -6648,6 +6704,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
     channel.register_method("vendors.list", _vendors_list)
     channel.register_method("vendors.fetch_models", _vendors_fetch_models)
     channel.register_method("channel.get", _channel_get)
+    channel.register_method("task.asr.transcribe", _task_asr_transcribe)
     channel.register_method("openai_account.auth.status", _openai_account_auth_status)
     channel.register_method("openai_account.auth.start_login", _openai_account_auth_start_login)
     channel.register_method("openai_account.auth.pending_login", _openai_account_auth_pending_login)

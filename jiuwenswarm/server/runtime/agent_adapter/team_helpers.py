@@ -24,6 +24,7 @@ from openjiuwen.agent_teams.paths import (
 )
 from openjiuwen.agent_teams.runtime import RunActionKind
 from openjiuwen.agent_teams.runtime.background_task_controller import BackgroundTaskController
+from openjiuwen.agent_teams.schema.status import MemberStatus
 from openjiuwen.agent_teams.schema.team import TeamRole
 from openjiuwen.agent_teams.monitor import TeamStreamLogger
 from openjiuwen.core.runner import Runner
@@ -1699,6 +1700,9 @@ async def _announce_team_roster(
         fresh: list[dict[str, Any]] = []
         for member in members:
             candidate_id = str(member.get("member_id") or "").strip()
+            member_status = str(member.get("status") or "").strip().lower()
+            if member_status == MemberStatus.SHUTDOWN.value:
+                continue
             if not candidate_id or candidate_id in announced_members:
                 continue
             fresh.append(member)
@@ -3812,9 +3816,12 @@ async def _consume_workflow_events(
     并检测 ``waiting_for_human`` agent 生成 ``chat.ask_user_question`` 事件。
     """
     is_tui = _resolve_channel_id(channel_id) == "tui"
-    seen_phase: dict[str, str] = {}
-    seen_agent: dict[str, str] = {}
-    spawned_members: set[str] = set()
+    # Phase/agent dedup lives on the handler (session-scoped): this loop is
+    # cancelled on team pause, and a resume relaunch replays the cached
+    # prefix — a fresh per-loop table would re-emit the replay as new tasks.
+    seen_phase = workflow_handler.seen_phase
+    seen_agent = workflow_handler.seen_agent
+    spawned_members = workflow_handler.spawned_members
     seen_human_waiting: set[str] = set()
     try:
         logger.info(

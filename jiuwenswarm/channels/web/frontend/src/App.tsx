@@ -86,6 +86,7 @@ import {
   useWorkspaceStore,
   useCronStore,
   useSubagentStore,
+  usePersonalContextStore,
 } from './stores';
 import { useChatRoute } from './multi-session/routing/useChatRoute';
 import { ConversationSidebar, type NewConversationOptions } from './multi-session/sidebar/ConversationSidebar';
@@ -312,6 +313,10 @@ function AppContent({
   const [trajectoryUiRequested, setTrajectoryUiRequested] = useState(false);
 
   const [activeNav, setActiveNav] = useState<MainNavKey>('chat');
+  const masterEnabled = usePersonalContextStore(
+    (s) => s.config.collection_enabled || s.config.agent_use_enabled,
+  );
+  const loadPersonalContextConfig = usePersonalContextStore((s) => s.loadConfig);
   const [serverConfig, setServerConfig] = useState<Record<string, unknown> | null>(null);
   const kvCacheAffinityEnabled = normalizeConfigBoolean(
     serverConfig?.kv_cache_affinity_enabled,
@@ -354,7 +359,6 @@ function AppContent({
   } = useResponsiveLayout();
 
   const [modelSetupGuideStep, setModelSetupGuideStep] = useState<ModelSetupGuideStep | null>(null);
-  const [modelSetupGuideManual, setModelSetupGuideManual] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
@@ -408,6 +412,12 @@ function AppContent({
       setActiveNav('chat');
     }
   }, [activeNav]);
+
+  useEffect(() => {
+    if (!masterEnabled && activeNav === 'personalContext') {
+      setActiveNav('chat');
+    }
+  }, [activeNav, masterEnabled]);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -766,10 +776,14 @@ function AppContent({
   );
   const hiddenNavItems = useMemo<MainNavKey[]>(() => {
     const base = getHiddenNavItemsForPlatform(frontendPlatform);
-    if (FEATURE_PERSONAL_CONTEXT_UI) return base;
     // feature 关闭时移除全部个人上下文入口
-    return [...base, 'personalContext', 'personalContextSettings'];
-  }, [frontendPlatform]);
+    if (!FEATURE_PERSONAL_CONTEXT_UI) {
+      return [...base, 'personalContext', 'personalContextSettings'];
+    }
+    // 总开关关闭时隐藏导航入口（设置页入口保留，供打开总开关）
+    if (!masterEnabled) return [...base, 'personalContext'];
+    return base;
+  }, [frontendPlatform, masterEnabled]);
 
   useEffect(() => {
     if (!serverConfig) {
@@ -1099,11 +1113,6 @@ function AppContent({
             applySubagentHistoryReplay(sid, items);
           }
         };
-        const hasSubagentFinal = () => {
-          const currentRuntime = useSubagentStore.getState().getRuntime(sid);
-          return Object.values(currentRuntime?.turnsBySubagentId[subagentId] ?? {})
-            .some(turn => turn.result?.source === 'transcript');
-        };
 
         const firstPage = await fetchSubagentHistoryPage(1, 1);
         if (disposed || !firstPage) {
@@ -1120,20 +1129,6 @@ function AppContent({
           applyPage,
           waitForNextPaint: async () => {},
         });
-        if (prefetchOutcome === 'completed' && firstPage.totalPages === 1 && !hasSubagentFinal()) {
-          const fallbackPage = await fetchSubagentHistoryPage(2, 2);
-          if (fallbackPage) {
-            applyPage(fallbackPage);
-            await prefetchHistoryPages({
-              initialLoadedPages: 2,
-              initialTotalPages: fallbackPage.totalPages,
-              isCurrent: () => !disposed,
-              fetchPage: (pageIdx, totalPages) => fetchSubagentHistoryPage(pageIdx, totalPages),
-              applyPage,
-              waitForNextPaint: async () => {},
-            });
-          }
-        }
         if (disposed || prefetchOutcome !== 'completed') {
           cleanup();
           return;
@@ -1344,10 +1339,7 @@ function AppContent({
           settle({ pageIdx, totalPages, result });
         },
         onEmpty: (emptyTotalPages) => {
-          if (pageIdx > 1) {
-            settle(null);
-            return;
-          }
+          // 已正常结束的页面即使没有主对话展示项，也必须推进页码。
           const totalPages = emptyTotalPages ?? fallbackTotalPages;
           settle({ pageIdx, totalPages, result: null });
         },
@@ -1495,8 +1487,7 @@ function AppContent({
         modelSetupGuideEvaluatedRef.current = true;
         if (!oauthNavRestoredRef.current && (shouldPreviewModelSetupGuide() || isSetupGuideEnabled(config.setup_guide_enabled))) {
           setActiveNav('chat');
-          setModelSetupGuideManual(false);
-          setModelSetupGuideStep(0);
+          setModelSetupGuideStep(1);
         }
       }
     } catch (error) {
@@ -1611,13 +1602,6 @@ function AppContent({
       console.warn('Failed to refresh models list:', error);
     }
   }, [request, setAvailableModels]);
-
-  const handleSettingsConfigSaved = useCallback(
-    async (updatedKeys: readonly string[]) => {
-      if (updatedKeys.includes('enable_free_models')) await handleModelsRefresh();
-    },
-    [handleModelsRefresh],
-  );
 
   const detectExternalCli = useCallback(async (cliAgent: ExternalCliAgentKind, cliPath?: string) => {
     return request<{
@@ -1852,6 +1836,14 @@ function AppContent({
       })
       .catch(() => {});
   }, [isConnected]);
+
+  // 连接成功后拉取个人上下文配置，使总开关（派生态）在刷新后与后端持久化状态一致
+  useEffect(() => {
+    if (!isConnected || !FEATURE_PERSONAL_CONTEXT_UI) return;
+    void loadPersonalContextConfig().catch(() => {
+      // 静默；未配置时后端返回投影，拉取失败不影响主流程
+    });
+  }, [isConnected, loadPersonalContextConfig]);
 
   // 当会话 ID 变化或页面加载时，自动加载历史会话
   useEffect(() => {
@@ -2412,6 +2404,108 @@ function AppContent({
     useSessionStore.getState().setAgentSelectionIntent(NEW_CONVERSATION_ID, { kind: 'select', id: agentId });
   }, [enterNewConversation]);
 
+  const ensureApplicationPluginSession = useCallback(async (initialTitle = 'Application conversation') => {
+    const currentSessionId = sessionIdRef.current;
+    if (!currentSessionId) return null;
+    if (currentSessionId !== NEW_CONVERSATION_ID) return currentSessionId;
+    if (creatingSessionRef.current) return null;
+
+    creatingSessionRef.current = true;
+    useChatStore.getState().setProcessing(NEW_CONVERSATION_ID, true);
+    const sessionStore = useSessionStore.getState();
+    const pendingRuntime = sessionStore.getRuntime(NEW_CONVERSATION_ID);
+    const runtimeSettings = {
+      mode: pendingRuntime?.mode ?? mode,
+      selectedModelName: sessionStore.getEffectiveModelName(NEW_CONVERSATION_ID),
+      projectDir: pendingRuntime?.projectDirectory ?? null,
+      persistSession: false,
+    };
+    const baseWorkContext = getWorkContextForSession(NEW_CONVERSATION_ID);
+    const preservedProject = newConversationProjectRef.current;
+    const workContext = {
+      project_id: baseWorkContext.project_id || preservedProject?.project_id,
+      project_dir: baseWorkContext.project_dir || preservedProject?.project_dir,
+      work_mode: useWorkspaceStore.getState().workMode,
+    };
+
+    try {
+      const createParams: Record<string, unknown> = {
+        create_token: generateUuidV4(),
+        mode: runtimeSettings.mode,
+        is_swarm: runtimeSettings.mode === 'team',
+        title: createConversationTitle(initialTitle).slice(0, 100),
+        work_mode: workContext.work_mode,
+        view_id: kvcViewIdRef.current,
+        persist_session: false,
+      };
+      const previousSession = newConversationPreviousSessionRef.current;
+      if (previousSession) {
+        createParams.previous_session_id = previousSession.sessionId;
+        createParams.previous_mode = previousSession.mode;
+      }
+      if (runtimeSettings.selectedModelName) createParams.model_name = runtimeSettings.selectedModelName;
+      if (workContext.project_id) createParams.project_id = workContext.project_id;
+      if (workContext.project_dir) createParams.project_dir = workContext.project_dir;
+
+      const created = await createConversationSession(request, createParams);
+      const newSid = created.session_id;
+      const createdSession = registerCreatedConversation(
+        newSid,
+        { ...runtimeSettings, persistSession: created.persist_session },
+        Date.now(),
+        initialTitle,
+        {
+          project_id: created.project_id || workContext.project_id,
+          project_dir: created.project_dir || workContext.project_dir,
+          work_mode: created.work_mode || workContext.work_mode,
+          persist_session: created.persist_session,
+        },
+      );
+
+      (pendingRuntime?.selectedSkills ?? []).forEach((skill) => sessionStore.addSelectedSkill(newSid, skill));
+      (pendingRuntime?.enabledPlugins ?? []).forEach((id) => sessionStore.addEnabledPlugin(newSid, id));
+      (pendingRuntime?.enabledMcps ?? []).forEach((name) => sessionStore.addEnabledMcp(newSid, name));
+      if (pendingRuntime?.metadata) sessionStore.setSessionMetadata(newSid, pendingRuntime.metadata);
+      sessionStore.setAgentSelectionIntent(
+        newSid,
+        pendingRuntime?.agentSelectionIntent ?? { kind: 'keep' as const },
+      );
+      if (pendingRuntime?.enableSwarmflow) {
+        sessionStore.setSwarmflowActive(newSid, true, pendingRuntime.swarmflowBudget);
+      }
+      if (usePlanStore.getState().isActive(NEW_CONVERSATION_ID)) {
+        usePlanStore.getState().setActive(newSid, true, {
+          explicitEntry: usePlanStore.getState().hasPendingExplicitEntry(NEW_CONVERSATION_ID),
+          entrySource: usePlanStore.getState().getPendingEntrySource(NEW_CONVERSATION_ID) ?? undefined,
+        });
+      }
+
+      pendingNewConversationRef.current = false;
+      sessionStore.removeRuntime(NEW_CONVERSATION_ID);
+      usePlanStore.getState().removeRuntime(NEW_CONVERSATION_ID);
+      useGoalStore.getState().setArmed(NEW_CONVERSATION_ID, false);
+      createdSession.is_processing = false;
+      useWorkspaceStore.getState().upsertSession(createdSession, { isNew: true });
+      sessionIdsCreatedInThisPageRef.current.add(newSid);
+      useChatStore.getState().setProcessing(NEW_CONVERSATION_ID, false);
+      useChatStore.getState().setProcessing(newSid, false);
+      sessionIdRef.current = newSid;
+      setSessionId(newSid);
+      navigate({ kind: 'chat-session', sessionId: newSid }, { replace: true });
+      newConversationProjectRef.current = null;
+      newConversationPreviousSessionRef.current = null;
+      return newSid;
+    } catch (error) {
+      useChatStore.getState().setProcessing(NEW_CONVERSATION_ID, false);
+      useChatStore.getState().setThinking(NEW_CONVERSATION_ID, false);
+      console.error('Failed to create application plugin conversation:', error);
+      window.alert(t('multiSession.errors.create'));
+      return null;
+    } finally {
+      creatingSessionRef.current = false;
+    }
+  }, [mode, navigate, request, t]);
+
   const handleSendMessage = useCallback(async (content: string, mediaItems?: MediaItem[]) => {
     const currentSessionId = sessionIdRef.current;
     if (!currentSessionId) return;
@@ -2926,7 +3020,6 @@ function AppContent({
 
   const skipModelSetupGuide = useCallback(() => {
     setModelSetupGuideStep(null);
-    setModelSetupGuideManual(false);
 
     void request('config.set', { setup_guide_enabled: 'false' })
       .then(() => {
@@ -2940,23 +3033,8 @@ function AppContent({
       });
   }, [request]);
 
-  const quickSetupModelSetupGuide = useCallback(() => {
-    setModelSetupGuideStep(null);
-    setModelSetupGuideManual(false);
-    // 显式指定使用 huawei-cloud-maas-setup skill，避免 agent 自行上网搜索
-    void handleSendMessage(
-      '请使用 huawei-cloud-maas-setup 技能帮我配置华为云 MaaS 服务。'
-      + '严格按照其中的步骤引导我完成购买、获取 API Key 和配置写入。'
-    );
-  }, [handleSendMessage]);
-
-  const manualSetupModelSetupGuide = useCallback(() => {
-    setModelSetupGuideStep(1);
-  }, []);
-
   const acknowledgeModelSetupGuide = useCallback(() => {
     setModelSetupGuideStep(null);
-    setModelSetupGuideManual(false);
 
     void request('config.set', { setup_guide_enabled: 'false' })
       .then(() => {
@@ -3085,11 +3163,8 @@ const showWorkspaceDivider = effectiveTeamAreaExpanded && !showConversationNotFo
       {modelSetupGuideStep !== null ? (
         <ModelSetupGuide
           step={modelSetupGuideStep}
-          manual={modelSetupGuideManual}
           onAcknowledge={acknowledgeModelSetupGuide}
           onSkip={skipModelSetupGuide}
-          onQuickSetup={quickSetupModelSetupGuide}
-          onManualSetup={manualSetupModelSetupGuide}
         />
       ) : null}
 
@@ -3145,6 +3220,7 @@ const showWorkspaceDivider = effectiveTeamAreaExpanded && !showConversationNotFo
                     chat={(
                       <ChatPanel
                         onSendMessage={handleSendMessage}
+                        onEnsureSession={ensureApplicationPluginSession}
                         onInputIntent={kvCacheAffinityEnabled ? handleKVCInputIntent : undefined}
                         onPersistMedia={handlePersistMedia}
                         onPersistDocuments={handlePersistDocuments}
@@ -3339,7 +3415,6 @@ const showWorkspaceDivider = effectiveTeamAreaExpanded && !showConversationNotFo
               connectionState={connectionState}
               request={settingsRequest}
               onHasChangesChange={handleSettingsHasChangesChange}
-              onConfigSaved={handleSettingsConfigSaved}
               onDetectExternalCli={detectExternalCli}
               onSelectExternalCliPath={selectExternalCliPath}
               onTrackExternalCliDependencyInstalls={trackExternalCliDependencyInstalls}

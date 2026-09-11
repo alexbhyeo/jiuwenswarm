@@ -66,7 +66,6 @@ export const SETTINGS_CONFIG_FIELDS: readonly ConfigFieldContract[] = [
   envField('embed_api_base', 'models', 'text', 'EMBED_API_BASE'),
   envField('embed_api_key', 'models', 'text', 'EMBED_API_KEY'),
   envField('embed_model', 'models', 'text', 'EMBED_MODEL'),
-  yamlField('enable_free_models', 'models', 'boolean', 'models.enable_free_models'),
 
   yamlField('skill_evolution', 'agent', 'boolean', 'react.evolution.skill_evolution'),
   yamlField('skill_retrieval_enabled', 'agent', 'boolean', 'symphony.skill_retrieval.enabled'),
@@ -125,6 +124,10 @@ export const SETTINGS_CONFIG_FIELDS: readonly ConfigFieldContract[] = [
 
   yamlField('a2ui_enabled', 'experimental', 'boolean', 'a2ui.enabled'),
   yamlField('trajectory_ui_enabled', 'experimental', 'boolean', 'trajectory_ui.enabled'),
+  yamlField('task_full_duplex_enabled', 'experimental', 'boolean', 'experimental.task_full_duplex_enabled'),
+  envField('asr_api_base', 'experimental', 'text', 'ASR_API_BASE'),
+  envField('asr_api_key', 'experimental', 'text', 'ASR_API_KEY'),
+  envField('asr_model', 'experimental', 'text', 'ASR_MODEL_NAME'),
   yamlField(
     'kv_cache_affinity_enabled',
     'experimental',

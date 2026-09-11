@@ -52,6 +52,7 @@ import { webRequest } from '../../services/webClient';
 import { useChatStore } from '../../stores/chatStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { extractTokenFromDownloadUrl } from '../../utils/fileDownloadDedup';
+import { isSkillPackageFile } from '../../utils/skillPackageFile';
 
 function openArtifactPanelForActiveMode(selectedArtifactId: string): void {
   const sessionId = useChatStore.getState().activeSessionId;
@@ -727,6 +728,7 @@ export const MessageItem = memo(function MessageItem({
             className={clsx(
               'chat-bubble relative group',
               isUser ? 'user' : 'assistant',
+              !isUser && message.presentation === 'tool_result' && 'chat-bubble--tool-result',
               !isUser && !isStreaming && 'markdown',
               isStreaming && 'streaming'
             )}
@@ -734,6 +736,9 @@ export const MessageItem = memo(function MessageItem({
             data-variant={isUser ? 'user' : 'assistant'}
             data-state={isStreaming ? 'streaming' : 'final'}
           >
+            {!isUser && message.presentation === 'tool_result' && (
+              <div className="chat-bubble__result-label">{t('chat.toolResultLabel', '工具结果')} · Jiuwen Core Agent</div>
+            )}
             {isStreaming ? (
               isUser ? (
                 <StreamingContent content={displayContent} />
@@ -872,18 +877,6 @@ function formatFileSize(bytes: number | undefined): string {
   const i = Math.floor(Math.log(bytes) / Math.log(1024));
   const size = bytes / Math.pow(1024, i);
   return `${size.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-}
-
-/** 识别可保存的 Skill 包：`.skill` / `.skill.zip` */
-function isSkillPackageFile(file: FileDownloadItem): boolean {
-  const candidates = [file.name, file.path].filter(Boolean) as string[];
-  for (const candidate of candidates) {
-    const base = candidate.replace(/\\/g, '/').split('/').pop()?.toLowerCase() || '';
-    if (base.endsWith('.skill.zip') || base.endsWith('.skill')) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function skillPackageDisplayName(file: FileDownloadItem): string {

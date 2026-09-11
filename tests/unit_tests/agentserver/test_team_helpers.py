@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from openjiuwen.agent_teams.runtime.background_task_controller import BackgroundTaskController
+from openjiuwen.agent_teams.schema.status import MemberStatus
 from openjiuwen.agent_teams.schema.team import TeamRole
 
 from jiuwenswarm.agents.harness.team.handlers.workflow_state import (
@@ -5303,6 +5304,10 @@ async def test_consume_workflow_events_broadcasts_raw_for_tui(monkeypatch):
 
     class _FakeWorkflowHandler:
         is_running = True
+        # The consumer owns the emission contract and reads these cross-class.
+        seen_phase: dict = {}
+        seen_agent: dict = {}
+        spawned_members: set = set()
 
         async def events(self):
             yield event
@@ -5343,6 +5348,10 @@ async def test_consume_workflow_events_converts_to_team_events_for_web(monkeypat
 
     class _FakeWorkflowHandler:
         is_running = True
+        # The consumer owns the emission contract and reads these cross-class.
+        seen_phase: dict = {}
+        seen_agent: dict = {}
+        spawned_members: set = set()
 
         async def events(self):
             yield event
@@ -5366,6 +5375,82 @@ async def test_consume_workflow_events_converts_to_team_events_for_web(monkeypat
 
 
 @pytest.mark.anyio
+async def test_consume_workflow_events_dedup_survives_consumer_restart(monkeypatch):
+    """A resume relaunch replays the whole event history (cached prefix):
+    every already-completed phase's agents re-emit started+completed. The
+    dedup state must live on the handler (session-scoped) — the consumer
+    loop is cancelled on team pause and restarted on wake, and a fresh
+    loop re-emitted the replayed events, double-counting finished work on
+    the task board.
+    """
+    from jiuwenswarm.agents.harness.team.handlers.workflow_monitor_handler import (
+        WorkflowMonitorHandler,
+    )
+
+    broadcasted: list[dict[str, object]] = []
+    replay = {
+        "event_type": "workflow.updated", "session_id": "s",
+        "workflow": {"id": "r", "status": "running", "phases": [{
+            "id": "p1", "name": "p1", "status": "completed",
+            "agents": [{"id": "a1", "name": "w", "status": "completed"}],
+        }]},
+    }
+    live = {
+        "event_type": "workflow.updated", "session_id": "s",
+        "workflow": {"id": "r", "status": "running", "phases": [{
+            "id": "p2", "name": "p2", "status": "running",
+            "agents": [{"id": "a2", "name": "w", "status": "running"}],
+        }]},
+    }
+
+    class _Handler(WorkflowMonitorHandler):
+        def __init__(self):
+            # Bypass the real __init__ (it needs a TeamMonitor); keep the
+            # session-scoped dedup state the consumer reads.
+            self._runs = {}
+            self.seen_phase = {}
+            self.seen_agent = {}
+            self.spawned_members = set()
+
+        is_running = True
+
+        async def events(self):
+            yield replay
+
+    # First consumer pass sees the phase-1 events (counts them), then the
+    # team pauses: the loop is cancelled, its local dedup dies.
+    class _TM:
+        def pop_held_idle(self, sid):
+            return None
+
+    handler = _Handler()
+    monkeypatch.setattr(team_helpers, "_broadcast_event", _broadcast_recorder(broadcasted))
+    monkeypatch.setattr(team_helpers, "get_team_manager", lambda cid: _TM())
+    await _TeamHelpersTestApi.consume_workflow_events("web", "s", handler)
+
+    first_pass = [e for e in broadcasted if e.get("event_type") == "team.task"]
+    assert any(e["event"]["task_id"].endswith("p1") for e in first_pass)
+
+    # Second consumer pass (after wake): the engine replays the SAME phase-1
+    # events plus the genuinely new phase-2 agent.
+    async def events2():
+        yield replay
+        yield live
+
+    handler.events = events2
+    broadcasted.clear()  # second_pass must only see what THIS pass emits
+    await _TeamHelpersTestApi.consume_workflow_events("web", "s", handler)
+
+    second_pass = [e for e in broadcasted if e.get("event_type") == "team.task"]
+    p1_events = [e for e in second_pass if e["event"]["task_id"].endswith("p1")]
+    p2_events = [e for e in second_pass if e["event"]["task_id"].endswith("p2")]
+    # replayed phase-1 events are deduped (no new claimed/completed);
+    # the new phase-2 agent is announced.
+    assert p1_events == []
+    assert any(e["event"]["type"] == "team.task.claimed" for e in p2_events)
+
+
+@pytest.mark.anyio
 async def test_consume_workflow_events_releases_held_idle_when_last_run_leaves_active(monkeypatch):
     """team.idle is a one-shot marker. When the idle guard swallows it because
     a run is active, and a tree-view pause/stop later drains the active set
@@ -5381,6 +5466,9 @@ async def test_consume_workflow_events_releases_held_idle_when_last_run_leaves_a
 
     class _Handler:
         is_running = True
+        seen_phase: dict = {}
+        seen_agent: dict = {}
+        spawned_members: set = set()
         async def events(self):
             yield event
         def get_run_states(self):
@@ -5427,6 +5515,9 @@ async def test_consume_workflow_events_keeps_held_idle_on_natural_completion(mon
 
     class _Handler:
         is_running = True
+        seen_phase: dict = {}
+        seen_agent: dict = {}
+        spawned_members: set = set()
         async def events(self):
             for e in events:
                 yield e
@@ -5465,6 +5556,9 @@ async def test_consume_workflow_events_keeps_held_idle_while_a_run_is_active(mon
 
     class _Handler:
         is_running = True
+        seen_phase: dict = {}
+        seen_agent: dict = {}
+        spawned_members: set = set()
         async def events(self):
             yield event
         def get_run_states(self):
@@ -5755,7 +5849,7 @@ async def test_broadcast_team_state_snapshot_broadcasts_member_and_task_status(m
 
 @pytest.mark.anyio
 async def test_announce_team_roster_broadcasts_created_members_once(monkeypatch):
-    """Created-but-unstarted members are announced, and only once per stream."""
+    """Active roster members are announced once while shutdown members stay hidden."""
     broadcast_events: list[dict] = []
 
     class _FakeMonitorHandler:
@@ -5777,6 +5871,14 @@ async def test_announce_team_roster_broadcasts_created_members_once(monkeypatch)
                     "execution_status": "idle",
                     "mode": "build_mode",
                     "role": "human_agent",
+                },
+                {
+                    "member_id": "retired-member",
+                    "name": "Retired member",
+                    "status": MemberStatus.SHUTDOWN.value,
+                    "execution_status": "idle",
+                    "mode": "build_mode",
+                    "role": "teammate",
                 },
             ]
 

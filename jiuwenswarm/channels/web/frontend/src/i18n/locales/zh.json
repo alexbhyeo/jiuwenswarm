@@ -106,7 +106,6 @@
       }
     },
     "models": {
-      "freeModels": "免费模型",
       "primaryModels": "对话模型",
       "empty": "尚未配置模型",
       "emptyDescription": "添加模型后，可在这里测试连接并管理主模型。",
@@ -271,6 +270,8 @@
       "chromePathPlaceholder": "例如 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
     },
     "experimental": {
+      "taskAsr": "ASR 模型配置",
+      "taskFullDuplex": "任务对话全双工",
       "externalCliAgents": "三方 Agent",
       "externalCliAgentsDescription": "仅用于集群模式。",
       "a2ui": "A2UI 界面生成",
@@ -304,9 +305,20 @@
       "embed_api_base": { "title": "API 地址" },
       "embed_api_key": { "title": "API 密钥" },
       "embed_model": { "title": "模型名称" },
-      "enable_free_models": {
-        "title": "启用免费模型",
-        "description": "开启后实时拉取可用的免费模型，注意免费模型可能有限流、限窗口大小等限制。免费模型来源于 Opencode Zen 网关（https://opencode.ai/zen），由 models.dev 目录（https://models.opencode.ai/api.json）与 Zen 实时模型列表取交集得到（判定标准：输入价格为 0）。"
+      "asr_api_base": {
+        "title": "ASR API 地址",
+        "description": "填写 OpenAI 兼容 Base URL 或完整的 /audio/transcriptions 地址。",
+        "placeholder": "例如：https://api.example.com/v1"
+      },
+      "asr_api_key": {
+        "title": "ASR API 密钥",
+        "description": "用于通用语音转写；JoyAI 使用独立配置。",
+        "placeholder": "例如：sk-..."
+      },
+      "asr_model": {
+        "title": "ASR 模型",
+        "description": "用于通用语音转写的模型名称。",
+        "placeholder": "例如：FunAudioLLM/SenseVoiceSmall"
       },
       "skill_evolution": { "title": "本地技能自动演进与沉淀", "description": "控制本地技能的自动演进和沉淀" },
       "skill_retrieval_enabled": { "title": "技能自动检索", "description": "基于已安装技能数量，动态选择智能体的技能发现策略" },
@@ -348,6 +360,10 @@
       "permissions_mode": { "title": "全局权限模式", "description": "为普通 Agent 与 Team 选择统一的安全护栏模式。" },
       "a2ui_enabled": { "title": "启用 A2UI", "description": "允许将支持的结果渲染成交互式界面。" },
       "trajectory_ui_enabled": { "title": "启用轨迹界面", "description": "在单 Agent 和集群模式中显示对话与轨迹切换，并启用轨迹观测数据链路。" },
+      "task_full_duplex_enabled": {
+        "title": "启用任务对话全双工入口",
+        "description": "输入框为空时显示全双工按钮；点击后共享整个屏幕并持续使用麦克风。"
+      },
       "kv_cache_affinity_enabled": {
         "title": "启用算力亲和",
         "description": "仅支持使用 Ascend vLLM 推理服务部署的模型，不支持通过第三方 API Key 接入的模型。"
@@ -643,7 +659,10 @@
     "modeAgentTeam": "集群模式",
     "modeAutoHarness": "自优化模式",
     "modeAutoHarnessDesc": "自动分析并优化目标仓库",
-    "recording": "正在录音...（松开按钮自动发送）",
+    "recording": "正在录音...（再次点击麦克风结束）",
+    "transcribing": "正在转写语音...",
+    "startRecording": "语音输入",
+    "stopRecording": "结束录音并转写",
     "waitingTasks": "等待任务",
     "messageQueue": "消息队列",
     "waitingTasksCount": "等待任务 ({{count}})",
@@ -667,10 +686,12 @@
     "holdToSpeak": "按住说话",
     "send": "发送 (Enter)",
     "stop": "停止",
+    "taskFullDuplexStart": "共享整个屏幕并开始全双工对话",
+    "taskFullDuplexStarting": "正在启动全双工对话",
+    "taskFullDuplexStop": "停止全双工对话和屏幕共享",
     "modelSelector": {
       "tooltip": "切换对话使用的模型",
       "configured": "已配置模型",
-      "free": "免费模型",
       "addModel": "添加自定义模型",
       "empty": "暂无可用模型，请先在设置中添加模型",
       "placeholder": "选择模型"
@@ -719,6 +740,25 @@
     "extensionManageMcps": "管理我的连接器",
     "extensionMore": "更多",
     "recentTasks": "进度",
+    "applicationTasks": {
+      "cancelling": "正在停止",
+      "cancelled": "已取消",
+      "controls": {
+        "drag": "拖动到另一项以调整顺序",
+        "next": "设为下一项",
+        "stop": "停止此任务",
+        "more": "任务操作",
+        "up": "上移",
+        "down": "下移",
+        "preempt": "停止当前任务并执行此项",
+        "close": "关闭",
+        "failed": "任务操作失败"
+      },
+      "queued": "排队中",
+      "running": "执行中",
+      "completed": "已完成",
+      "failed": "失败"
+    },
     "contextCompressionCommandRunning": "正在压缩上下文",
     "teamPause": "暂停",
     "teamPauseHint": "团队暂停后，直接发送下一条消息即可继续",
@@ -1096,10 +1136,6 @@
     "skip": "跳过",
     "open": "配置指引",
     "steps": {
-      "0": {
-        "title": "欢迎使用 jiuwenswarm",
-        "description": "你已获得免费体验额度！选择下方方式开始配置你的模型服务。"
-      },
       "1": {
         "title": "配置你的首个模型",
         "description": "模型配置位于「设置」中的「模型」页面。"
@@ -1108,26 +1144,6 @@
         "title": "完成模型配置",
         "description": "点击「添加模型」，选择模型提供商，按提示完成配置后保存。"
       }
-    },
-    "quickSetup": {
-      "title": "一键配置华为云 MaaS",
-      "description": "自动引导你完成华为云购买和 API 配置",
-      "steps": {
-        "openConsole": "打开华为云 MaaS 控制台",
-        "updateAuth": "自动更新服务授权权限",
-        "createApiKey": "创建 API Key（用于 JiuwenSwarm 调用模型）",
-        "enableModels": "开通预置模型服务（按调用量计费）"
-      },
-      "agreementPrefix": "点击「一键配置」即表示您同意",
-      "agreementMaas": "《MaaS 模型即服务声明》",
-      "agreementAnd": "和",
-      "agreementCloud": "《华为云用户协议》",
-      "agreementSuffix": "。",
-      "billingNote": "模型开通本身不产生费用，实际调用按用量计费。"
-    },
-    "manualSetup": {
-      "title": "手动配置",
-      "description": "已有 API Key，手动填入配置"
     }
   },
   "config": {
@@ -1564,11 +1580,19 @@
       "feature3Title": "任务联动·唤醒图谱上下文",
       "feature3Desc": "在执行复杂的 AI 任务或对话时，支持直接挂载与调取图谱知识，让输出更精准、上下文更丰富。"
     },
+    "chat": {
+      "toggleLabel": "个人上下文"
+    },
     "settings": {
       "subtitle": "选择个人上下文采用哪种方式采集、整理和生成。",
+      "masterEnable": "启用个人上下文",
+      "masterEnableHint": "总开关，控制个人上下文采集与 agent 加载上下文。",
       "enable": "采集个人上下文内容",
-      "enableHint": "支持添加个人上下文内容并自动构建图谱。",
+      "enableHint": "支持自动周期性采集上下文内容并自动构建图谱。",
       "strategyProfile": "上下文采集模式",
+      "strategy_agent": "智能体处理",
+      "strategy_balanced": "大模型处理",
+      "strategy_rules": "规则处理",
       "model": "上下文整理模型",
       "modelPlaceholder": "请选择整理模型",
       "modelRequiredFirst": "请先选择整理模型",
@@ -1582,6 +1606,7 @@
       "state": "状态",
       "action": "操作",
       "authorize": "授权",
+      "goAuthorize": "去授权",
       "reauthorize": "重新授权",
       "cancelAuth": "取消授权",
       "authorizing": "授权中…",
@@ -1595,6 +1620,11 @@
       "githubTokenPlaceholder": "ghp_xxxxxxxxxxxx",
       "githubTokenHint": "令牌仅保存在本地浏览器，创建采集服务时用于认证。",
       "githubTokenRequired": "请输入 GitHub 令牌",
+      "gitcodeHint": "GitCode 使用个人访问令牌（PAT）。授权后即可在「上下文内容」添加 GitCode 采集。",
+      "gitcodeTokenLabel": "GitCode 令牌",
+      "gitcodeTokenPlaceholder": "请输入 GitCode 个人访问令牌",
+      "gitcodeTokenHint": "令牌仅保存在本地浏览器，创建采集服务时用于认证。",
+      "gitcodeTokenRequired": "请输入 GitCode 令牌",
       "feishuHint": "飞书使用 OAuth 设备授权流程。点击授权后按提示在浏览器完成登录。",
       "feishuVerifyHint": "请在打开的页面完成飞书授权，授权完成后状态将自动更新。"
     },
@@ -1651,6 +1681,7 @@
       "stateFailed": "采集失败",
       "stateWaiting": "等待采集",
       "stateStopped": "已停止",
+      "stateStopping": "正在停止",
       "lastRunUnavailable": "后端未返回采集时间",
       "intervalHour": "每 {{n}} 小时",
       "intervalDay": "每 {{n}} 天",
@@ -1660,12 +1691,6 @@
       "actionRetry": "重试",
       "actionStop": "停止采集",
       "deleteConfirm": "确认删除该采集服务？",
-      "intervalSeconds": "采集频率（秒）",
-      "intervalRangeError": "采集频率须大于 0 且不超过 31536000 秒（约 365 天）",
-      "sourceJsonObjectError": "source 必须是 JSON 对象",
-      "sourceJsonInvalidError": "JSON 格式无效",
-      "maxItems": "单次最大条数",
-      "save": "保存",
       "cancel": "取消",
       "empty": "暂无采集内容，点击右上角「添加内容」创建",
       "noContentInCategory": "暂无内容",
@@ -1681,8 +1706,9 @@
     },
     "addContent": {
       "title": "添加内容",
+      "editTitle": "编辑采集任务",
       "nameLabel": "采集内容名称",
-      "namePlaceholder": "如 我的知乎收藏",
+      "namePlaceholder": "如 my-task，字母数字开头，仅 . _ -",
       "providerLabel": "内容采集来源",
       "autoCollectLabel": "自动采集",
       "autoCollectHint": "开启后按频率自动采集",
@@ -1693,6 +1719,7 @@
     "timeRangeCustom": "自定义",
     "dateRangeTitle": "选择日期范围",
     "dateRangePlaceholder": "请选择日期范围",
+    "dateRangeRequired": "请选择自定义时间范围",
     "addUrl": "+ 添加",
     "frequencyLabel": "自动采集频率",
       "frequencyHour": "每 {{n}} 小时",
@@ -1706,6 +1733,7 @@
       "maxItemsRangeError": "单次采集条数须在 1~10000 之间，或留空使用默认",
       "previousStep": "上一步",
     "submit": "添加",
+      "save": "保存",
       "notConfigured": "尚未配置个人上下文，请先在设置页开启",
       "providerUnauthorized": "未授权，请先去设置页授权",
       "goAuthorize": "去授权",
@@ -1747,8 +1775,20 @@
         "commits": "提交（Commit）",
         "code": "代码（Code）",
         "resourcesRequired": "请至少选择一项采集内容",
-        "tokenFromAuth": "令牌已从设置页授权获取",
-        "tokenMissing": "未找到 GitHub 令牌，请先去设置页授权"
+        "tokenFromAuth": "令牌已从设置页授权获取"
+      },
+      "gitcode": {
+        "repoUrlLabel": "GitCode 仓库链接",
+        "repoUrlPlaceholder": "https://gitcode.com/<owner>/<repo>",
+        "repoUrlHint": "或 git@gitcode.com:<owner>/<repo>",
+        "resourcesLabel": "要采集的内容",
+        "readme": "README",
+        "issues": "议题（Issue）",
+        "pullRequests": "拉取请求（Pull Request）",
+        "commits": "提交（Commit）",
+        "code": "代码（Code）",
+        "resourcesRequired": "请至少选择一项采集内容",
+        "tokenFromAuth": "令牌已从设置页授权获取"
       },
       "feishu": {
         "modeLabel": "飞书内容类型",
@@ -1769,14 +1809,13 @@
         "calendarTimePlaceholder": "请选择",
         "docPathLabel": "指定文档（可选）",
         "docPathPlaceholder": "请输入路径或选择文件",
-        "wikiDirLabel": "Wiki 目录",
-        "wikiDirPlaceholder": "只获取该目录下的内容",
         "authorizeAfterCreate": "创建后需在设置页授权飞书账号："
       }
     },
     "provider": {
       "localFiles": "本地文件夹",
       "github": "GitHub",
+      "gitcode": "GitCode",
       "feishu": "飞书",
       "browserBookmarks": "Edge 收藏夹",
       "zhihuReader": "知乎专栏",
@@ -2857,6 +2896,7 @@
   },
   "speech": {
     "recognitionUnsupported": "浏览器不支持语音识别",
+    "recordingUnsupported": "浏览器不支持麦克风录音",
     "synthesisUnsupported": "浏览器不支持语音合成",
     "errors": {
       "noSpeech": "未检测到语音",
