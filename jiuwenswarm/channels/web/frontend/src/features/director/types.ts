@@ -13,6 +13,9 @@ export interface DirectorAsset {
   file_path: string | null;
   job_id: string | null;
   error: string | null;
+  /** 用户自定义名称；为空时前端展示 prompt。图片素材命名后可在同项目
+   *  composer 提示词里用 "@名称" 引用为参考图。 */
+  name: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -71,6 +74,7 @@ export type DirectorErrorCode =
   | 'NOT_SUPPORTED'
   | 'NOT_CONFIGURED'
   | 'PROJECT_NOT_FOUND'
+  | 'ASSET_NOT_FOUND'
   | 'GENERATION_FAILED';
 
 export class DirectorApiError extends Error {

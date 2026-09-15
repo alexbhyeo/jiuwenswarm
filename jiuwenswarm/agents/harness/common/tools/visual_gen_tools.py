@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import mimetypes
 import os
 import time
 from pathlib import Path
@@ -77,6 +78,26 @@ def visual_gen_configured() -> bool:
     return bool(api_key and api_base and model)
 
 
+def _resolve_reference_image(path_or_url: str) -> tuple[str | None, str | None]:
+    """reference_image_path may be a real http(s) URL, an already-complete
+    data: URI, or a local file path - resolved to a data: URI here
+    (server-side), mirroring video_gen_tools._resolve_frame_reference.
+    """
+    value = (path_or_url or "").strip()
+    if not value:
+        return None, None
+    if value.startswith(("http://", "https://", "data:")):
+        return value, None
+    path = Path(value).expanduser()
+    if not path.is_file():
+        return None, f"[ERROR]: reference_image_path {value!r} is not a URL/data URI and no such file exists."
+    mime, _ = mimetypes.guess_type(str(path))
+    if not mime or not mime.startswith("image/"):
+        mime = "image/png"
+    b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{b64}", None
+
+
 def _resolve_save_path(save_dir: str | None, filename: str) -> Path:
     root = Path(save_dir).expanduser() if save_dir else (get_agent_workspace_dir() / "generated_images")
     root.mkdir(parents=True, exist_ok=True)
@@ -105,6 +126,7 @@ async def generate_visual(
     prompt: str,
     aspect_ratio: str = "16:9",
     resolution: str = "512",
+    reference_image_path: str | None = None,
     save_dir: str | None = None,
 ) -> str:
     """
@@ -114,6 +136,11 @@ async def generate_visual(
         prompt: Text description of the image to generate.
         aspect_ratio: e.g. "16:9", "9:16", "1:1".
         resolution: e.g. "512", "1024" (short-edge pixel size).
+        reference_image_path: Optional local file path, http(s) URL, or data:
+            URI of a reference image to edit/compose from (image-to-image).
+            Support depends on the configured model - Gemini-family image
+            models accept an input image in the same chat turn; text-only
+            image models will simply ignore it.
         save_dir: Optional directory to save the image (defaults to the agent
             workspace's generated_images/ folder).
 
@@ -130,21 +157,33 @@ async def generate_visual(
     if not prompt:
         return "[ERROR]: prompt is required."
 
+    reference_data_uri = None
+    if reference_image_path:
+        reference_data_uri, err = _resolve_reference_image(reference_image_path)
+        if err:
+            return err
+
     # Not every provider/model honors aspect_ratio/resolution as separate
     # request-body fields, so the hint is also folded into the prompt text
     # itself as a best-effort fallback the model can act on directly.
     full_prompt = f"{prompt}\n\n(Aspect ratio: {aspect_ratio}, resolution: {resolution}px)"
+    content: Any = full_prompt
+    if reference_data_uri:
+        content = [
+            {"type": "image_url", "image_url": {"url": reference_data_uri}},
+            {"type": "text", "text": full_prompt},
+        ]
     body: dict[str, Any] = {
         "model": model,
         "modalities": ["image", "text"],
-        "messages": [{"role": "user", "content": full_prompt}],
+        "messages": [{"role": "user", "content": content}],
         "aspect_ratio": aspect_ratio,
         "resolution": resolution,
     }
     headers = {"Authorization": f"Bearer {api_key}"}
     logger.info(
-        "[generate_visual] using model: %s (api_base: %s, aspect_ratio: %s, resolution: %s)",
-        model, api_base, aspect_ratio, resolution,
+        "[generate_visual] using model: %s (api_base: %s, aspect_ratio: %s, resolution: %s, reference: %s)",
+        model, api_base, aspect_ratio, resolution, bool(reference_data_uri),
     )
 
     try:

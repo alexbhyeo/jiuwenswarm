@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useDirectorStore } from '../directorStore';
 import type { DirectorAsset, DirectorProject } from '../types';
 
 interface DirectorRailProps {
@@ -72,9 +73,76 @@ const plusIcon = (
   </svg>
 );
 
+const pencilIcon = (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />
+  </svg>
+);
+
+interface AssetNameLabelProps {
+  asset: DirectorAsset;
+  fallback: string;
+  onRename: (name: string) => void;
+}
+
+/** 素材名称：默认展示 name||prompt；点击铅笔图标进入行内编辑，
+ *  回车/失焦保存，Esc 取消。图片重命名后可在 composer 里用 "@名称" 引用。 */
+function AssetNameLabel({ asset, fallback, onRename }: AssetNameLabelProps) {
+  const { t } = useTranslation();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  const displayName = asset.name || asset.prompt || fallback;
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        className="director-asset-name-input"
+        value={draft}
+        placeholder={t('director.rename.placeholder')}
+        onChange={(e) => setDraft(e.target.value)}
+        onClick={(e) => e.stopPropagation()}
+        onBlur={() => {
+          setEditing(false);
+          if (draft.trim() !== (asset.name || '')) onRename(draft.trim());
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            (e.target as HTMLInputElement).blur();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            setEditing(false);
+          }
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="director-asset-name">
+      <span className="director-asset-name-text">{displayName}</span>
+      <button
+        type="button"
+        className="director-asset-rename-btn"
+        title={t('director.rename.action')}
+        onClick={(e) => {
+          e.stopPropagation();
+          setDraft(asset.name || '');
+          setEditing(true);
+        }}
+      >
+        {pencilIcon}
+      </button>
+    </div>
+  );
+}
+
 export function DirectorRail({ projects, selectedProject, onNewProject, onSelectProject }: DirectorRailProps) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState<ExpandedCategory>('image');
+  const renameAsset = useDirectorStore((s) => s.renameAsset);
 
   // 素材面板只反映"当前选中项目"的产物 —— 未创建/选中项目前不展示该区块，
   // 已选中时也只列出该项目自己的 assets，而不是跨项目聚合。
@@ -170,7 +238,11 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
                         />
                       )}
                     </div>
-                    <div className="director-asset-name">{asset.prompt || t('director.categories.video')}</div>
+                    <AssetNameLabel
+                      asset={asset}
+                      fallback={t('director.categories.video')}
+                      onRename={(name) => renameAsset(selectedProject!.project_id, asset.asset_id, name)}
+                    />
                     <div className="director-asset-time">{relativeTime(t, asset.updated_at)}</div>
                   </div>
                 ))}
@@ -198,7 +270,11 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
                       className="director-asset-thumb"
                       style={asset.file_path ? { backgroundImage: `url(${rawFileUrl(asset.file_path)})` } : undefined}
                     />
-                    <div className="director-asset-name">{asset.prompt || t('director.categories.image')}</div>
+                    <AssetNameLabel
+                      asset={asset}
+                      fallback={t('director.categories.image')}
+                      onRename={(name) => renameAsset(selectedProject!.project_id, asset.asset_id, name)}
+                    />
                     <div className="director-asset-time">{relativeTime(t, asset.updated_at)}</div>
                   </div>
                 ))}

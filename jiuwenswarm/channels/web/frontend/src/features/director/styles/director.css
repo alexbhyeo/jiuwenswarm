@@ -243,13 +243,62 @@
 }
 
 .director-asset-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  min-width: 0;
+}
+
+.director-asset-name-text {
+  flex: 1;
+  min-width: 0;
   font-size: 10.5px;
   color: var(--d-text-primary);
   font-weight: 600;
-  margin-top: 4px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.director-asset-rename-btn {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--d-radius-sm);
+  border: none;
+  background: none;
+  color: var(--d-text-secondary);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.director-asset-item:hover .director-asset-rename-btn {
+  opacity: 1;
+}
+
+.director-asset-rename-btn:hover {
+  background: var(--d-bg-hover);
+  color: var(--d-text-primary);
+}
+
+.director-asset-name-input {
+  width: 100%;
+  min-width: 0;
+  height: 20px;
+  margin-top: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--d-text-primary);
+  border: 1px solid var(--d-accent);
+  border-radius: var(--d-radius-sm);
+  padding: 0 4px;
+  outline: none;
+  background: var(--d-bg-card);
 }
 
 .director-asset-time {

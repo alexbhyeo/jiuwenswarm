@@ -36,6 +36,10 @@ class DirectorAsset:
     file_path: str | None = None
     job_id: str | None = None
     error: str | None = None
+    # 用户自定义素材名——为空时前端回退展示 prompt。图片素材命名后可在同一
+    # 项目内通过composer 提示词里的 "@名称" 引用，作为 generate_visual 的
+    # reference_image_path（见 director_manager._resolve_at_reference）。
+    name: str | None = None
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -53,6 +57,7 @@ class DirectorAsset:
             file_path=data.get("file_path"),
             job_id=data.get("job_id"),
             error=data.get("error"),
+            name=data.get("name"),
             created_at=float(data.get("created_at") or time.time()),
             updated_at=float(data.get("updated_at") or time.time()),
         )
@@ -192,6 +197,22 @@ class DirectorStore:
         project.updated_at = time.time()
         self._save()
         return project
+
+    def find_asset_by_name(self, project_id: str, name: str) -> DirectorAsset | None:
+        """大小写不敏感精确匹配；同名时取 updated_at 最新的一个.
+
+        供 "@名称" 引用解析使用（见 director_manager._resolve_at_reference）。
+        """
+        project = self._projects.get(project_id)
+        if project is None:
+            return None
+        target = name.strip().lower()
+        if not target:
+            return None
+        matches = [a for a in project.assets if a.name and a.name.strip().lower() == target]
+        if not matches:
+            return None
+        return max(matches, key=lambda a: a.updated_at)
 
     def asset_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {"video": 0, "image": 0}

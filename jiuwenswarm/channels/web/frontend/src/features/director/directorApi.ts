@@ -23,6 +23,7 @@ const METHOD = {
   projectsGet: 'director.projects.get',
   generate: 'director.generate',
   generateCheckStatus: 'director.generate.check_status',
+  assetRename: 'director.asset.rename',
 } as const;
 
 // generate_video 内部轮询上限是 120s（12 次 * 10s sleep），但每次 sleep 之间还有一次
@@ -146,6 +147,18 @@ export function directorGenerateCheckStatus(
     job_id: jobId,
   })
     .then(normalizeCheckStatusResult)
+    .catch((err) => {
+      throw toDirectorError(err);
+    });
+}
+
+export function directorAssetRename(projectId: string, assetId: string, name: string): Promise<ProjectResult> {
+  return webRequest<unknown>(METHOD.assetRename, {
+    project_id: projectId,
+    asset_id: assetId,
+    name,
+  })
+    .then(normalizeProjectResult)
     .catch((err) => {
       throw toDirectorError(err);
     });

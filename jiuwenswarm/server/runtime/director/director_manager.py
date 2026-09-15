@@ -30,6 +30,7 @@ from jiuwenswarm.agents.harness.common.tools.visual_gen_tools import (
 )
 from jiuwenswarm.server.runtime.director.director_store import (
     DirectorAsset,
+    DirectorProject,
     DirectorStore,
     get_project_assets_dir,
 )
@@ -40,6 +41,9 @@ _SUPPORTED_MODES = ("video", "image")
 
 _RE_STILL_RUNNING_JOB_ID = re.compile(r"^Video job (\S+) submitted and still")
 _RE_SAVED_TO = re.compile(r"Saved to:\s*(.+)")
+# "@名称" 引用：名称本身不含空白，与常见 @提及 约定一致（重命名素材时应
+# 避免空格）。
+_RE_AT_REFERENCE = re.compile(r"@(\S+)")
 
 
 class DirectorRpcError(Exception):
@@ -112,6 +116,22 @@ class DirectorManager:
             raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")
         return {"project": project.to_dict()}
 
+    def _resolve_at_reference(self, project: DirectorProject, prompt: str) -> tuple[str, str | None]:
+        """解析提示词中的 "@名称" 引用为一张已命名的图片素材.
+
+        只认第一个能匹配到"就绪图片素材"的 @token；命中后从提示词里去掉该
+        token（其余文本原样发给模型），返回 (清理后的提示词, 图片路径)。
+        未命中任何素材时原样返回 (prompt, None) —— 调用方据此决定是否传
+        reference_image_path，而不是把裸露的 "@xxx" 发给模型。
+        """
+        for match in _RE_AT_REFERENCE.finditer(prompt):
+            asset = self._store.find_asset_by_name(project.project_id, match.group(1))
+            if asset and asset.type == "image" and asset.status == "ready" and asset.file_path:
+                cleaned = (prompt[: match.start()] + prompt[match.end():]).strip()
+                cleaned = re.sub(r"\s{2,}", " ", cleaned)
+                return cleaned or prompt, asset.file_path
+        return prompt, None
+
     async def handle_director_projects_create(self, params: dict) -> dict:
         name = str(params.get("name") or "").strip()
         if not name:
@@ -132,7 +152,8 @@ class DirectorManager:
             raise DirectorRpcError(
                 "NOT_SUPPORTED", f"暂不支持的生成类型: {mode or '(空)'}（即将推出）"
             )
-        if self._store.get_project(project_id) is None:
+        project = self._store.get_project(project_id)
+        if project is None:
             raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")
 
         aspect_ratio = str(params.get("aspect_ratio") or "16:9")
@@ -162,12 +183,16 @@ class DirectorManager:
         else:
             if not (visual_gen_enabled() and visual_gen_configured()):
                 raise DirectorRpcError("NOT_CONFIGURED", "图片生成未配置，请先在设置中配置「图片处理」")
+            cleaned_prompt, reference_image_path = self._resolve_at_reference(project, prompt)
             gen_params = {"aspect_ratio": aspect_ratio, "resolution": resolution}
+            if reference_image_path:
+                gen_params["reference_image_path"] = reference_image_path
             async with self._lock:
                 result_str = await generate_visual._func(
-                    prompt=prompt,
+                    prompt=cleaned_prompt,
                     aspect_ratio=aspect_ratio,
                     resolution=resolution,
+                    reference_image_path=reference_image_path,
                     save_dir=save_dir,
                 )
 
@@ -223,4 +248,21 @@ class DirectorManager:
             "status": parsed["status"],
             "asset_counts": self._store.asset_counts(),
         }
+
+    async def handle_director_asset_rename(self, params: dict) -> dict:
+        project_id = str(params.get("project_id") or "").strip()
+        asset_id = str(params.get("asset_id") or "").strip()
+        # 空字符串合法——用于清除自定义名称，回退展示 prompt。
+        name = str(params.get("name") or "").strip()
+        if not (project_id and asset_id):
+            raise DirectorRpcError("INVALID_PARAMS", "缺少 project_id / asset_id")
+
+        project = self._store.get_project(project_id)
+        if project is None:
+            raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")
+        if not any(a.asset_id == asset_id for a in project.assets):
+            raise DirectorRpcError("ASSET_NOT_FOUND", f"未找到素材: {asset_id}")
+
+        project = self._store.update_asset(project_id, asset_id, name=name or None)
+        return {"project": project.to_dict()}
 

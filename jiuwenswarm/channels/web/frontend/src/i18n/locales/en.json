@@ -69,7 +69,7 @@
     },
     "composer": {
       "placeholderVideo": "What kind of video do you need? Describe the scene, camera movement, mood, or drag in a reference image…",
-      "placeholderImage": "What kind of image do you need? Describe the scene, style, composition…",
+      "placeholderImage": "What kind of image do you need? Describe the scene, style, composition, or type @name to reference a named image…",
       "durationLabel": "{{seconds}}s",
       "send": "Generate",
       "modes": {
@@ -109,6 +109,10 @@
       "minutesAgo": "{{count}}m ago",
       "hoursAgo": "{{count}}h ago",
       "daysAgo": "{{count}}d ago"
+    },
+    "rename": {
+      "action": "Rename",
+      "placeholder": "Name (no spaces)"
     },
     "lab": {
       "breadcrumb": "Lab · Multi-Reference Composite",
