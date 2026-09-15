@@ -115,6 +115,10 @@
       "placeholder": "名称（不含空格）"
     },
     "enlarge": "放大查看",
+    "delete": {
+      "action": "删除",
+      "confirm": "确定要删除「{{name}}」吗？此操作无法撤销。"
+    },
     "lab": {
       "breadcrumb": "实验室 · 多参考图合成",
       "refImage": "图片参考",

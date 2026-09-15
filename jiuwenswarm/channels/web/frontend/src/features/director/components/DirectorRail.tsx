@@ -114,15 +114,24 @@ const pencilIcon = (
   </svg>
 );
 
+const trashIcon = (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0-.9 14a2 2 0 0 1-2 1.9H6.9a2 2 0 0 1-2-1.9L4 6" />
+    <path d="M10 11v6M14 11v6" />
+  </svg>
+);
+
 interface AssetNameLabelProps {
   asset: DirectorAsset;
   fallback: string;
   onRename: (name: string) => void;
+  onDelete: () => void;
 }
 
 /** 素材名称：默认展示 name||prompt；点击铅笔图标进入行内编辑，
- *  回车/失焦保存，Esc 取消。图片重命名后可在 composer 里用 "@名称" 引用。 */
-function AssetNameLabel({ asset, fallback, onRename }: AssetNameLabelProps) {
+ *  回车/失焦保存，Esc 取消。图片重命名后可在 composer 里用 "@名称" 引用。
+ *  垃圾桶图标：二次确认后删除该素材（元数据 + 磁盘文件）。 */
+function AssetNameLabel({ asset, fallback, onRename, onDelete }: AssetNameLabelProps) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -170,6 +179,19 @@ function AssetNameLabel({ asset, fallback, onRename }: AssetNameLabelProps) {
       >
         {pencilIcon}
       </button>
+      <button
+        type="button"
+        className="director-asset-rename-btn director-asset-delete-btn"
+        title={t('director.delete.action')}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (window.confirm(t('director.delete.confirm', { name: displayName }))) {
+            onDelete();
+          }
+        }}
+      >
+        {trashIcon}
+      </button>
     </div>
   );
 }
@@ -178,6 +200,7 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState<ExpandedCategory>('image');
   const renameAsset = useDirectorStore((s) => s.renameAsset);
+  const deleteAsset = useDirectorStore((s) => s.deleteAsset);
 
   // 素材面板只反映"当前选中项目"的产物 —— 未创建/选中项目前不展示该区块，
   // 已选中时也只列出该项目自己的 assets，而不是跨项目聚合。
@@ -277,6 +300,7 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
                       asset={asset}
                       fallback={t('director.categories.video')}
                       onRename={(name) => renameAsset(selectedProject!.project_id, asset.asset_id, name)}
+                      onDelete={() => deleteAsset(selectedProject!.project_id, asset.asset_id)}
                     />
                     <div className="director-asset-time">{relativeTime(t, asset.updated_at)}</div>
                   </div>
@@ -310,6 +334,7 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
                       asset={asset}
                       fallback={t('director.categories.image')}
                       onRename={(name) => renameAsset(selectedProject!.project_id, asset.asset_id, name)}
+                      onDelete={() => deleteAsset(selectedProject!.project_id, asset.asset_id)}
                     />
                     <div className="director-asset-time">{relativeTime(t, asset.updated_at)}</div>
                   </div>

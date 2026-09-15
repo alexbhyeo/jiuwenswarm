@@ -198,6 +198,19 @@ class DirectorStore:
         self._save()
         return project
 
+    def delete_asset(self, project_id: str, asset_id: str) -> DirectorProject:
+        """从项目里移除该素材的元数据记录（不含磁盘文件删除——调用方
+        （DirectorManager）在拿到被删素材的 file_path 后自行处理，
+        以保持本方法单一职责：只管 director_state.json 的一致性）。
+        """
+        project = self._projects.get(project_id)
+        if project is None:
+            raise KeyError(project_id)
+        project.assets = [a for a in project.assets if a.asset_id != asset_id]
+        project.updated_at = time.time()
+        self._save()
+        return project
+
     def find_asset_by_name(self, project_id: str, name: str) -> DirectorAsset | None:
         """大小写不敏感精确匹配；同名时取 updated_at 最新的一个.
 

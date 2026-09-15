@@ -24,6 +24,7 @@ const METHOD = {
   generate: 'director.generate',
   generateCheckStatus: 'director.generate.check_status',
   assetRename: 'director.asset.rename',
+  assetDelete: 'director.asset.delete',
 } as const;
 
 // generate_video 内部轮询上限是 120s（12 次 * 10s sleep），但每次 sleep 之间还有一次
@@ -159,6 +160,27 @@ export function directorAssetRename(projectId: string, assetId: string, name: st
     name,
   })
     .then(normalizeProjectResult)
+    .catch((err) => {
+      throw toDirectorError(err);
+    });
+}
+
+export interface DeleteAssetResult {
+  project: DirectorProject;
+  assetCounts: DirectorAssetCounts;
+}
+
+function normalizeDeleteAssetResult(raw: unknown): DeleteAssetResult {
+  const payload = raw as { project: DirectorProject; asset_counts: DirectorAssetCounts };
+  return { project: payload.project, assetCounts: payload.asset_counts };
+}
+
+export function directorAssetDelete(projectId: string, assetId: string): Promise<DeleteAssetResult> {
+  return webRequest<unknown>(METHOD.assetDelete, {
+    project_id: projectId,
+    asset_id: assetId,
+  })
+    .then(normalizeDeleteAssetResult)
     .catch((err) => {
       throw toDirectorError(err);
     });

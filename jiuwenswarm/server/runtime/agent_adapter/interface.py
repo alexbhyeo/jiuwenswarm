@@ -959,6 +959,7 @@ _DIRECTOR_ROUTES: dict[ReqMethod, str] = {
     ReqMethod.DIRECTOR_GENERATE: "handle_director_generate",
     ReqMethod.DIRECTOR_GENERATE_CHECK_STATUS: "handle_director_generate_check_status",
     ReqMethod.DIRECTOR_ASSET_RENAME: "handle_director_asset_rename",
+    ReqMethod.DIRECTOR_ASSET_DELETE: "handle_director_asset_delete",
 }
 
 # Handlers that persist a Skill visibility document; every one of them must

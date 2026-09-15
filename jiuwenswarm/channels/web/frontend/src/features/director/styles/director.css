@@ -313,6 +313,11 @@
   color: var(--d-text-primary);
 }
 
+.director-asset-delete-btn:hover {
+  background: rgba(192, 57, 43, 0.1);
+  color: #c0392b;
+}
+
 .director-asset-name-input {
   width: 100%;
   min-width: 0;

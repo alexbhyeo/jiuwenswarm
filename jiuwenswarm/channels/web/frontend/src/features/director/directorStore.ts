@@ -51,6 +51,7 @@ interface DirectorState {
 
   generate: () => Promise<void>;
   renameAsset: (projectId: string, assetId: string, name: string) => Promise<void>;
+  deleteAsset: (projectId: string, assetId: string) => Promise<void>;
 }
 
 // 轮询中的 job 共享同一个定时器句柄，避免重复轮询同一个 asset。
@@ -186,6 +187,20 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
       const { project } = await directorAssetRename(projectId, assetId, name);
       set((s) => ({
         projects: s.projects.map((p) => (p.project_id === project.project_id ? project : p)),
+      }));
+    } catch (e) {
+      const message = e instanceof DirectorApiError ? e.message : e instanceof Error ? e.message : String(e);
+      set({ projectsError: message });
+    }
+  },
+
+  deleteAsset: async (projectId, assetId) => {
+    try {
+      const { directorAssetDelete } = await import('./directorApi');
+      const { project, assetCounts } = await directorAssetDelete(projectId, assetId);
+      set((s) => ({
+        projects: s.projects.map((p) => (p.project_id === project.project_id ? project : p)),
+        assetCounts,
       }));
     } catch (e) {
       const message = e instanceof DirectorApiError ? e.message : e instanceof Error ? e.message : String(e);

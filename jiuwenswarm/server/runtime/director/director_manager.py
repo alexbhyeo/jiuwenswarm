@@ -15,6 +15,7 @@ import asyncio
 import logging
 import re
 import secrets
+from pathlib import Path
 from typing import Any
 
 from jiuwenswarm.agents.harness.common.tools.video_gen_tools import (
@@ -265,4 +266,29 @@ class DirectorManager:
 
         project = self._store.update_asset(project_id, asset_id, name=name or None)
         return {"project": project.to_dict()}
+
+    async def handle_director_asset_delete(self, params: dict) -> dict:
+        project_id = str(params.get("project_id") or "").strip()
+        asset_id = str(params.get("asset_id") or "").strip()
+        if not (project_id and asset_id):
+            raise DirectorRpcError("INVALID_PARAMS", "缺少 project_id / asset_id")
+
+        project = self._store.get_project(project_id)
+        if project is None:
+            raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")
+        asset = next((a for a in project.assets if a.asset_id == asset_id), None)
+        if asset is None:
+            raise DirectorRpcError("ASSET_NOT_FOUND", f"未找到素材: {asset_id}")
+
+        project = self._store.delete_asset(project_id, asset_id)
+
+        # 尽力删除磁盘文件；失败只记日志，不影响已经生效的元数据删除
+        # （用户在 UI 上看到的"已删除"以 director_state.json 为准）。
+        if asset.file_path:
+            try:
+                Path(asset.file_path).unlink(missing_ok=True)
+            except OSError:
+                logger.exception("[DirectorManager] 删除素材文件失败: %s", asset.file_path)
+
+        return {"project": project.to_dict(), "asset_counts": self._store.asset_counts()}
 

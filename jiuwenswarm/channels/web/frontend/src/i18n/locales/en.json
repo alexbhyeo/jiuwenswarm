@@ -115,6 +115,10 @@
       "placeholder": "Name (no spaces)"
     },
     "enlarge": "Enlarge",
+    "delete": {
+      "action": "Delete",
+      "confirm": "Delete \"{{name}}\"? This can't be undone."
+    },
     "lab": {
       "breadcrumb": "Lab · Multi-Reference Composite",
       "refImage": "Image Reference",
