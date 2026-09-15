@@ -56,6 +56,7 @@ import {
   supportsWebSlashCommands,
 } from './slashCommands/semantics';
 import { withUploadDocumentBlock } from '../../utils/documentMessage';
+import { generateUuidV4 } from '../../utils/uuid';
 import { ExtensionPickerPanel } from './ExtensionPickerPanel';
 import { SkillPickerPanel } from './SkillPickerPanel';
 import { PickerPanel } from './PickerPanel';
@@ -101,7 +102,7 @@ import sendIcon from '../../assets/send.svg';
 import sendActiveIcon from '../../assets/send_active.svg';
 import { TeamMemberAvatar } from '../TeamMemberAvatar';
 import { CodeBranchSelector } from '../../features/code-mode/CodeBranchSelector';
-import { generateUuidV4 } from '../../utils/uuid';
+import { DESIGNER_REF_MAX_INLINE_BYTES } from '../../features/designer/designerReferences';
 import { createAgentManagementClient, getAgentAvatarUrl, type AgentCatalogItem } from '../../features/agentManagement';
 import { ContextUsageIndicator } from './ContextUsageIndicator';
 import { isImeCompositionKey } from './imeComposition';
@@ -255,7 +256,7 @@ interface InputAreaProps {
    */
   onDrainTaskQueueIfIdle?: (sessionId: string) => void;
   /** 任务页选「设计」后发送：跳转设计栏并 bootstrap，不走主 agent */
-  onLaunchDesign?: (prompt: string) => void;
+  onLaunchDesign?: (prompt: string, mediaItems?: MediaItem[]) => void;
 }
 
 export type InputAreaHandle = {
@@ -371,12 +372,14 @@ const ATTACHMENT_ACCEPT = [
   .filter((item) => !FORBIDDEN_DOCUMENT_EXTENSIONS.has(item.toLowerCase()))
   .join(',');
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.webm', '.mkv', '.avi', '.m4v']);
+const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.aac', '.flac', '.ogg', '.m4a']);
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_ATTACHMENT_COUNT = 20;
 const ATTACHMENT_ALERT_DURATION_MS = 3000;
 
-type AttachmentKind = 'image' | 'document';
+type AttachmentKind = 'image' | 'video' | 'audio' | 'document';
 type AttachmentStatus = 'uploading' | 'ready' | 'error';
 
 interface AttachmentDraft {
@@ -496,21 +499,47 @@ function getLocalFilePath(file: File | undefined, explicitPath?: string): string
   return undefined;
 }
 
+function isVideoFile(file: File): boolean {
+  if (file.type.startsWith('video/')) return true;
+  return VIDEO_EXTENSIONS.has(getFileExtension(file.name || ''));
+}
+
+function isAudioFile(file: File): boolean {
+  if (file.type.startsWith('audio/')) return true;
+  return AUDIO_EXTENSIONS.has(getFileExtension(file.name || ''));
+}
+
 /** Classify a picked file for routing to media.persist vs document.persist. */
 function resolveAttachmentKind(file: File): AttachmentKind | null {
   if (isImageFile(file)) return 'image';
+  if (isVideoFile(file)) return 'video';
+  if (isAudioFile(file)) return 'audio';
   if (isForbiddenDocumentFile(file)) return null;
   return 'document';
+}
+
+function getMediaValidationError(file: File, t: TFunction): string | null {
+  if (file.size > MAX_FILE_BYTES) {
+    return t('chat.inputAttachment.fileSizeExceeded', {
+      name: file.name || t('chat.inputAttachment.unnamedFile'),
+      limit: formatAttachmentSize(MAX_FILE_BYTES),
+    });
+  }
+  return null;
 }
 
 function getImageValidationError(file: File, t: TFunction): string | null {
   if (!isImageFile(file)) {
     return t('chat.inputAttachment.unsupportedFileType', { name: file.name || t('chat.inputAttachment.unnamedFile') });
   }
-  if (file.size > MAX_FILE_BYTES) {
-    return t('chat.inputAttachment.fileSizeExceeded', { name: file.name || t('chat.inputAttachment.unnamedFile'), limit: formatAttachmentSize(MAX_FILE_BYTES) });
+  return getMediaValidationError(file, t);
+}
+
+function getAvValidationError(file: File, t: TFunction): string | null {
+  if (!isVideoFile(file) && !isAudioFile(file)) {
+    return t('chat.inputAttachment.unsupportedFileType', { name: file.name || t('chat.inputAttachment.unnamedFile') });
   }
-  return null;
+  return getMediaValidationError(file, t);
 }
 
 function clearAttachmentAlertTimers(timers: Map<string, number>): void {
@@ -1129,6 +1158,8 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
             filename: attachment.filename,
             localPath: attachment.localPath,
           })
+        : attachment.kind === 'video' || attachment.kind === 'audio'
+          ? (attachment.file ? getAvValidationError(attachment.file, t) : null)
         : attachment.file
           ? getImageValidationError(attachment.file, t)
           : (attachment.base64Data ? null : t('chat.inputAttachment.unsupportedFileType', { name: attachment.filename || t('chat.inputAttachment.unnamedFile') }));
@@ -1193,6 +1224,51 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
           });
         }
       })();
+      return;
+    }
+
+    if (attachment.kind === 'video' || attachment.kind === 'audio') {
+      const localPath = getLocalFilePath(attachment.file, attachment.localPath);
+      if (localPath) {
+        updateAttachment(attachment.id, {
+          persistedMediaItem: {
+            type: attachment.kind,
+            filename: attachment.filename,
+            mime_type: attachment.mimeType,
+            path: localPath,
+            size_bytes: attachment.size,
+          },
+          status: 'ready',
+          error: undefined,
+        });
+        return;
+      }
+      if (!attachment.file) {
+        const error = t('chat.inputAttachment.uploadFailed');
+        pushAttachmentAlert(error);
+        updateAttachment(attachment.id, { status: 'error', error });
+        return;
+      }
+      if (attachment.file.size > DESIGNER_REF_MAX_INLINE_BYTES) {
+        const error = t('designer.chat.tooLarge');
+        pushAttachmentAlert(error);
+        updateAttachment(attachment.id, { status: 'error', error });
+        return;
+      }
+      void readBinaryFileAsBase64(attachment.file).then((payload) => {
+        if (!payload?.base64Data) {
+          updateAttachment(attachment.id, {
+            status: 'error',
+            error: t('chat.inputAttachment.uploadFailed'),
+          });
+          return;
+        }
+        updateAttachment(attachment.id, {
+          base64Data: payload.base64Data,
+          status: 'ready',
+          error: undefined,
+        });
+      });
       return;
     }
 
@@ -1324,6 +1400,8 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       const validationError =
         kind === 'document'
           ? getDocumentValidationError(file, t, { filename: base.filename, localPath })
+          : kind === 'video' || kind === 'audio'
+            ? getAvValidationError(file, t)
           : getImageValidationError(file, t);
       if (validationError) {
         pushAttachmentAlert(validationError);
@@ -1736,11 +1814,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
 
     const sid = useChatStore.getState().activeSessionId;
     const launchDesignSid = sid ?? NEW_CONVERSATION_ID;
-    if (trimmedBase && onLaunchDesign && useDesignArmedStore.getState().isArmed(launchDesignSid)) {
-      if (readyMediaItems.length > 0) {
-        pushAttachmentAlert(t('designer.attachmentsBlocked'));
-        return;
-      }
+    if ((trimmedBase || hasReadyMedia) && onLaunchDesign && useDesignArmedStore.getState().isArmed(launchDesignSid)) {
       useDesignArmedStore.getState().consumeArmed(launchDesignSid);
       useChatStore.getState().setInputValue(launchDesignSid, '');
       setPendingVoiceText('');
@@ -1750,7 +1824,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
         inputRef.current.innerHTML = '';
       }
       setComposerSuggestion(null);
-      onLaunchDesign(trimmedBase);
+      onLaunchDesign(trimmedBase, readyMediaItems);
       return;
     }
     if (goalArmed && trimmedBase && sid && onSetGoal && sid !== NEW_CONVERSATION_ID) {
