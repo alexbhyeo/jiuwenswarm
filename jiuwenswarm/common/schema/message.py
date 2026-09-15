@@ -253,6 +253,14 @@ class ReqMethod(Enum):
     SKILLS_GRAPH_GET = "skills.graph.get"
     SKILLS_GRAPH_CANCEL = "skills.graph.cancel"
 
+    # Director Mode (导演模式)：项目/素材管理与直接工具生成，见
+    # server/runtime/director/director_manager.py。
+    DIRECTOR_PROJECTS_LIST = "director.projects.list"
+    DIRECTOR_PROJECTS_CREATE = "director.projects.create"
+    DIRECTOR_PROJECTS_GET = "director.projects.get"
+    DIRECTOR_GENERATE = "director.generate"
+    DIRECTOR_GENERATE_CHECK_STATUS = "director.generate.check_status"
+
     PERSONAL_CONTEXT_RUNTIME_STATUS = "personal_context.runtime.status"
     PERSONAL_CONTEXT_RUNTIME_START_COLLECTION = (
         "personal_context.runtime.start_collection"

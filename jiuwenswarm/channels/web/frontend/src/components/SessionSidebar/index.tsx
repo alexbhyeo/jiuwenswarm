@@ -84,8 +84,18 @@ const personalContextNavIcon = (
   </svg>
 );
 
+// "导演模式"导航图标——场记板隐喻。
+const directorNavIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 9.5 19.5 4 21 8.2 4.5 13.7z" />
+    <path d="M4 13h16v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z" />
+    <path d="M7.5 6.7 10 10.4M12 5.6l2.5 3.7M16.5 4.2 19 7.9" strokeWidth={1.4} />
+  </svg>
+);
+
 const mainNavItems: NavItem[] = [
   { key: 'chat', labelKey: 'nav.work', icon: <WorkIcon aria-hidden /> },
+  { key: 'director', labelKey: 'nav.director', icon: directorNavIcon },
   { key: 'agents', labelKey: 'nav.agent', icon: <AgentDesignIcon aria-hidden /> },
   { key: 'skills', labelKey: 'nav.skills', icon: <SkillDesignIcon aria-hidden /> },
   { key: 'connectorMarket', labelKey: 'nav.connectorMarket', icon: connectorMarketNavIcon },

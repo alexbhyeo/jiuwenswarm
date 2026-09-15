@@ -2801,7 +2801,8 @@ class AgentWebSocketServer:
             request.req_method is not None
             and request.req_method.value.startswith(
                 ("skills.", "skilldev.", "plugins.", "symphony.",
-                 "agent_groups.", "agent_templates.", "plugin_packages.")
+                 "agent_groups.", "agent_templates.", "plugin_packages.",
+                 "director.")
             )
         )
 

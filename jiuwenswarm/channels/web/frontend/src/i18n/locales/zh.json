@@ -33,6 +33,7 @@
   },
   "nav": {
     "chat": "对话",
+    "director": "导演",
     "work": "任务",
     "agent": "专家",
     "experiments": "实验",
@@ -46,6 +47,90 @@
     "logs": "日志",
     "update": "更新",
     "personalContext": "个人\n上下文"
+  },
+  "director": {
+    "title": "导演模式",
+    "subtitle": "用一句话导演一段视频或一张图片，支持多图参考与精细参数控制",
+    "newProject": "新建项目",
+    "assets": "素材",
+    "assetsEmpty": "暂无素材",
+    "comingSoon": "即将推出",
+    "poweredBy": "由 generate_video / generate_visual 提供支持",
+    "categories": {
+      "video": "视频",
+      "image": "图片",
+      "character": "角色"
+    },
+    "tabs": {
+      "create": "创作",
+      "lab": "实验室",
+      "edit": "剪辑"
+    },
+    "composer": {
+      "placeholderVideo": "需要一段什么样的视频？描述画面、运镜、氛围，或拖入参考图片…",
+      "placeholderImage": "需要一张什么样的图片？描述画面、风格、构图…",
+      "durationLabel": "{{seconds}} 秒",
+      "send": "生成",
+      "modes": {
+        "video": "视频",
+        "image": "图片",
+        "audio": "音频",
+        "character": "角色",
+        "world": "世界"
+      }
+    },
+    "quickstart": {
+      "textToVideo": "文生视频",
+      "imageToVideo": "图生视频",
+      "multiRef": "多图参考",
+      "textToImage": "文生图"
+    },
+    "templates": {
+      "title": "从模板开始",
+      "storyboard": { "title": "故事分镜", "desc": "多镜头连贯叙事，自动衔接运镜" },
+      "productAd": { "title": "产品广告", "desc": "上传实拍图，生成商品动态展示" },
+      "portrait": { "title": "人像动态", "desc": "一张人像，生成自然表情与动作" },
+      "multiRef": { "title": "多图合成", "desc": "融合多张参考图为统一场景" },
+      "poster": { "title": "海报文案", "desc": "图文一体，快速生成营销海报" }
+    },
+    "myProjects": {
+      "title": "我的项目",
+      "assetCount": "{{count}} 个素材"
+    },
+    "newProjectDialog": {
+      "title": "新建项目",
+      "placeholder": "项目名称",
+      "cancel": "取消",
+      "confirm": "创建"
+    },
+    "time": {
+      "justNow": "刚刚",
+      "minutesAgo": "{{count}} 分钟前",
+      "hoursAgo": "{{count}} 小时前",
+      "daysAgo": "{{count}} 天前"
+    },
+    "lab": {
+      "breadcrumb": "实验室 · 多参考图合成",
+      "refImage": "图片参考",
+      "textPrompt": "文字提示",
+      "samplePrompt": "一艘小船缓缓驶过平静的海面，天空湛蓝，光线柔和",
+      "settingsTitle": "生成设置",
+      "model": "模型",
+      "refMode": "参考方式",
+      "refModeValue": "元素混合",
+      "genParams": "生成参数",
+      "genParamsValue": "自动 · 4 张 · 2K",
+      "generate": "生成"
+    },
+    "edit": {
+      "breadcrumb": "剪辑",
+      "timelineEditor": "时间线编辑器",
+      "saveToProject": "保存到项目",
+      "exit": "退出剪辑",
+      "importMedia": "导入素材",
+      "importHint": "支持导入图片与视频，或从左侧「素材」面板直接拖拽已生成的内容到时间线",
+      "trackHint": "将「素材」中的图片或视频拖拽到此处，开始剪辑"
+    }
   },
   "applicationPlugins": {
     "title": "应用插件",

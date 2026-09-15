@@ -1778,6 +1778,7 @@ class AgentRuntime:
                 "agent_groups.",
                 "agent_templates.",
                 "plugin_packages.",
+                "director.",
             )
         )
 

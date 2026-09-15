@@ -12,6 +12,7 @@ import { SessionSidebar } from './components/SessionSidebar';
 import { SkillPanel } from './components/SkillPanel';
 import { AgentManagementPanel } from './components/AgentManagementPanel';
 import { RsiPage } from './features/rsi/RsiPage';
+import { DirectorPage } from './features/director/DirectorPage';
 import {
   normalizeRSIEnabled,
   setRSIFeatureEnabled,
@@ -3356,6 +3357,11 @@ const showWorkspaceDivider = effectiveTeamAreaExpanded && !showConversationNotFo
         {activeNav === 'experiments' && (
           <div className="app-section">
             <RsiPage />
+          </div>
+        )}
+        {activeNav === 'director' && (
+          <div className="app-section">
+            <DirectorPage />
           </div>
         )}
         {hasVisitedAgents && (

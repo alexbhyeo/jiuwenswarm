@@ -44,6 +44,7 @@ from jiuwenswarm.server.runtime.agent_adapter.statusline_setup_agent import (
 )
 from jiuwenswarm.server.runtime.session.session_manager import SessionManager
 from jiuwenswarm.server.runtime.skill.skill_manager import SkillManager, SkillRpcError
+from jiuwenswarm.server.runtime.director.director_manager import DirectorManager
 from jiuwenswarm.server.runtime.skill.archive_store import ARCHIVE_DIRNAME
 from jiuwenswarm.server.utils.utils import is_team_params
 from jiuwenswarm.common.config import get_config
@@ -915,6 +916,14 @@ _SKILL_ROUTES: dict[ReqMethod, str] = {
     ReqMethod.SKILLS_VISIBILITY_UPDATE: "handle_skills_visibility_update",
 }
 
+_DIRECTOR_ROUTES: dict[ReqMethod, str] = {
+    ReqMethod.DIRECTOR_PROJECTS_LIST: "handle_director_projects_list",
+    ReqMethod.DIRECTOR_PROJECTS_CREATE: "handle_director_projects_create",
+    ReqMethod.DIRECTOR_PROJECTS_GET: "handle_director_projects_get",
+    ReqMethod.DIRECTOR_GENERATE: "handle_director_generate",
+    ReqMethod.DIRECTOR_GENERATE_CHECK_STATUS: "handle_director_generate_check_status",
+}
+
 # Handlers that persist a Skill visibility document; every one of them must
 # trigger a rail refresh so a grant or a revocation takes effect on the next
 # turn. The read-only ``get`` deliberately stays out.
@@ -1091,6 +1100,7 @@ class JiuWenSwarm:
         self._personal_context_runtime_enabled: bool = False
         self._sdk_name: str | None = None
         self._skill_manager = SkillManager(workspace_dir=str(get_agent_workspace_dir()))
+        self._director_manager = DirectorManager()
         self._session_manager = SessionManager()
         self._heartbeat_service: Any | None = None
         self._permissions_changed_notifier: Callable[[], None] | None = None
@@ -2046,6 +2056,43 @@ class JiuWenSwarm:
             metadata=request.metadata,
         )
 
+    async def _handle_director_request(self, request: AgentRequest) -> AgentResponse | None:
+        """处理导演模式（Director Mode）相关请求，返回 None 表示不是该类请求.
+
+        与 _handle_skills_request 同构（同一无状态分派点，见下方调用处），
+        但没有 skills 那一整套“重载/重建 Agent 实例”后续动作 —— Director
+        的生成直接调用 generate_video._func/generate_visual._func，不涉及
+        Agent 实例或工具注册状态，因此这里的分支比 skills 简单得多。
+        """
+        if request.req_method not in _DIRECTOR_ROUTES:
+            return None
+
+        handler_name = _DIRECTOR_ROUTES[request.req_method]
+        handler = getattr(self._director_manager, handler_name)
+        try:
+            params = dict(request.params) if isinstance(request.params, dict) else {}
+            payload = await handler(params)
+        except Exception as exc:
+            logger.error("[JiuWenSwarm] director 请求处理失败: %s", exc)
+            err_payload: dict = {"error": str(exc), "message": str(exc)}
+            code = getattr(exc, "code", None)
+            if isinstance(code, str) and code.strip():
+                err_payload["code"] = code.strip()
+            return AgentResponse(
+                request_id=request.request_id,
+                channel_id=request.channel_id,
+                ok=False,
+                payload=err_payload,
+                metadata=request.metadata,
+            )
+        return AgentResponse(
+            request_id=request.request_id,
+            channel_id=request.channel_id,
+            ok=True,
+            payload=payload,
+            metadata=request.metadata,
+        )
+
     @staticmethod
     def _is_skills_rebuild_followup(payload: Any) -> bool:
         """判断 skills.rebuild 响应是否需要静默 follow-up."""
@@ -2793,6 +2840,10 @@ class JiuWenSwarm:
         skills_response = await self._handle_skills_request(request)
         if skills_response is not None:
             return skills_response
+
+        director_response = await self._handle_director_request(request)
+        if director_response is not None:
+            return director_response
 
         plugins_response = await self._handle_plugins_request(request)
         if plugins_response is not None:
