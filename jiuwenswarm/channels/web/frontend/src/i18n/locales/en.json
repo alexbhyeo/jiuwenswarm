@@ -53,6 +53,7 @@
     "subtitle": "Direct a video or image with a single sentence, with multi-image reference and fine-grained parameter control",
     "newProject": "New Project",
     "assets": "Assets",
+    "projectsSection": "Projects",
     "assetsEmpty": "No assets yet",
     "comingSoon": "Coming soon",
     "poweredBy": "Powered by generate_video / generate_visual",

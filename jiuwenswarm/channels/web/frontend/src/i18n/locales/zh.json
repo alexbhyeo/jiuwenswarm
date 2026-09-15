@@ -53,6 +53,7 @@
     "subtitle": "用一句话导演一段视频或一张图片，支持多图参考与精细参数控制",
     "newProject": "新建项目",
     "assets": "素材",
+    "projectsSection": "项目",
     "assetsEmpty": "暂无素材",
     "comingSoon": "即将推出",
     "poweredBy": "由 generate_video / generate_visual 提供支持",

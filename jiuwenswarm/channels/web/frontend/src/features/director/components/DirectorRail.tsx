@@ -1,14 +1,15 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { DirectorAssetCounts, DirectorProject } from '../types';
+import type { DirectorAsset, DirectorProject } from '../types';
 
 interface DirectorRailProps {
   projects: DirectorProject[];
-  assetCounts: DirectorAssetCounts;
+  selectedProject: DirectorProject | null;
   onNewProject: () => void;
+  onSelectProject: (projectId: string) => void;
 }
 
-type ExpandedCategory = 'video' | 'image' | null;
+type ExpandedCategory = 'projects' | 'video' | 'image' | null;
 
 function rawFileUrl(path: string): string {
   return `/file-api/raw-file?path=${encodeURIComponent(path)}`;
@@ -40,6 +41,12 @@ const imageIcon = (
   </svg>
 );
 
+const projectIcon = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+  </svg>
+);
+
 const characterIcon = (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="8" r="3.2" />
@@ -65,26 +72,23 @@ const plusIcon = (
   </svg>
 );
 
-export function DirectorRail({ projects, assetCounts, onNewProject }: DirectorRailProps) {
+export function DirectorRail({ projects, selectedProject, onNewProject, onSelectProject }: DirectorRailProps) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState<ExpandedCategory>('image');
 
+  // 素材面板只反映"当前选中项目"的产物 —— 未创建/选中项目前不展示该区块，
+  // 已选中时也只列出该项目自己的 assets，而不是跨项目聚合。
   const assetsByType = useMemo(() => {
-    const video: Array<{ projectId: string; asset: DirectorProject['assets'][number] }> = [];
-    const image: Array<{ projectId: string; asset: DirectorProject['assets'][number] }> = [];
-    for (const project of projects) {
-      for (const asset of project.assets) {
-        if (asset.status !== 'ready') continue;
-        if (asset.type === 'video') video.push({ projectId: project.project_id, asset });
-        else if (asset.type === 'image') image.push({ projectId: project.project_id, asset });
-      }
+    const video: DirectorAsset[] = [];
+    const image: DirectorAsset[] = [];
+    for (const asset of selectedProject?.assets ?? []) {
+      if (asset.status !== 'ready') continue;
+      if (asset.type === 'video') video.push(asset);
+      else if (asset.type === 'image') image.push(asset);
     }
-    const byRecency = (
-      a: { asset: DirectorProject['assets'][number] },
-      b: { asset: DirectorProject['assets'][number] }
-    ) => b.asset.updated_at - a.asset.updated_at;
+    const byRecency = (a: DirectorAsset, b: DirectorAsset) => b.updated_at - a.updated_at;
     return { video: video.sort(byRecency), image: image.sort(byRecency) };
-  }, [projects]);
+  }, [selectedProject]);
 
   const toggle = (category: ExpandedCategory) => {
     setExpanded((prev) => (prev === category ? null : category));
@@ -99,72 +103,116 @@ export function DirectorRail({ projects, assetCounts, onNewProject }: DirectorRa
         {t('director.newProject')}
       </button>
 
-      <div className="director-rail-section-label">{t('director.assets')}</div>
-
-      <div className="director-rail-categories">
-        <button
-          type="button"
-          className={`director-category-row ${expanded === 'video' ? 'director-category-row--active' : ''}`}
-          onClick={() => toggle('video')}
-        >
-          <span className="director-category-icon">{videoIcon}</span>
-          <span className="director-category-label">{t('director.categories.video')}</span>
-          <span className="director-category-count">{assetCounts.video}</span>
-          {expanded === 'video' ? chevronDown : chevronRight}
-        </button>
-        {expanded === 'video' && (
-          <div className="director-asset-grid">
-            {assetsByType.video.length === 0 && (
-              <div className="director-empty-hint">{t('director.assetsEmpty')}</div>
-            )}
-            {assetsByType.video.map(({ asset }) => (
-              <div key={asset.asset_id}>
-                <div className="director-asset-thumb">
-                  {asset.file_path && (
-                    <video src={rawFileUrl(asset.file_path)} muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  )}
-                </div>
-                <div className="director-asset-name">{asset.prompt || t('director.categories.video')}</div>
-                <div className="director-asset-time">{relativeTime(t, asset.updated_at)}</div>
+      {projects.length > 0 && (
+        <>
+          <div className="director-rail-categories director-rail-categories--projects">
+            <button
+              type="button"
+              className={`director-category-row ${expanded === 'projects' ? 'director-category-row--active' : ''}`}
+              onClick={() => toggle('projects')}
+            >
+              <span className="director-category-icon">{projectIcon}</span>
+              <span className="director-category-label">{t('director.projectsSection')}</span>
+              <span className="director-category-count">{projects.length}</span>
+              {expanded === 'projects' ? chevronDown : chevronRight}
+            </button>
+            {expanded === 'projects' && (
+              <div className="director-project-list">
+                {projects.map((project) => (
+                  <button
+                    key={project.project_id}
+                    type="button"
+                    className={`director-project-row ${
+                      project.project_id === selectedProject?.project_id ? 'director-project-row--active' : ''
+                    }`}
+                    onClick={() => onSelectProject(project.project_id)}
+                  >
+                    <span className="director-project-row-name">{project.name}</span>
+                    <span className="director-category-count">{project.assets.length}</span>
+                  </button>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
-
-        <button
-          type="button"
-          className={`director-category-row ${expanded === 'image' ? 'director-category-row--active' : ''}`}
-          onClick={() => toggle('image')}
-        >
-          <span className="director-category-icon">{imageIcon}</span>
-          <span className="director-category-label">{t('director.categories.image')}</span>
-          <span className="director-category-count">{assetCounts.image}</span>
-          {expanded === 'image' ? chevronDown : chevronRight}
-        </button>
-        {expanded === 'image' && (
-          <div className="director-asset-grid">
-            {assetsByType.image.length === 0 && (
-              <div className="director-empty-hint">{t('director.assetsEmpty')}</div>
             )}
-            {assetsByType.image.map(({ asset }) => (
-              <div key={asset.asset_id}>
-                <div
-                  className="director-asset-thumb"
-                  style={asset.file_path ? { backgroundImage: `url(${rawFileUrl(asset.file_path)})` } : undefined}
-                />
-                <div className="director-asset-name">{asset.prompt || t('director.categories.image')}</div>
-                <div className="director-asset-time">{relativeTime(t, asset.updated_at)}</div>
-              </div>
-            ))}
           </div>
-        )}
+        </>
+      )}
 
-        <div className="director-category-row director-category-row--disabled">
-          <span className="director-category-icon">{characterIcon}</span>
-          <span className="director-category-label">{t('director.categories.character')}</span>
-          <span className="director-category-soon">{t('director.comingSoon')}</span>
-        </div>
-      </div>
+      {selectedProject && (
+        <>
+          <div className="director-rail-section-label">{t('director.assets')}</div>
+
+          <div className="director-rail-categories">
+            <button
+              type="button"
+              className={`director-category-row ${expanded === 'video' ? 'director-category-row--active' : ''}`}
+              onClick={() => toggle('video')}
+            >
+              <span className="director-category-icon">{videoIcon}</span>
+              <span className="director-category-label">{t('director.categories.video')}</span>
+              <span className="director-category-count">{assetsByType.video.length}</span>
+              {expanded === 'video' ? chevronDown : chevronRight}
+            </button>
+            {expanded === 'video' && (
+              <div className="director-asset-grid">
+                {assetsByType.video.length === 0 && (
+                  <div className="director-empty-hint">{t('director.assetsEmpty')}</div>
+                )}
+                {assetsByType.video.map((asset) => (
+                  <div key={asset.asset_id} className="director-asset-item">
+                    <div className="director-asset-thumb director-asset-thumb--video">
+                      {asset.file_path && (
+                        <video
+                          src={rawFileUrl(asset.file_path)}
+                          controls
+                          playsInline
+                          preload="metadata"
+                          style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
+                        />
+                      )}
+                    </div>
+                    <div className="director-asset-name">{asset.prompt || t('director.categories.video')}</div>
+                    <div className="director-asset-time">{relativeTime(t, asset.updated_at)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <button
+              type="button"
+              className={`director-category-row ${expanded === 'image' ? 'director-category-row--active' : ''}`}
+              onClick={() => toggle('image')}
+            >
+              <span className="director-category-icon">{imageIcon}</span>
+              <span className="director-category-label">{t('director.categories.image')}</span>
+              <span className="director-category-count">{assetsByType.image.length}</span>
+              {expanded === 'image' ? chevronDown : chevronRight}
+            </button>
+            {expanded === 'image' && (
+              <div className="director-asset-grid">
+                {assetsByType.image.length === 0 && (
+                  <div className="director-empty-hint">{t('director.assetsEmpty')}</div>
+                )}
+                {assetsByType.image.map((asset) => (
+                  <div key={asset.asset_id} className="director-asset-item">
+                    <div
+                      className="director-asset-thumb"
+                      style={asset.file_path ? { backgroundImage: `url(${rawFileUrl(asset.file_path)})` } : undefined}
+                    />
+                    <div className="director-asset-name">{asset.prompt || t('director.categories.image')}</div>
+                    <div className="director-asset-time">{relativeTime(t, asset.updated_at)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="director-category-row director-category-row--disabled">
+              <span className="director-category-icon">{characterIcon}</span>
+              <span className="director-category-label">{t('director.categories.character')}</span>
+              <span className="director-category-soon">{t('director.comingSoon')}</span>
+            </div>
+          </div>
+        </>
+      )}
 
       <div className="director-rail-spacer" />
 

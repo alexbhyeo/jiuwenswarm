@@ -2,6 +2,13 @@
    Tokens 取自应用真实设计系统（见 App.tsx / SessionSidebar 现有取值），
    与已批准的设计稿保持一致。*/
 
+.director-page,
+.director-page *,
+.director-page *::before,
+.director-page *::after {
+  box-sizing: border-box;
+}
+
 .director-page {
   --d-text-primary: #191919;
   --d-text-secondary: #777777;
@@ -91,6 +98,53 @@
   min-height: 0;
 }
 
+.director-rail-categories--projects {
+  flex: 0 0 auto;
+  margin-bottom: 16px;
+  overflow-y: visible;
+}
+
+.director-project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0 6px;
+}
+
+.director-project-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  border-radius: var(--d-radius-md);
+  padding: 0 8px 0 29px;
+  background: none;
+  border: none;
+  width: 100%;
+  color: var(--d-text-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.director-project-row:hover {
+  background: var(--d-bg-hover);
+}
+
+.director-project-row--active {
+  background: var(--d-accent-soft);
+  color: var(--d-accent);
+  font-weight: 600;
+}
+
+.director-project-row-name {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .director-category-row {
   display: flex;
   align-items: center;
@@ -163,13 +217,21 @@
 
 .director-asset-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: 1fr;
+  gap: 12px;
   padding: 8px 4px 12px;
 }
 
+.director-asset-item {
+  /* Grid items default to min-width:auto (min-content); without this, the
+     nowrap prompt text below forces the 1fr track to grow to fit the full
+     unwrapped string, overflowing the rail with a horizontal scrollbar. */
+  min-width: 0;
+}
+
 .director-asset-thumb {
-  aspect-ratio: 1;
+  width: 100%;
+  aspect-ratio: 16 / 9;
   border-radius: var(--d-radius-md);
   border: 1px solid var(--d-border-default);
   background: var(--d-bg-hover) center / cover no-repeat;

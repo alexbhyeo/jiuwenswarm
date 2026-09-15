@@ -10,8 +10,11 @@ import './styles/director.css';
 export function DirectorPage() {
   const activeTab = useDirectorStore((s) => s.activeTab);
   const projects = useDirectorStore((s) => s.projects);
-  const assetCounts = useDirectorStore((s) => s.assetCounts);
+  const selectedProject = useDirectorStore(
+    (s) => s.projects.find((p) => p.project_id === s.selectedProjectId) ?? null
+  );
   const loadProjects = useDirectorStore((s) => s.loadProjects);
+  const selectProject = useDirectorStore((s) => s.selectProject);
   const [railDialogOpen, setRailDialogOpen] = useState(false);
 
   useEffect(() => {
@@ -20,7 +23,12 @@ export function DirectorPage() {
 
   return (
     <div className="director-page">
-      <DirectorRail projects={projects} assetCounts={assetCounts} onNewProject={() => setRailDialogOpen(true)} />
+      <DirectorRail
+        projects={projects}
+        selectedProject={selectedProject}
+        onNewProject={() => setRailDialogOpen(true)}
+        onSelectProject={selectProject}
+      />
       <div className="director-detail">
         {activeTab === 'create' && <CreationHomeTab />}
         {activeTab === 'lab' && <LabTabShell />}

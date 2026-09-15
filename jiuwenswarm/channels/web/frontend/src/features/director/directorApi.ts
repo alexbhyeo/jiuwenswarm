@@ -25,7 +25,10 @@ const METHOD = {
   generateCheckStatus: 'director.generate.check_status',
 } as const;
 
-const GENERATE_TIMEOUT_MS = 130_000;
+// generate_video 内部轮询上限是 120s（12 次 * 10s sleep），但每次 sleep 之间还有一次
+// GET 轮询请求的真实网络耗时，加上提交任务的首个 POST——实测总耗时可达 130-150s+，
+// 130s 的前端超时边际太薄，会在正常（非异常）情况下就先于后端返回而超时。
+const GENERATE_TIMEOUT_MS = 200_000;
 
 function toDirectorError(err: unknown): DirectorApiError {
   if (err instanceof DirectorApiError) return err;
