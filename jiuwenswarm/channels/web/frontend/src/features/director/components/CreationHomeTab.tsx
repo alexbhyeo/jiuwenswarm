@@ -35,8 +35,8 @@ export function CreationHomeTab() {
 
       <ComposerCard />
       <QuickStartChips />
-      <TemplateGallery />
       <ProjectGrid projects={projects} onNewProject={() => setDialogOpen(true)} />
+      <TemplateGallery />
 
       {dialogOpen && <NewProjectDialog onClose={() => setDialogOpen(false)} />}
     </div>
