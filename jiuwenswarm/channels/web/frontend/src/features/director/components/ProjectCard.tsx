@@ -1,9 +1,51 @@
+import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { DirectorProject } from '../types';
 
 interface ProjectCardProps {
   project: DirectorProject;
   onSelect: () => void;
+}
+
+const enlargeIcon = (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3" />
+  </svg>
+);
+
+interface EnlargeableCoverImageProps {
+  src: string;
+  alt: string;
+}
+
+/** 与 素材 面板的图片缩略图一致：真实 <img> + 右下角放大按钮，点击调用
+ *  浏览器原生 Fullscreen API；stopPropagation 避免同时触发卡片的选中。 */
+function EnlargeableCoverImage({ src, alt }: EnlargeableCoverImageProps) {
+  const { t } = useTranslation();
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  return (
+    <>
+      <img
+        ref={imgRef}
+        src={src}
+        alt={alt}
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+      />
+      <button
+        type="button"
+        className="director-project-enlarge-btn"
+        title={t('director.enlarge')}
+        onClick={(e) => {
+          e.stopPropagation();
+          imgRef.current?.requestFullscreen?.();
+        }}
+      >
+        {enlargeIcon}
+      </button>
+    </>
+  );
 }
 
 function rawFileUrl(path: string): string {
@@ -26,6 +68,7 @@ export function ProjectCard({ project, onSelect }: ProjectCardProps) {
   const readyAssets = project.assets.filter((a) => a.status === 'ready');
   const cover = readyAssets[readyAssets.length - 1];
   const isVideoCover = cover?.type === 'video' && !!cover.file_path;
+  const isImageCover = cover?.type === 'image' && !!cover.file_path;
 
   return (
     <div
@@ -42,8 +85,10 @@ export function ProjectCard({ project, onSelect }: ProjectCardProps) {
     >
       <div
         className={`director-project-thumb ${!cover ? 'director-project-thumb--empty' : ''} ${isVideoCover ? 'director-project-thumb--video' : ''}`}
-        style={cover?.type === 'image' && cover.file_path ? { backgroundImage: `url(${rawFileUrl(cover.file_path)})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}
       >
+        {isImageCover && (
+          <EnlargeableCoverImage src={rawFileUrl(cover.file_path!)} alt={cover.name || cover.prompt} />
+        )}
         {isVideoCover && (
           // 视频封面：用真实 <video> 展示首帧并可直接播放（与 素材 面板的
           // 视频缩略图一致），而不是装饰性播放图标 —— 点击视频/其控件时
@@ -58,7 +103,7 @@ export function ProjectCard({ project, onSelect }: ProjectCardProps) {
           />
         )}
         {cover && (
-          <div className={`director-project-badge ${isVideoCover ? 'director-project-badge--top' : ''}`}>
+          <div className={`director-project-badge ${isVideoCover || isImageCover ? 'director-project-badge--top' : ''}`}>
             {String(cover.params.aspect_ratio || '')}
             {cover.type === 'video' && cover.params.duration_seconds ? ` · ${cover.params.duration_seconds}s` : ''}
           </div>

@@ -824,6 +824,26 @@
   background: #000;
 }
 
+.director-project-enlarge-btn {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.director-project-enlarge-btn:hover {
+  background: rgba(0, 0, 0, 0.75);
+}
+
 .director-project-badge {
   position: absolute;
   bottom: 8px;
