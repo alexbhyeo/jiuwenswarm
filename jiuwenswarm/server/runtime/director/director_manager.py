@@ -117,21 +117,35 @@ class DirectorManager:
             raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")
         return {"project": project.to_dict()}
 
-    def _resolve_at_reference(self, project: DirectorProject, prompt: str) -> tuple[str, str | None]:
-        """解析提示词中的 "@名称" 引用为一张已命名的图片素材.
+    def _resolve_at_references(
+        self, project: DirectorProject, prompt: str, max_refs: int
+    ) -> tuple[str, list[str]]:
+        """解析提示词中最多 max_refs 个 "@名称" 引用为已命名图片素材的路径.
 
-        只认第一个能匹配到"就绪图片素材"的 @token；命中后从提示词里去掉该
-        token（其余文本原样发给模型），返回 (清理后的提示词, 图片路径)。
-        未命中任何素材时原样返回 (prompt, None) —— 调用方据此决定是否传
-        reference_image_path，而不是把裸露的 "@xxx" 发给模型。
+        跨类别：无论当前是图片还是视频生成模式，@ 引用总是从该项目"素材 ·
+        图片"分类里找已命名、已就绪的图片（视频素材不可作为引用源）。按出现
+        顺序取前 max_refs 个命中，命中的 token 从提示词里移除（其余文本原样
+        发给模型）。image 模式下 max_refs=1，结果整体作为 generate_visual 的
+        reference_image_path；video 模式下 max_refs=2，调用方把结果按顺序
+        映射为 first_frame_path（首帧）/ last_frame_path（尾帧）——
+        generate_video 最多只接受这两张。未命中任何素材时原样返回
+        (prompt, [])。
         """
+        resolved: list[str] = []
+        cleaned = prompt
+        offset = 0
         for match in _RE_AT_REFERENCE.finditer(prompt):
+            if len(resolved) >= max_refs:
+                break
             asset = self._store.find_asset_by_name(project.project_id, match.group(1))
-            if asset and asset.type == "image" and asset.status == "ready" and asset.file_path:
-                cleaned = (prompt[: match.start()] + prompt[match.end():]).strip()
-                cleaned = re.sub(r"\s{2,}", " ", cleaned)
-                return cleaned or prompt, asset.file_path
-        return prompt, None
+            if not (asset and asset.type == "image" and asset.status == "ready" and asset.file_path):
+                continue
+            resolved.append(asset.file_path)
+            start, end = match.start() - offset, match.end() - offset
+            cleaned = cleaned[:start] + cleaned[end:]
+            offset += match.end() - match.start()
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+        return (cleaned or prompt, resolved) if resolved else (prompt, [])
 
     async def handle_director_projects_create(self, params: dict) -> dict:
         name = str(params.get("name") or "").strip()
@@ -166,25 +180,37 @@ class DirectorManager:
                 raise DirectorRpcError("NOT_CONFIGURED", "视频生成未配置，请先在设置中配置「视频处理」")
             duration_seconds = int(params.get("duration_seconds") or 15)
             generate_audio = bool(params.get("generate_audio") or False)
+            # 最多 2 个 @引用：第 1 个当首帧，第 2 个当尾帧——与 generate_video
+            # 的 first_frame_path/last_frame_path 一一对应。
+            cleaned_prompt, ref_paths = self._resolve_at_references(project, prompt, max_refs=2)
+            first_frame_path = ref_paths[0] if len(ref_paths) > 0 else None
+            last_frame_path = ref_paths[1] if len(ref_paths) > 1 else None
             gen_params: dict[str, Any] = {
                 "aspect_ratio": aspect_ratio,
                 "resolution": resolution,
                 "duration_seconds": duration_seconds,
                 "generate_audio": generate_audio,
             }
+            if first_frame_path:
+                gen_params["first_frame_path"] = first_frame_path
+            if last_frame_path:
+                gen_params["last_frame_path"] = last_frame_path
             async with self._lock:
                 result_str = await generate_video._func(
-                    prompt=prompt,
+                    prompt=cleaned_prompt,
                     aspect_ratio=aspect_ratio,
                     resolution=resolution,
                     duration_seconds=duration_seconds,
+                    first_frame_path=first_frame_path,
+                    last_frame_path=last_frame_path,
                     generate_audio=generate_audio,
                     save_dir=save_dir,
                 )
         else:
             if not (visual_gen_enabled() and visual_gen_configured()):
                 raise DirectorRpcError("NOT_CONFIGURED", "图片生成未配置，请先在设置中配置「图片处理」")
-            cleaned_prompt, reference_image_path = self._resolve_at_reference(project, prompt)
+            cleaned_prompt, ref_paths = self._resolve_at_references(project, prompt, max_refs=1)
+            reference_image_path = ref_paths[0] if ref_paths else None
             gen_params = {"aspect_ratio": aspect_ratio, "resolution": resolution}
             if reference_image_path:
                 gen_params["reference_image_path"] = reference_image_path

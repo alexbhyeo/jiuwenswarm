@@ -188,11 +188,12 @@ async def _poll_job(
 @tool(
     name="generate_video",
     description=(
-        "Generate a video clip from a text prompt (and optionally a first-frame image) "
-        "using AI video generation models. Use this tool when the user wants to create "
-        "or generate a video based on a text description. Video generation can take "
-        "several minutes; if this tool returns a job_id instead of a finished video, call "
-        "check_video_status with that job_id to keep waiting for it instead of resubmitting."
+        "Generate a video clip from a text prompt (and optionally a first-frame and/or "
+        "last-frame image) using AI video generation models. Use this tool when the user "
+        "wants to create or generate a video based on a text description. Video generation "
+        "can take several minutes; if this tool returns a job_id instead of a finished "
+        "video, call check_video_status with that job_id to keep waiting for it instead of "
+        "resubmitting."
     ),
 )
 async def generate_video(  # pylint: disable=huawei-too-many-arguments
@@ -201,6 +202,7 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
     resolution: str = "480p",
     duration_seconds: int = 15,
     first_frame_path: str | None = None,
+    last_frame_path: str | None = None,
     generate_audio: bool = False,
     save_dir: str | None = None,
 ) -> str:
@@ -227,6 +229,9 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
         duration_seconds: Clip length in seconds (model-dependent, typically 5-15).
         first_frame_path: Optional local file path, http(s) URL, or data: URI to
             condition the first frame on (image-to-video).
+        last_frame_path: Optional local file path, http(s) URL, or data: URI to
+            condition the last frame on - combined with first_frame_path this asks
+            the model to interpolate a clip between the two (model-dependent support).
         generate_audio: Whether to request native audio generation, if supported
             by the model.
         save_dir: Optional directory to save the video (defaults to the agent
@@ -246,11 +251,14 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
     if not prompt:
         return "[ERROR]: prompt is required."
 
-    frame_data_uri = None
-    if first_frame_path:
-        frame_data_uri, err = _resolve_frame_reference(first_frame_path)
+    frame_images: list[dict[str, Any]] = []
+    for path_or_url, frame_type in ((first_frame_path, "first_frame"), (last_frame_path, "last_frame")):
+        if not path_or_url:
+            continue
+        frame_data_uri, err = _resolve_frame_reference(path_or_url)
         if err:
             return err
+        frame_images.append({"type": "image_url", "image_url": {"url": frame_data_uri}, "frame_type": frame_type})
 
     body: dict[str, Any] = {
         "model": model,
@@ -260,15 +268,15 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
         "duration": duration_seconds,
         "generate_audio": bool(generate_audio),
     }
-    if frame_data_uri:
-        body["frame_images"] = [
-            {"type": "image_url", "image_url": {"url": frame_data_uri}, "frame_type": "first_frame"}
-        ]
+    if frame_images:
+        body["frame_images"] = frame_images
 
     headers = {"Authorization": f"Bearer {api_key}"}
     logger.info(
-        "[generate_video] using model: %s (api_base: %s, aspect_ratio: %s, resolution: %s, duration: %ss)",
+        "[generate_video] using model: %s (api_base: %s, aspect_ratio: %s, resolution: %s, "
+        "duration: %ss, frame_images: %s)",
         model, api_base, aspect_ratio, resolution, duration_seconds,
+        [f["frame_type"] for f in frame_images],
     )
 
     try:

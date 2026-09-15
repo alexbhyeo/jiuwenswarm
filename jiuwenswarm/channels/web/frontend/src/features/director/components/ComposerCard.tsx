@@ -75,15 +75,17 @@ export function ComposerCard() {
 
   const resolutionOptions = composerMode === 'video' ? VIDEO_RESOLUTION_OPTIONS : IMAGE_RESOLUTION_OPTIONS;
 
-  // "@" 引用只对图片模式的 generate_visual 生效（见 director_manager.
-  // _resolve_at_reference），只列当前项目里已命名的、生成完成的图片素材。
+  // "@" 引用跨类别：无论当前是图片还是视频生成模式，素材来源永远是该项目
+  // "素材 · 图片"分类里已命名、已就绪的图片（见 director_manager.
+  // _resolve_at_references）——图片模式最多用 1 个当参考图，视频模式最多用
+  // 2 个，按输入顺序分别对应 generate_video 的首帧/尾帧。
   const namedImageNames = useMemo(() => {
-    if (composerMode !== 'image' || !selectedProject) return [];
+    if (!selectedProject) return [];
     const names = selectedProject.assets
       .filter((a) => a.type === 'image' && a.status === 'ready' && a.name)
       .map((a) => a.name as string);
     return Array.from(new Set(names));
-  }, [composerMode, selectedProject]);
+  }, [selectedProject]);
 
   const filteredNames = useMemo(() => {
     if (!atMenu) return [];
@@ -114,8 +116,7 @@ export function ComposerCard() {
     const value = e.target.value;
     setComposerPrompt(value);
     const cursor = e.target.selectionStart ?? value.length;
-    const token = composerMode === 'image' ? detectAtToken(value, cursor) : null;
-    setAtMenu(token);
+    setAtMenu(detectAtToken(value, cursor));
     setHighlightIndex(0);
   };
 

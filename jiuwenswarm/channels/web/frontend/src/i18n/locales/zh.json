@@ -68,7 +68,7 @@
       "edit": "剪辑"
     },
     "composer": {
-      "placeholderVideo": "需要一段什么样的视频？描述画面、运镜、氛围，或拖入参考图片…",
+      "placeholderVideo": "需要一段什么样的视频？描述画面、运镜、氛围，或输入 @名称 引用已命名的图片作为首帧/尾帧（最多 2 张）…",
       "placeholderImage": "需要一张什么样的图片？描述画面、风格、构图，或输入 @名称 引用已命名的图片作为参考…",
       "durationLabel": "{{seconds}} 秒",
       "send": "生成",

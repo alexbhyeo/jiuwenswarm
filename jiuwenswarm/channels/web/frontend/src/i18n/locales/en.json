@@ -68,7 +68,7 @@
       "edit": "Edit"
     },
     "composer": {
-      "placeholderVideo": "What kind of video do you need? Describe the scene, camera movement, mood, or drag in a reference image…",
+      "placeholderVideo": "What kind of video do you need? Describe the scene, camera movement, mood, or type @name to reference a named image as the first/last frame (up to 2)…",
       "placeholderImage": "What kind of image do you need? Describe the scene, style, composition, or type @name to reference a named image…",
       "durationLabel": "{{seconds}}s",
       "send": "Generate",
