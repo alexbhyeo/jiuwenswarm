@@ -428,6 +428,10 @@
   cursor: default;
 }
 
+.director-composer-textarea-wrap {
+  position: relative;
+}
+
 .director-composer-textarea {
   width: 100%;
   min-height: 52px;
@@ -443,6 +447,56 @@
 
 .director-composer-textarea::placeholder {
   color: var(--d-text-placeholder);
+}
+
+.director-at-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 10;
+  min-width: 180px;
+  max-width: 280px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--d-bg-card);
+  border: 1px solid var(--d-border-default);
+  border-radius: var(--d-radius-md);
+  box-shadow: var(--d-shadow-md);
+  padding: 4px;
+}
+
+.director-at-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--d-radius-sm);
+  background: none;
+  color: var(--d-text-primary);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.director-at-menu-item svg {
+  color: var(--d-accent);
+  flex: 0 0 auto;
+}
+
+.director-at-menu-item span {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.director-at-menu-item--active {
+  background: var(--d-accent-soft);
+  color: var(--d-accent);
 }
 
 .director-composer-toolbar {
