@@ -114,6 +114,7 @@
       "action": "重命名",
       "placeholder": "名称（不含空格）"
     },
+    "enlarge": "放大查看",
     "lab": {
       "breadcrumb": "实验室 · 多参考图合成",
       "refImage": "图片参考",

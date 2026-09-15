@@ -114,6 +114,7 @@
       "action": "Rename",
       "placeholder": "Name (no spaces)"
     },
+    "enlarge": "Enlarge",
     "lab": {
       "breadcrumb": "Lab · Multi-Reference Composite",
       "refImage": "Image Reference",

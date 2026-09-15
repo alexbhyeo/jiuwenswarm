@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDirectorStore } from '../directorStore';
 import type { DirectorAsset, DirectorProject } from '../types';
@@ -72,6 +72,41 @@ const plusIcon = (
     <path d="M12 5v14M5 12h14" />
   </svg>
 );
+
+const enlargeIcon = (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3" />
+  </svg>
+);
+
+interface EnlargeableImageProps {
+  src: string;
+  alt: string;
+}
+
+/** 图片缩略图右下角的"放大"按钮，与视频原生控件的全屏按钮效果一致——
+ *  都调用浏览器 Fullscreen API，而不是自建 lightbox。 */
+function EnlargeableImage({ src, alt }: EnlargeableImageProps) {
+  const { t } = useTranslation();
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  return (
+    <>
+      <img ref={imgRef} src={src} alt={alt} className="director-asset-image" />
+      <button
+        type="button"
+        className="director-asset-enlarge-btn"
+        title={t('director.enlarge')}
+        onClick={(e) => {
+          e.stopPropagation();
+          imgRef.current?.requestFullscreen?.();
+        }}
+      >
+        {enlargeIcon}
+      </button>
+    </>
+  );
+}
 
 const pencilIcon = (
   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -266,10 +301,11 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
                 )}
                 {assetsByType.image.map((asset) => (
                   <div key={asset.asset_id} className="director-asset-item">
-                    <div
-                      className="director-asset-thumb"
-                      style={asset.file_path ? { backgroundImage: `url(${rawFileUrl(asset.file_path)})` } : undefined}
-                    />
+                    <div className="director-asset-thumb director-asset-thumb--image">
+                      {asset.file_path && (
+                        <EnlargeableImage src={rawFileUrl(asset.file_path)} alt={asset.name || asset.prompt} />
+                      )}
+                    </div>
                     <AssetNameLabel
                       asset={asset}
                       fallback={t('director.categories.image')}

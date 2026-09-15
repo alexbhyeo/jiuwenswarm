@@ -230,6 +230,7 @@
 }
 
 .director-asset-thumb {
+  position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
   border-radius: var(--d-radius-md);
@@ -240,6 +241,33 @@
   justify-content: center;
   color: var(--d-text-secondary);
   overflow: hidden;
+}
+
+.director-asset-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.director-asset-enlarge-btn {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.director-asset-enlarge-btn:hover {
+  background: rgba(0, 0, 0, 0.75);
 }
 
 .director-asset-name {
