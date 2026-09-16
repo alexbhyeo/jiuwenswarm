@@ -1602,7 +1602,7 @@
   }
 }
 
-/* -- 悬浮工具栏（+ 添加菜单） -- */
+/* -- 悬浮工具栏（左侧竖排图标按钮 + 添加菜单） -- */
 
 .lab-toolrail {
   position: absolute;
@@ -1610,9 +1610,17 @@
   top: 50%;
   transform: translateY(-50%);
   z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
 }
 
-.lab-toolrail-add {
+.lab-toolrail-item {
+  position: relative;
+}
+
+.lab-toolrail-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1620,16 +1628,33 @@
   height: 44px;
   border: 1px solid var(--d-border-default);
   border-radius: var(--d-radius-full);
-  background: var(--d-text-primary);
-  color: #fff;
-  font-size: 22px;
-  line-height: 1;
-  box-shadow: var(--d-shadow-lg);
+  background: var(--d-bg-card);
+  color: var(--d-text-secondary);
+  box-shadow: var(--d-shadow-md);
   cursor: pointer;
 }
 
-.lab-toolrail-add:hover {
-  background: #000;
+.lab-toolrail-btn:hover {
+  border-color: var(--d-border-strong);
+  color: var(--d-text-primary);
+}
+
+.lab-toolrail-btn--text {
+  border-color: transparent;
+  background: #22c55e;
+  color: #fff;
+  box-shadow: var(--d-shadow-lg);
+}
+
+.lab-toolrail-btn--text:hover {
+  background: #16a34a;
+  color: #fff;
+}
+
+.lab-toolrail-btn--active {
+  border-color: var(--d-accent);
+  color: var(--d-accent);
+  background: var(--d-accent-soft);
 }
 
 .lab-add-menu {
@@ -1646,6 +1671,14 @@
   box-shadow: var(--d-shadow-lg);
 }
 
+.lab-add-menu--side {
+  left: calc(100% + 10px);
+  bottom: auto;
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 140px;
+}
+
 .lab-add-menu button {
   display: block;
   width: 100%;
@@ -1657,6 +1690,7 @@
   font-size: 13px;
   text-align: left;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .lab-add-menu button:hover {
