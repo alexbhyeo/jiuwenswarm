@@ -3,10 +3,20 @@
 """Director Mode 项目/素材持久化.
 
 单进程内的简单全量 JSON 读写存储，参照 skill_manager.py 的
-_load_state/_save_state 模式：单用户桌面进程，与 SkillManager（同样零文件锁、
-每进程构造一次）相同的信任/并发画像，无需 project_store.py 那种跨进程文件锁。
-并发写入（同一进程内多个 RPC 同时到达）由 DirectorManager 持有的
-asyncio.Lock 串行化，这里不做任何锁处理。
+_load_state/_save_state 模式：单用户桌面进程，与 SkillManager 相同的信任/
+并发画像，无需 project_store.py 那种跨进程文件锁。
+
+每次公开方法调用都会重新从磁盘 _load()，不在 __init__ 里缓存一份长期持有的
+`self._projects`——这不是性能考量，而是修复一个真实 bug：director.* 的 WS
+RPC 都经由 DirectorManager 一个常驻（按 channel 缓存）实例处理，而
+`/file-api/director/upload` 走独立的 HTTP handler，每次请求都会 new 一个
+DirectorStore()。如果 DirectorStore 在构造时缓存内存快照，DirectorManager
+那个常驻实例的快照就会与上传接口刚写盘的内容永久不同步——上传的素材能显示
+（因为 projects.list 走的还是同一份陈旧内存），但对它 rename/delete 会因为
+"就是找不到这个 asset_id"而失败，因为常驻实例的内存里压根没有这条记录。
+文件很小、单用户，全量重读的开销可以忽略，用"永远读当前磁盘状态"换掉"内存
+缓存分歧"更稳。并发写入仍由 DirectorManager 的 asyncio.Lock（WS 路径）和
+director_multipart_http 的 threading.Lock（上传路径）分别串行化。
 """
 
 from __future__ import annotations
@@ -120,11 +130,14 @@ def get_project_assets_dir(project_id: str) -> Path:
 
 
 class DirectorStore:
-    """Director 项目集合的简单全量 JSON 存储（见模块 docstring 的并发说明）."""
+    """Director 项目集合的简单全量 JSON 存储（见模块 docstring 的并发说明）.
+
+    每个公开方法都自成一次完整的 load → (改) → save 往返，不持有任何跨调用
+    的内存状态；`DirectorStore()` 因此可以随意多次构造而不必担心快照分歧。
+    """
 
     def __init__(self) -> None:
         self._state_file = _get_state_file()
-        self._projects: dict[str, DirectorProject] = self._load()
 
     def _load(self) -> dict[str, DirectorProject]:
         try:
@@ -142,12 +155,12 @@ class DirectorStore:
             logger.exception("[DirectorStore] 加载 director_state.json 失败，使用空状态")
         return {}
 
-    def _save(self) -> None:
+    def _save(self, projects: dict[str, DirectorProject]) -> None:
         try:
             self._state_file.parent.mkdir(parents=True, exist_ok=True)
             payload = {
                 "version": _STATE_VERSION,
-                "projects": [p.to_dict() for p in self._projects.values()],
+                "projects": [p.to_dict() for p in projects.values()],
             }
             self._state_file.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2),
@@ -157,12 +170,14 @@ class DirectorStore:
             logger.exception("[DirectorStore] 保存 director_state.json 失败")
 
     def list_projects(self) -> list[DirectorProject]:
-        return sorted(self._projects.values(), key=lambda p: p.updated_at, reverse=True)
+        projects = self._load()
+        return sorted(projects.values(), key=lambda p: p.updated_at, reverse=True)
 
     def get_project(self, project_id: str) -> DirectorProject | None:
-        return self._projects.get(project_id)
+        return self._load().get(project_id)
 
     def create_project(self, name: str) -> DirectorProject:
+        projects = self._load()
         now = time.time()
         project = DirectorProject(
             project_id=f"dproj_{secrets.token_hex(4)}",
@@ -170,21 +185,23 @@ class DirectorStore:
             created_at=now,
             updated_at=now,
         )
-        self._projects[project.project_id] = project
-        self._save()
+        projects[project.project_id] = project
+        self._save(projects)
         return project
 
     def append_asset(self, project_id: str, asset: DirectorAsset) -> DirectorProject:
-        project = self._projects.get(project_id)
+        projects = self._load()
+        project = projects.get(project_id)
         if project is None:
             raise KeyError(project_id)
         project.assets.append(asset)
         project.updated_at = time.time()
-        self._save()
+        self._save(projects)
         return project
 
     def update_asset(self, project_id: str, asset_id: str, **patch: Any) -> DirectorProject:
-        project = self._projects.get(project_id)
+        projects = self._load()
+        project = projects.get(project_id)
         if project is None:
             raise KeyError(project_id)
         for asset in project.assets:
@@ -195,7 +212,7 @@ class DirectorStore:
                 asset.updated_at = time.time()
                 break
         project.updated_at = time.time()
-        self._save()
+        self._save(projects)
         return project
 
     def delete_asset(self, project_id: str, asset_id: str) -> DirectorProject:
@@ -203,12 +220,13 @@ class DirectorStore:
         （DirectorManager）在拿到被删素材的 file_path 后自行处理，
         以保持本方法单一职责：只管 director_state.json 的一致性）。
         """
-        project = self._projects.get(project_id)
+        projects = self._load()
+        project = projects.get(project_id)
         if project is None:
             raise KeyError(project_id)
         project.assets = [a for a in project.assets if a.asset_id != asset_id]
         project.updated_at = time.time()
-        self._save()
+        self._save(projects)
         return project
 
     def find_asset_by_name(self, project_id: str, name: str) -> DirectorAsset | None:
@@ -216,7 +234,7 @@ class DirectorStore:
 
         供 "@名称" 引用解析使用（见 director_manager._resolve_at_reference）。
         """
-        project = self._projects.get(project_id)
+        project = self._load().get(project_id)
         if project is None:
             return None
         target = name.strip().lower()
@@ -229,7 +247,7 @@ class DirectorStore:
 
     def asset_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {"video": 0, "image": 0}
-        for project in self._projects.values():
+        for project in self._load().values():
             for asset in project.assets:
                 if asset.type in counts:
                     counts[asset.type] += 1
