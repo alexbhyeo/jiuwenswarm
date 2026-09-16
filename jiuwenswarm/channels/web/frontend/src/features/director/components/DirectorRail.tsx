@@ -1,7 +1,20 @@
 import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDirectorStore } from '../directorStore';
-import type { DirectorAsset, DirectorProject } from '../types';
+import type { DirectorAsset, DirectorAssetDragPayload, DirectorProject } from '../types';
+import { DIRECTOR_ASSET_DRAG_MIME } from '../types';
+
+function dragAssetPayload(asset: DirectorAsset): DirectorAssetDragPayload | null {
+  if (!asset.file_path) return null;
+  return { assetId: asset.asset_id, type: asset.type, filePath: asset.file_path, name: asset.name || asset.prompt };
+}
+
+function handleAssetDragStart(e: React.DragEvent, asset: DirectorAsset) {
+  const payload = dragAssetPayload(asset);
+  if (!payload) return;
+  e.dataTransfer.setData(DIRECTOR_ASSET_DRAG_MIME, JSON.stringify(payload));
+  e.dataTransfer.effectAllowed = 'copy';
+}
 
 interface DirectorRailProps {
   projects: DirectorProject[];
@@ -353,7 +366,12 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
                   <div className="director-empty-hint">{t('director.assetsEmpty')}</div>
                 )}
                 {assetsByType.video.map((asset) => (
-                  <div key={asset.asset_id} className="director-asset-item">
+                  <div
+                    key={asset.asset_id}
+                    className="director-asset-item"
+                    draggable
+                    onDragStart={(e) => handleAssetDragStart(e, asset)}
+                  >
                     <div className="director-asset-thumb director-asset-thumb--video">
                       {asset.file_path && (
                         <video
@@ -401,7 +419,12 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
                   <div className="director-empty-hint">{t('director.assetsEmpty')}</div>
                 )}
                 {assetsByType.image.map((asset) => (
-                  <div key={asset.asset_id} className="director-asset-item">
+                  <div
+                    key={asset.asset_id}
+                    className="director-asset-item"
+                    draggable
+                    onDragStart={(e) => handleAssetDragStart(e, asset)}
+                  >
                     <div className="director-asset-thumb director-asset-thumb--image">
                       {asset.file_path && (
                         <EnlargeableImage src={rawFileUrl(asset.file_path)} alt={asset.name || asset.prompt} />

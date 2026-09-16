@@ -1308,3 +1308,369 @@
   font-size: 12.5px;
   color: var(--d-text-secondary);
 }
+
+/* ===== 实验室（Lab）节点画布 — 基于 @xyflow/react ===== */
+
+.lab-canvas-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+.lab-canvas-wrap .react-flow__attribution {
+  display: none;
+}
+
+.lab-canvas-wrap .react-flow__controls {
+  border-radius: var(--d-radius-md);
+  box-shadow: var(--d-shadow-md);
+  overflow: hidden;
+}
+
+.lab-canvas-wrap .react-flow__controls-button {
+  border-bottom: 1px solid var(--d-border-default);
+  background: var(--d-bg-card);
+}
+
+.lab-canvas-wrap .react-flow__edge-path {
+  stroke: var(--d-border-strong);
+  stroke-width: 2;
+}
+
+.lab-canvas-wrap .react-flow__edge.selected .react-flow__edge-path,
+.lab-canvas-wrap .react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--d-accent);
+}
+
+.lab-canvas-wrap .react-flow__handle {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--d-bg-card);
+  background: var(--d-accent);
+}
+
+.lab-canvas-wrap .react-flow__handle.connectionindicator {
+  background: var(--d-accent-hover);
+}
+
+/* -- 通用节点卡片 -- */
+
+.lab-node {
+  position: relative;
+  min-width: 220px;
+  max-width: 260px;
+  border: 1px solid var(--d-border-default);
+  border-radius: var(--d-radius-lg);
+  background: var(--d-bg-card);
+  box-shadow: var(--d-shadow-md);
+  font-size: 12.5px;
+  color: var(--d-text-primary);
+  overflow: visible;
+}
+
+.lab-node-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px;
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--d-text-secondary);
+  border-bottom: 1px solid var(--d-border-default);
+}
+
+.lab-node-text-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: var(--d-radius-sm);
+  background: transparent;
+  color: var(--d-text-secondary);
+  cursor: pointer;
+}
+
+.lab-node-text-delete:hover {
+  background: var(--d-bg-hover);
+  color: #dc2626;
+}
+
+/* -- 图片 / 视频节点 -- */
+
+.lab-node--image,
+.lab-node--video {
+  min-width: 180px;
+  max-width: 220px;
+}
+
+.lab-node-media {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 0;
+  overflow: hidden;
+  background: var(--d-bg-shell);
+}
+
+.lab-node-media img,
+.lab-node-media video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.lab-node-media-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.lab-node-media:hover .lab-node-media-actions {
+  opacity: 1;
+}
+
+.lab-node-media-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--d-radius-full);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+}
+
+.lab-node-media-actions button:hover {
+  background: rgba(0, 0, 0, 0.75);
+}
+
+.lab-node-name {
+  padding: 7px 12px;
+  font-size: 11.5px;
+  color: var(--d-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* -- 文本节点 -- */
+
+.lab-node--text {
+  min-width: 220px;
+}
+
+.lab-node-textarea {
+  display: block;
+  width: 100%;
+  min-height: 84px;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 0 0 var(--d-radius-lg) var(--d-radius-lg);
+  background: transparent;
+  color: var(--d-text-primary);
+  font: inherit;
+  resize: vertical;
+}
+
+.lab-node-textarea:focus {
+  outline: none;
+  background: var(--d-bg-hover);
+}
+
+.lab-node-textarea::placeholder {
+  color: var(--d-text-placeholder);
+}
+
+/* -- 处理节点（Process Node） -- */
+
+.lab-node--process {
+  min-width: 240px;
+  max-width: 260px;
+}
+
+.lab-node-input-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 0 18px;
+  height: 26px;
+  font-size: 11.5px;
+  color: var(--d-text-secondary);
+}
+
+.lab-node-input-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--d-border-strong);
+  flex-shrink: 0;
+}
+
+.lab-node-input-filled {
+  margin-left: auto;
+  color: #16a34a;
+  font-weight: 600;
+}
+
+.lab-node-params {
+  padding: 8px 12px;
+  border-top: 1px solid var(--d-border-default);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lab-node-param-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--d-text-secondary);
+}
+
+.lab-node-param-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--d-text-primary);
+  font-weight: 500;
+}
+
+.lab-node-error {
+  margin: 0 12px 8px;
+  padding: 6px 8px;
+  border-radius: var(--d-radius-sm);
+  background: rgba(220, 38, 38, 0.08);
+  color: #dc2626;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.lab-node-generate-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: calc(100% - 16px);
+  margin: 0 8px 10px;
+  height: 32px;
+  border: none;
+  border-radius: var(--d-radius-full);
+  background: var(--d-text-primary);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lab-node-generate-btn:hover:not(:disabled) {
+  background: #000;
+}
+
+.lab-node-generate-btn:disabled {
+  background: var(--d-border-strong);
+  color: var(--d-text-secondary);
+  cursor: not-allowed;
+}
+
+.lab-node-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  animation: lab-spin 0.7s linear infinite;
+}
+
+@keyframes lab-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* -- 悬浮工具栏（+ 添加菜单） -- */
+
+.lab-toolrail {
+  position: absolute;
+  left: 20px;
+  bottom: 20px;
+  z-index: 5;
+}
+
+.lab-toolrail-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--d-border-default);
+  border-radius: var(--d-radius-full);
+  background: var(--d-text-primary);
+  color: #fff;
+  font-size: 22px;
+  line-height: 1;
+  box-shadow: var(--d-shadow-lg);
+  cursor: pointer;
+}
+
+.lab-toolrail-add:hover {
+  background: #000;
+}
+
+.lab-add-menu {
+  position: absolute;
+  left: 0;
+  bottom: 52px;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 6px;
+  border: 1px solid var(--d-border-default);
+  border-radius: var(--d-radius-md);
+  background: var(--d-bg-card);
+  box-shadow: var(--d-shadow-lg);
+}
+
+.lab-add-menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--d-radius-sm);
+  background: transparent;
+  color: var(--d-text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lab-add-menu button:hover {
+  background: var(--d-bg-hover);
+  color: var(--d-accent);
+}
+
+.lab-add-menu-divider {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--d-border-default);
+}
+
+.lab-add-menu-hint {
+  padding: 6px 10px 2px;
+  font-size: 11px;
+  color: var(--d-text-placeholder);
+}

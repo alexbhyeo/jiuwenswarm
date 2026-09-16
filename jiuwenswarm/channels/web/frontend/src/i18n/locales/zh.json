@@ -134,7 +134,19 @@
       "refModeValue": "元素混合",
       "genParams": "生成参数",
       "genParamsValue": "自动 · 4 张 · 2K",
-      "generate": "生成"
+      "generate": "生成",
+      "noProject": "请先在「创作」中选择或新建一个项目",
+      "addText": "添加文本节点",
+      "dragHint": "也可以从左侧「素材」面板拖拽图片或视频到画布",
+      "firstFrame": "首帧图片",
+      "lastFrame": "尾帧图片",
+      "generateFailed": "生成失败",
+      "process": {
+        "text2image": "文生图",
+        "text2video": "文生视频",
+        "image2video": "图生视频",
+        "imageRef": "图片参考"
+      }
     },
     "edit": {
       "breadcrumb": "剪辑",

@@ -53,6 +53,11 @@ export interface GenerateParams {
   resolution: string;
   durationSeconds?: number;
   generateAudio?: boolean;
+  /** 实验室节点画布：连线的显式引用（asset_id），绕开 composer 的
+   *  "@名称" 文本解析。video 模式下最多首帧+尾帧两个；image 模式下最多一个。 */
+  firstFrameAssetId?: string;
+  lastFrameAssetId?: string;
+  referenceAssetId?: string;
 }
 
 export interface GenerateResult {
@@ -88,3 +93,14 @@ export class DirectorApiError extends Error {
 }
 
 export type DirectorTabKey = 'create' | 'lab' | 'edit';
+
+/** 从 素材 面板拖拽资产到 实验室 画布时，dataTransfer 上携带的 MIME 类型
+ *  与负载结构。 */
+export const DIRECTOR_ASSET_DRAG_MIME = 'application/x-director-asset';
+
+export interface DirectorAssetDragPayload {
+  assetId: string;
+  type: DirectorAssetType;
+  filePath: string;
+  name: string;
+}

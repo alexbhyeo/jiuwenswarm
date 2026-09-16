@@ -147,6 +147,19 @@ class DirectorManager:
         cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
         return (cleaned or prompt, resolved) if resolved else (prompt, [])
 
+    def _resolve_asset_path(self, project: DirectorProject, asset_id: str) -> str | None:
+        """按 asset_id 直接取一张就绪图片素材的路径（不经过 "@名称" 文本解析）.
+
+        供 实验室 节点画布使用——节点间的连线本身就是显式引用，不需要（也不该）
+        把连线再编码成提示词里的 "@名称" 文本。
+        """
+        if not asset_id:
+            return None
+        asset = next((a for a in project.assets if a.asset_id == asset_id), None)
+        if asset and asset.type == "image" and asset.status == "ready" and asset.file_path:
+            return asset.file_path
+        return None
+
     async def handle_director_projects_create(self, params: dict) -> dict:
         name = str(params.get("name") or "").strip()
         if not name:
@@ -158,10 +171,14 @@ class DirectorManager:
         project_id = str(params.get("project_id") or "").strip()
         mode = str(params.get("mode") or "").strip()
         prompt = str(params.get("prompt") or "").strip()
+        first_frame_asset_id = str(params.get("first_frame_asset_id") or "").strip()
+        last_frame_asset_id = str(params.get("last_frame_asset_id") or "").strip()
+        reference_asset_id = str(params.get("reference_asset_id") or "").strip()
+        has_explicit_reference = bool(first_frame_asset_id or last_frame_asset_id or reference_asset_id)
 
         if not project_id:
             raise DirectorRpcError("INVALID_PARAMS", "缺少 project_id")
-        if not prompt:
+        if not prompt and not has_explicit_reference:
             raise DirectorRpcError("INVALID_PARAMS", "提示词不能为空")
         if mode not in _SUPPORTED_MODES:
             raise DirectorRpcError(
@@ -180,11 +197,17 @@ class DirectorManager:
                 raise DirectorRpcError("NOT_CONFIGURED", "视频生成未配置，请先在设置中配置「视频处理」")
             duration_seconds = int(params.get("duration_seconds") or 15)
             generate_audio = bool(params.get("generate_audio") or False)
-            # 最多 2 个 @引用：第 1 个当首帧，第 2 个当尾帧——与 generate_video
-            # 的 first_frame_path/last_frame_path 一一对应。
-            cleaned_prompt, ref_paths = self._resolve_at_references(project, prompt, max_refs=2)
-            first_frame_path = ref_paths[0] if len(ref_paths) > 0 else None
-            last_frame_path = ref_paths[1] if len(ref_paths) > 1 else None
+            # 实验室节点画布：连线本身就是显式引用，直接按 asset_id 取路径；
+            # 未提供时回退到 composer 的 "@名称" 文本解析（最多 2 个 @引用：
+            # 第 1 个当首帧，第 2 个当尾帧），两条路径互斥、不叠加。
+            first_frame_path = self._resolve_asset_path(project, first_frame_asset_id)
+            last_frame_path = self._resolve_asset_path(project, last_frame_asset_id)
+            if first_frame_path or last_frame_path:
+                cleaned_prompt = prompt or "Generate a video based on the provided reference image(s)."
+            else:
+                cleaned_prompt, ref_paths = self._resolve_at_references(project, prompt, max_refs=2)
+                first_frame_path = ref_paths[0] if len(ref_paths) > 0 else None
+                last_frame_path = ref_paths[1] if len(ref_paths) > 1 else None
             gen_params: dict[str, Any] = {
                 "aspect_ratio": aspect_ratio,
                 "resolution": resolution,
@@ -209,8 +232,12 @@ class DirectorManager:
         else:
             if not (visual_gen_enabled() and visual_gen_configured()):
                 raise DirectorRpcError("NOT_CONFIGURED", "图片生成未配置，请先在设置中配置「图片处理」")
-            cleaned_prompt, ref_paths = self._resolve_at_references(project, prompt, max_refs=1)
-            reference_image_path = ref_paths[0] if ref_paths else None
+            reference_image_path = self._resolve_asset_path(project, reference_asset_id)
+            if reference_image_path:
+                cleaned_prompt = prompt or "Generate an image based on the provided reference image."
+            else:
+                cleaned_prompt, ref_paths = self._resolve_at_references(project, prompt, max_refs=1)
+                reference_image_path = ref_paths[0] if ref_paths else None
             gen_params = {"aspect_ratio": aspect_ratio, "resolution": resolution}
             if reference_image_path:
                 gen_params["reference_image_path"] = reference_image_path
@@ -231,7 +258,7 @@ class DirectorManager:
             asset_id=f"asset_{secrets.token_hex(4)}",
             type=mode,
             status=parsed["status"],
-            prompt=prompt,
+            prompt=prompt or cleaned_prompt,
             params=gen_params,
             file_path=parsed.get("file_path"),
             job_id=parsed.get("job_id"),

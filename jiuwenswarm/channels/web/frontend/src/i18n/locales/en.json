@@ -134,7 +134,19 @@
       "refModeValue": "Element Blend",
       "genParams": "Parameters",
       "genParamsValue": "Auto · 4 images · 2K",
-      "generate": "Generate"
+      "generate": "Generate",
+      "noProject": "Select or create a project in Create first",
+      "addText": "Add Text Node",
+      "dragHint": "You can also drag images or videos from Assets onto the canvas",
+      "firstFrame": "First Frame",
+      "lastFrame": "Last Frame",
+      "generateFailed": "Generation failed",
+      "process": {
+        "text2image": "Text to Image",
+        "text2video": "Text to Video",
+        "image2video": "Image to Video",
+        "imageRef": "Image Reference"
+      }
     },
     "edit": {
       "breadcrumb": "Edit",
