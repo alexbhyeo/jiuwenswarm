@@ -18,13 +18,13 @@ import { useTranslation } from 'react-i18next';
 import { useDirectorStore } from '../directorStore';
 import { DIRECTOR_ASSET_DRAG_MIME } from '../types';
 import type { DirectorAssetDragPayload, GenerateParams } from '../types';
-import { LabActionsProvider } from './LabActionsContext';
+import { LabActionsProvider, type ResolvedGenerateInput } from './LabActionsContext';
 import { ImageNode } from './nodes/ImageNode';
 import { VideoNode } from './nodes/VideoNode';
 import { TextNode } from './nodes/TextNode';
 import { ProcessNode } from './nodes/ProcessNode';
-import type { ImageNodeData, ProcessKind, ProcessNodeData, TextNodeData } from './labTypes';
-import { PROCESS_KIND_MAX_IMAGES, PROCESS_KIND_MODE } from './labTypes';
+import type { ProcessKind, ProcessNodeData } from './labTypes';
+import { PROCESS_KIND_MODE } from './labTypes';
 
 const nodeTypes: NodeTypes = {
   image: ImageNode,
@@ -70,7 +70,7 @@ function LabCanvasInner() {
   const selectedProjectId = useDirectorStore((s) => s.selectedProjectId);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, getNodes } = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [openMenu, setOpenMenu] = useState<ToolrailMenu>(null);
   const pollTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -185,21 +185,16 @@ function LabCanvasInner() {
   );
 
   const handleGenerate = useCallback(
-    async (nodeId: string) => {
-      const node = nodes.find((n) => n.id === nodeId);
+    async (nodeId: string, resolved: ResolvedGenerateInput) => {
+      // resolved 直接来自 ProcessNode 自己算对勾时用的那份数据
+      // (useNodeConnections/useNodesData) —— 这里不再用 edges/nodes
+      // 自己另外算一遍"谁连了谁"，从根上避免两份独立实现算出不一致的
+      // 结果（之前"界面打勾、生成却读到空"的 bug 正是出在这里）。
+      const node = getNodes().find((n) => n.id === nodeId);
       if (!node || !selectedProjectId) return;
       const data = node.data as ProcessNodeData;
       const mode = PROCESS_KIND_MODE[data.kind];
-      const maxImages = PROCESS_KIND_MAX_IMAGES[data.kind];
-
-      const textEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'text');
-      const textNode = textEdge ? nodes.find((n) => n.id === textEdge.source) : undefined;
-      const prompt = textNode ? ((textNode.data as TextNodeData).text || '').trim() : '';
-
-      const image1Edge = maxImages >= 1 ? edges.find((e) => e.target === nodeId && e.targetHandle === 'image1') : undefined;
-      const image1Node = image1Edge ? nodes.find((n) => n.id === image1Edge.source) : undefined;
-      const image2Edge = maxImages >= 2 ? edges.find((e) => e.target === nodeId && e.targetHandle === 'image2') : undefined;
-      const image2Node = image2Edge ? nodes.find((n) => n.id === image2Edge.source) : undefined;
+      const prompt = resolved.prompt.trim();
 
       setProcessNodeState(nodeId, { status: 'generating', error: null });
 
@@ -214,13 +209,10 @@ function LabCanvasInner() {
           durationSeconds: data.durationSeconds,
         };
         if (mode === 'video') {
-          const img1Data = image1Node?.data as ImageNodeData | undefined;
-          const img2Data = image2Node?.data as ImageNodeData | undefined;
-          if (img1Data?.assetId) params.firstFrameAssetId = img1Data.assetId;
-          if (img2Data?.assetId) params.lastFrameAssetId = img2Data.assetId;
+          if (resolved.image1?.assetId) params.firstFrameAssetId = resolved.image1.assetId;
+          if (resolved.image2?.assetId) params.lastFrameAssetId = resolved.image2.assetId;
         } else {
-          const img1Data = image1Node?.data as ImageNodeData | undefined;
-          if (img1Data?.assetId) params.referenceAssetId = img1Data.assetId;
+          if (resolved.image1?.assetId) params.referenceAssetId = resolved.image1.assetId;
         }
 
         const result = await directorGenerate(params);
@@ -262,7 +254,7 @@ function LabCanvasInner() {
         setProcessNodeState(nodeId, { status: 'error', error: message });
       }
     },
-    [nodes, edges, selectedProjectId, addNode, setEdges, setProcessNodeState, pollOutputNode]
+    [getNodes, selectedProjectId, addNode, setEdges, setProcessNodeState, pollOutputNode]
   );
 
   const onDragOver = useCallback((e: React.DragEvent) => {
@@ -292,18 +284,29 @@ function LabCanvasInner() {
     [screenToFlowPosition, addNode]
   );
 
+  // 每次通过工具栏添加节点时错开一点位置，避免连续添加的节点完全重叠、
+  // 让人误以为是同一张卡片上出现了多个连接点。
+  const spawnOffset = useRef(0);
+  const nextSpawnOffset = useCallback(() => {
+    const step = spawnOffset.current % 6;
+    spawnOffset.current += 1;
+    return { dx: step * 36, dy: step * 28 };
+  }, []);
+
   const handleAddText = () => {
+    const { dx, dy } = nextSpawnOffset();
     const center = wrapperRef.current
-      ? screenToFlowPosition({ x: wrapperRef.current.clientWidth / 2, y: wrapperRef.current.clientHeight / 2 })
-      : { x: 200, y: 200 };
+      ? screenToFlowPosition({ x: wrapperRef.current.clientWidth / 2 + dx, y: wrapperRef.current.clientHeight / 2 + dy })
+      : { x: 200 + dx, y: 200 + dy };
     addNode({ id: nextNodeId('text'), type: 'text', position: center, data: { text: '' } });
     setOpenMenu(null);
   };
 
   const handleAddProcess = (kind: ProcessKind) => {
+    const { dx, dy } = nextSpawnOffset();
     const center = wrapperRef.current
-      ? screenToFlowPosition({ x: wrapperRef.current.clientWidth / 2 + 80, y: wrapperRef.current.clientHeight / 2 })
-      : { x: 400, y: 200 };
+      ? screenToFlowPosition({ x: wrapperRef.current.clientWidth / 2 + 80 + dx, y: wrapperRef.current.clientHeight / 2 + dy })
+      : { x: 400 + dx, y: 200 + dy };
     handleAddProcessNode(kind, center);
     setOpenMenu(null);
   };

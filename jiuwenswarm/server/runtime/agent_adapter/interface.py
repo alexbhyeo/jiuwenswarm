@@ -2171,7 +2171,12 @@ class JiuWenSwarm:
             params = dict(request.params) if isinstance(request.params, dict) else {}
             payload = await handler(params)
         except Exception as exc:
-            logger.error("[JiuWenSwarm] director 请求处理失败: %s", exc)
+            logger.error(
+                "[JiuWenSwarm] director 请求处理失败: method=%s params=%s error=%s",
+                request.req_method,
+                params,
+                exc,
+            )
             err_payload: dict = {"error": str(exc), "message": str(exc)}
             code = getattr(exc, "code", None)
             if isinstance(code, str) and code.strip():

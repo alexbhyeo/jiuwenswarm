@@ -1499,10 +1499,30 @@
   max-width: 260px;
 }
 
+/* 输出连接点对齐到左侧输入端口组的垂直中心（标题栏高度 + 端口区
+   固定高度的一半），而不是卡片整体高度的中点——这样输出点正好和
+   左边那组输入点落在同一条水平线上，不会因为参数区/生成按钮的高度
+   把两侧的连接点错开。这个值由 .lab-node-label 与 .lab-node-ports
+   的固定高度决定，与处理类型、行数无关。 */
+.lab-node--process > .react-flow__handle-right {
+  top: 79px !important;
+  transform: translate(50%, -50%) !important;
+}
+
+/* 端口区：紧接标题栏下方，预留固定高度（够放下最多 3 行：文字 + 首帧 +
+   尾帧），用 flex 居中——这样不管某个处理类型实际有几行输入，端口（及其
+   连接点）作为一个整体都在这块区域里居中对齐，卡片之间观感一致，
+   同时不会在标题和输入行之间留出大片空白。 */
+.lab-node-ports {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 78px;
+}
+
 .lab-node-input-row {
-  position: absolute;
-  left: 0;
-  right: 0;
+  position: relative;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 6px;
