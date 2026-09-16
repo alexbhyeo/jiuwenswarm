@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import logging
 import mimetypes
 import os
@@ -33,6 +34,7 @@ from typing import Any
 
 import httpx
 from openjiuwen.core.foundation.tool import tool
+from PIL import Image
 
 from jiuwenswarm.agents.harness.common.tools.ssl_config import get_requests_verify
 from jiuwenswarm.common.utils import get_agent_workspace_dir
@@ -42,6 +44,16 @@ logger = logging.getLogger(__name__)
 _POLL_INTERVAL_SECONDS = 10
 _MAX_POLL_SECONDS = 120
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled", "expired"}
+
+# Frame-reference images (first/last frame) are base64-embedded directly into
+# the submit request body. A full-resolution PNG from a prior 720p/1080p
+# generation can be 1.5-2MB each; with both a first and last frame that pushes
+# the request past ~5MB, which has been observed to make the provider drop
+# the connection mid-response (httpx ReadError) instead of returning a clean
+# error. Downscaling + re-encoding as JPEG keeps the request body small and
+# reliable regardless of the source resolution.
+_MAX_REFERENCE_DIMENSION = 1280
+_REFERENCE_JPEG_QUALITY = 85
 
 
 def video_gen_enabled() -> bool:
@@ -78,6 +90,17 @@ def video_gen_configured() -> bool:
     return bool(api_key and api_base and model)
 
 
+def _downscale_reference_image(path: Path) -> tuple[bytes, str]:
+    """Downscale + re-encode a local reference image as JPEG (see module-level
+    comment above _MAX_REFERENCE_DIMENSION for why)."""
+    with Image.open(path) as img:
+        img = img.convert("RGB")
+        img.thumbnail((_MAX_REFERENCE_DIMENSION, _MAX_REFERENCE_DIMENSION), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=_REFERENCE_JPEG_QUALITY)
+        return buf.getvalue(), "image/jpeg"
+
+
 def _resolve_frame_reference(path_or_url: str) -> tuple[str | None, str | None]:
     """first_frame_path may be a real http(s) URL, an already-complete data:
     URI, or a local file path - resolved to a data: URI here (server-side)
@@ -93,10 +116,15 @@ def _resolve_frame_reference(path_or_url: str) -> tuple[str | None, str | None]:
     path = Path(value).expanduser()
     if not path.is_file():
         return None, f"[ERROR]: first_frame_path {value!r} is not a URL/data URI and no such file exists."
-    mime, _ = mimetypes.guess_type(str(path))
-    if not mime or not mime.startswith("image/"):
-        mime = "image/png"
-    b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+    try:
+        data, mime = _downscale_reference_image(path)
+    except Exception:
+        logger.exception("[generate_video] downscaling reference image failed, using raw file: %s", path)
+        data = path.read_bytes()
+        mime, _ = mimetypes.guess_type(str(path))
+        if not mime or not mime.startswith("image/"):
+            mime = "image/png"
+    b64 = base64.b64encode(data).decode("ascii")
     return f"data:{mime};base64,{b64}", None
 
 

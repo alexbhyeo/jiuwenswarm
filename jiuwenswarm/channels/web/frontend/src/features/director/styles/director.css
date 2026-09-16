@@ -159,6 +159,11 @@
   cursor: pointer;
 }
 
+.director-category-row:focus-visible {
+  outline: 2px solid var(--d-accent);
+  outline-offset: -2px;
+}
+
 .director-category-row:hover {
   background: var(--d-bg-hover);
 }
@@ -311,6 +316,39 @@
 .director-asset-rename-btn:hover {
   background: var(--d-bg-hover);
   color: var(--d-text-primary);
+}
+
+.director-category-upload-btn {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--d-radius-sm);
+  border: none;
+  background: none;
+  color: var(--d-text-secondary);
+  cursor: pointer;
+}
+
+.director-category-upload-btn:hover {
+  background: var(--d-bg-hover);
+  color: var(--d-accent);
+}
+
+.director-category-upload-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.director-upload-error {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: #c0392b;
+  background: rgba(192, 57, 43, 0.08);
+  border-radius: var(--d-radius-md);
+  padding: 8px 10px;
 }
 
 .director-asset-delete-btn:hover {

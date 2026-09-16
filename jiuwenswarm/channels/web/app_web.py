@@ -1808,6 +1808,9 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/file-api/skills/create-from-knowledge":
             self._handle_skills_create_from_knowledge()
             return
+        if parsed.path == "/file-api/director/upload":
+            self._handle_director_asset_upload()
+            return
 
         if _uses_agentos_routing() and parsed.path in {
             "/file-api/rebuild-agent-data",
@@ -1921,6 +1924,20 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
             body=body,
             use_local_manager=True,
         )
+        self._write_json(status, payload)
+
+    def _handle_director_asset_upload(self) -> None:
+        try:
+            from jiuwenswarm.server.runtime.director.director_multipart_http import (
+                handle_director_asset_upload_http,
+            )
+        except ImportError as exc:
+            self.log_error("director upload module unavailable: %s", exc)
+            self._write_json(500, {"code": "INTERNAL_ERROR", "message": "上传模块不可用", "error": "上传模块不可用"})
+            return
+        content_type = self.headers.get("Content-Type", "")
+        body = self._read_request_body()
+        status, payload = handle_director_asset_upload_http(content_type=content_type, body=body)
         self._write_json(status, payload)
 
     def _handle_skills_create_from_knowledge(self) -> None:

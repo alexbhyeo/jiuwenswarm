@@ -115,6 +115,10 @@
       "placeholder": "名称（不含空格）"
     },
     "enlarge": "放大查看",
+    "upload": {
+      "action": "上传",
+      "error": "上传失败：{{message}}"
+    },
     "delete": {
       "action": "删除",
       "confirm": "确定要删除「{{name}}」吗？此操作无法撤销。"

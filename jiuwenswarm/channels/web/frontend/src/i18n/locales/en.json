@@ -115,6 +115,10 @@
       "placeholder": "Name (no spaces)"
     },
     "enlarge": "Enlarge",
+    "upload": {
+      "action": "Upload",
+      "error": "Upload failed: {{message}}"
+    },
     "delete": {
       "action": "Delete",
       "confirm": "Delete \"{{name}}\"? This can't be undone."

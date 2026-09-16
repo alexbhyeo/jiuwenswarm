@@ -52,6 +52,9 @@ interface DirectorState {
   generate: () => Promise<void>;
   renameAsset: (projectId: string, assetId: string, name: string) => Promise<void>;
   deleteAsset: (projectId: string, assetId: string) => Promise<void>;
+  uploadAsset: (projectId: string, file: File) => Promise<void>;
+  uploading: boolean;
+  uploadError: string | null;
 }
 
 // 轮询中的 job 共享同一个定时器句柄，避免重复轮询同一个 asset。
@@ -79,6 +82,9 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
   generating: false,
   generateError: null,
   pendingGeneration: null,
+
+  uploading: false,
+  uploadError: null,
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 
@@ -205,6 +211,22 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
     } catch (e) {
       const message = e instanceof DirectorApiError ? e.message : e instanceof Error ? e.message : String(e);
       set({ projectsError: message });
+    }
+  },
+
+  uploadAsset: async (projectId, file) => {
+    set({ uploading: true, uploadError: null });
+    try {
+      const { directorAssetUpload } = await import('./directorApi');
+      const { project, assetCounts } = await directorAssetUpload(projectId, file);
+      set((s) => ({
+        uploading: false,
+        projects: s.projects.map((p) => (p.project_id === project.project_id ? project : p)),
+        assetCounts,
+      }));
+    } catch (e) {
+      const message = e instanceof DirectorApiError ? e.message : e instanceof Error ? e.message : String(e);
+      set({ uploading: false, uploadError: message });
     }
   },
 }));

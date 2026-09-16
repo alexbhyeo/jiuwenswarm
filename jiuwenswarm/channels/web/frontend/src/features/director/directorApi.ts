@@ -27,10 +27,12 @@ const METHOD = {
   assetDelete: 'director.asset.delete',
 } as const;
 
-// generate_video 内部轮询上限是 120s（12 次 * 10s sleep），但每次 sleep 之间还有一次
-// GET 轮询请求的真实网络耗时，加上提交任务的首个 POST——实测总耗时可达 130-150s+，
-// 130s 的前端超时边际太薄，会在正常（非异常）情况下就先于后端返回而超时。
-const GENERATE_TIMEOUT_MS = 200_000;
+// generate_video 内部轮询上限是 120s（12 次 * 10s sleep），每次 sleep 之间还有一次
+// GET 轮询请求的真实网络耗时。首帧/尾帧引用（@名称）会把参考图片整张
+// base64 编码进提交请求体——多图（尤其是首尾两张）会明显拖慢提交 POST 本身
+// 的上传耗时，叠加轮询上限后实测可轻松超过 200s，之前 200s 的边际还是太薄，
+// 会在正常（非异常）情况下就先于后端返回而超时。
+const GENERATE_TIMEOUT_MS = 300_000;
 
 function toDirectorError(err: unknown): DirectorApiError {
   if (err instanceof DirectorApiError) return err;
@@ -184,4 +186,35 @@ export function directorAssetDelete(projectId: string, assetId: string): Promise
     .catch((err) => {
       throw toDirectorError(err);
     });
+}
+
+export interface UploadAssetResult {
+  project: DirectorProject;
+  assetId: string;
+  assetCounts: DirectorAssetCounts;
+}
+
+// 上传走普通 multipart HTTP（不经 WS RPC）——见 director_multipart_http.py，
+// 与 SkillPanel 的 /file-api/skills/* 上传同构。
+export async function directorAssetUpload(projectId: string, file: File): Promise<UploadAssetResult> {
+  const form = new FormData();
+  form.append('project_id', projectId);
+  form.append('file', file);
+  let resp: Response;
+  try {
+    resp = await fetch('/file-api/director/upload', { method: 'POST', body: form });
+  } catch (err) {
+    throw new DirectorApiError('UNKNOWN', err instanceof Error ? err.message : String(err));
+  }
+  let data: unknown;
+  try {
+    data = await resp.json();
+  } catch {
+    data = null;
+  }
+  const payload = (data ?? {}) as { code?: string; message?: string; error?: string; project?: DirectorProject; asset_id?: string; asset_counts?: DirectorAssetCounts };
+  if (!resp.ok || !payload.project) {
+    throw new DirectorApiError(payload.code || 'UNKNOWN', payload.message || payload.error || `上传失败 (HTTP ${resp.status})`);
+  }
+  return { project: payload.project, assetId: payload.asset_id || '', assetCounts: payload.asset_counts || { video: 0, image: 0 } };
 }

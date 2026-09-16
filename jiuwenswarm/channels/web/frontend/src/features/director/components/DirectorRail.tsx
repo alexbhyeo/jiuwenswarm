@@ -108,6 +108,55 @@ function EnlargeableImage({ src, alt }: EnlargeableImageProps) {
   );
 }
 
+const uploadIcon = (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 16V4M7 9l5-5 5 5" />
+    <path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+  </svg>
+);
+
+interface CategoryUploadButtonProps {
+  accept: string;
+  disabled?: boolean;
+  onFiles: (files: FileList) => void;
+}
+
+/** 分类头右侧的"上传"按钮 + 隐藏 file input；stopPropagation 避免同时
+ *  触发所在分类头的展开/收起。 */
+function CategoryUploadButton({ accept, disabled, onFiles }: CategoryUploadButtonProps) {
+  const { t } = useTranslation();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  return (
+    <>
+      <button
+        type="button"
+        className="director-category-upload-btn"
+        title={t('director.upload.action')}
+        disabled={disabled}
+        onClick={(e) => {
+          e.stopPropagation();
+          inputRef.current?.click();
+        }}
+      >
+        {uploadIcon}
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={accept}
+        multiple
+        style={{ display: 'none' }}
+        onClick={(e) => e.stopPropagation()}
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) onFiles(e.target.files);
+          e.target.value = '';
+        }}
+      />
+    </>
+  );
+}
+
 const pencilIcon = (
   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
     <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />
@@ -201,6 +250,18 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
   const [expanded, setExpanded] = useState<ExpandedCategory>('image');
   const renameAsset = useDirectorStore((s) => s.renameAsset);
   const deleteAsset = useDirectorStore((s) => s.deleteAsset);
+  const uploadAsset = useDirectorStore((s) => s.uploadAsset);
+  const uploading = useDirectorStore((s) => s.uploading);
+  const uploadError = useDirectorStore((s) => s.uploadError);
+
+  // 依次串行上传，避免多个文件几乎同时到达时各自独立的
+  // director_state.json 读改写互相覆盖（同类问题见 director. 前缀无状态路由修复）。
+  const handleUploadFiles = async (files: FileList) => {
+    if (!selectedProject) return;
+    for (const file of Array.from(files)) {
+      await uploadAsset(selectedProject.project_id, file);
+    }
+  };
 
   // 素材面板只反映"当前选中项目"的产物 —— 未创建/选中项目前不展示该区块，
   // 已选中时也只列出该项目自己的 assets，而不是跨项目聚合。
@@ -268,16 +329,24 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
           <div className="director-rail-section-label">{t('director.assets')}</div>
 
           <div className="director-rail-categories">
-            <button
-              type="button"
+            <div
+              role="button"
+              tabIndex={0}
               className={`director-category-row ${expanded === 'video' ? 'director-category-row--active' : ''}`}
               onClick={() => toggle('video')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  toggle('video');
+                }
+              }}
             >
               <span className="director-category-icon">{videoIcon}</span>
               <span className="director-category-label">{t('director.categories.video')}</span>
+              <CategoryUploadButton accept="video/*" disabled={uploading} onFiles={handleUploadFiles} />
               <span className="director-category-count">{assetsByType.video.length}</span>
               {expanded === 'video' ? chevronDown : chevronRight}
-            </button>
+            </div>
             {expanded === 'video' && (
               <div className="director-asset-grid">
                 {assetsByType.video.length === 0 && (
@@ -308,16 +377,24 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
               </div>
             )}
 
-            <button
-              type="button"
+            <div
+              role="button"
+              tabIndex={0}
               className={`director-category-row ${expanded === 'image' ? 'director-category-row--active' : ''}`}
               onClick={() => toggle('image')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  toggle('image');
+                }
+              }}
             >
               <span className="director-category-icon">{imageIcon}</span>
               <span className="director-category-label">{t('director.categories.image')}</span>
+              <CategoryUploadButton accept="image/*" disabled={uploading} onFiles={handleUploadFiles} />
               <span className="director-category-count">{assetsByType.image.length}</span>
               {expanded === 'image' ? chevronDown : chevronRight}
-            </button>
+            </div>
             {expanded === 'image' && (
               <div className="director-asset-grid">
                 {assetsByType.image.length === 0 && (
@@ -348,6 +425,10 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
               <span className="director-category-soon">{t('director.comingSoon')}</span>
             </div>
           </div>
+
+          {uploadError && (
+            <div className="director-upload-error">{t('director.upload.error', { message: uploadError })}</div>
+          )}
         </>
       )}
 
