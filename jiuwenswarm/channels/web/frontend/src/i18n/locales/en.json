@@ -86,14 +86,6 @@
       "multiRef": "Multi-Reference",
       "textToImage": "Text to Image"
     },
-    "templates": {
-      "title": "Start from a Template",
-      "storyboard": { "title": "Storyboard", "desc": "Coherent multi-shot narrative with automatic camera continuity" },
-      "productAd": { "title": "Product Ad", "desc": "Upload product photos to generate dynamic product showcases" },
-      "portrait": { "title": "Portrait Motion", "desc": "Turn a single portrait into natural expressions and motion" },
-      "multiRef": { "title": "Multi-Image Composite", "desc": "Blend multiple reference images into one unified scene" },
-      "poster": { "title": "Poster Copy", "desc": "Generate marketing posters with integrated text and imagery" }
-    },
     "myProjects": {
       "title": "My Projects",
       "assetCount": "{{count}} assets"

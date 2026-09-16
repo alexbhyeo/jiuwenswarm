@@ -86,14 +86,6 @@
       "multiRef": "多图参考",
       "textToImage": "文生图"
     },
-    "templates": {
-      "title": "从模板开始",
-      "storyboard": { "title": "故事分镜", "desc": "多镜头连贯叙事，自动衔接运镜" },
-      "productAd": { "title": "产品广告", "desc": "上传实拍图，生成商品动态展示" },
-      "portrait": { "title": "人像动态", "desc": "一张人像，生成自然表情与动作" },
-      "multiRef": { "title": "多图合成", "desc": "融合多张参考图为统一场景" },
-      "poster": { "title": "海报文案", "desc": "图文一体，快速生成营销海报" }
-    },
     "myProjects": {
       "title": "我的项目",
       "assetCount": "{{count}} 个素材"

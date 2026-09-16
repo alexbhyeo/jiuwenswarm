@@ -6,7 +6,6 @@ import { DirectorTabs } from './DirectorTabs';
 import { NewProjectDialog } from './NewProjectDialog';
 import { ProjectGrid } from './ProjectGrid';
 import { QuickStartChips } from './QuickStartChips';
-import { TemplateGallery } from './TemplateGallery';
 
 export function CreationHomeTab() {
   const { t } = useTranslation();
@@ -36,7 +35,6 @@ export function CreationHomeTab() {
       <ComposerCard />
       <QuickStartChips />
       <ProjectGrid projects={projects} onNewProject={() => setDialogOpen(true)} />
-      <TemplateGallery />
 
       {dialogOpen && <NewProjectDialog onClose={() => setDialogOpen(false)} />}
     </div>
