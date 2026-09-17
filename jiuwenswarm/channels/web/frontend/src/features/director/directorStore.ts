@@ -16,6 +16,7 @@ const DEFAULT_COMPOSER_PARAMS: ComposerParams = {
   resolution: '720p',
   durationSeconds: 15,
   generateAudio: false,
+  characterStyle: '写实摄影',
 };
 
 interface PendingGeneration {
@@ -158,10 +159,17 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
 
     try {
       const { directorGenerate } = await import('./directorApi');
+      // 角色风格（写实摄影/动漫/3D…）拼进发给后端的描述末尾，而不是改写
+      // composer 输入框里 "名称: 描述" 的原始文本——后端按第一个冒号拆
+      // 名称/描述，追加的画风提示落在描述部分，不影响名称解析。
+      const finalPrompt =
+        mode === 'character' && state.composerParams.characterStyle
+          ? `${prompt}，${state.composerParams.characterStyle}风格`
+          : prompt;
       const { project, assetId, assetCounts } = await directorGenerate({
         projectId,
         mode,
-        prompt,
+        prompt: finalPrompt,
         aspectRatio: state.composerParams.aspectRatio,
         resolution: state.composerParams.resolution,
         durationSeconds: state.composerParams.durationSeconds,

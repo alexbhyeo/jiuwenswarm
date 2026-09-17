@@ -31,6 +31,20 @@ const ASPECT_OPTIONS = ['16:9', '9:16', '1:1', '4:3'];
 const IMAGE_RESOLUTION_OPTIONS = ['512', '768', '1024'];
 const VIDEO_RESOLUTION_OPTIONS = ['480p', '720p', '1080p'];
 const DURATION_OPTIONS = [5, 10, 15];
+const CHARACTER_STYLE_OPTIONS = [
+  '写实摄影',
+  '数字艺术',
+  '动漫',
+  '3D',
+  '皮克斯风格',
+  '奇幻',
+  'RPG（角色扮演游戏）',
+  '漫画',
+  '矢量艺术',
+  '极简主义',
+  '水彩画',
+  '油画',
+];
 
 interface AtMenuState {
   start: number;
@@ -208,6 +222,14 @@ export function ComposerCard() {
                 label: t('director.composer.durationLabel', { seconds: v }),
               }))}
               onChange={(v) => patchComposerParams({ durationSeconds: Number(v) })}
+            />
+          )}
+          {composerMode === 'character' && (
+            <ParamPillDropdown
+              value={composerParams.characterStyle}
+              label={composerParams.characterStyle}
+              options={CHARACTER_STYLE_OPTIONS.map((v) => ({ value: v, label: v }))}
+              onChange={(v) => patchComposerParams({ characterStyle: v })}
             />
           )}
         </div>

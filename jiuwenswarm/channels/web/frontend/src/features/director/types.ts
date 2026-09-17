@@ -45,6 +45,9 @@ export interface ComposerParams {
   resolution: string;
   durationSeconds: number;
   generateAudio: boolean;
+  /** 仅 角色 模式使用：拼进生成描述末尾的画风提示（如"写实摄影"），
+   *  不改变 composer 里 "名称: 描述" 的原始文本。 */
+  characterStyle: string;
 }
 
 export interface GenerateParams {
