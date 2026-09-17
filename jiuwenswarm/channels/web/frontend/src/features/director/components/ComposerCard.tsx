@@ -146,7 +146,11 @@ export function ComposerCard() {
           ref={textareaRef}
           className="director-composer-textarea"
           placeholder={
-            composerMode === 'video' ? t('director.composer.placeholderVideo') : t('director.composer.placeholderImage')
+            composerMode === 'video'
+              ? t('director.composer.placeholderVideo')
+              : composerMode === 'character'
+                ? t('director.composer.placeholderCharacter')
+                : t('director.composer.placeholderImage')
           }
           value={composerPrompt}
           onChange={handleTextareaChange}

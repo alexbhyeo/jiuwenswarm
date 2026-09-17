@@ -68,7 +68,7 @@ export function ProjectCard({ project, onSelect }: ProjectCardProps) {
   const readyAssets = project.assets.filter((a) => a.status === 'ready');
   const cover = readyAssets[readyAssets.length - 1];
   const isVideoCover = cover?.type === 'video' && !!cover.file_path;
-  const isImageCover = cover?.type === 'image' && !!cover.file_path;
+  const isImageCover = (cover?.type === 'image' || cover?.type === 'character') && !!cover.file_path;
 
   return (
     <div

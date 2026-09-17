@@ -274,9 +274,13 @@ function LabCanvasInner() {
         return;
       }
       const position = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      // "角色"素材本质上就是一张图片（同样有 file_path，可以直接接到
+      // image1/image2 输入），画布里没有必要单独搞一种节点类型——按 image
+      // 节点渲染即可，这样它才能像别的图片素材一样被拖进 实验室 连接使用。
+      const nodeType = payload.type === 'character' ? 'image' : payload.type;
       addNode({
-        id: nextNodeId(payload.type),
-        type: payload.type,
+        id: nextNodeId(nodeType),
+        type: nodeType,
         position,
         data: { assetId: payload.assetId, filePath: payload.filePath, name: payload.name },
       });

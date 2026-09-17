@@ -1,7 +1,7 @@
 // 导演模式（Director Mode）前端类型定义。
 // 与后端 director_store.py 的 DirectorAsset / DirectorProject 结构对应。
 
-export type DirectorAssetType = 'video' | 'image';
+export type DirectorAssetType = 'video' | 'image' | 'character';
 export type DirectorAssetStatus = 'ready' | 'pending' | 'failed';
 
 export interface DirectorAsset {
@@ -31,12 +31,14 @@ export interface DirectorProject {
 export interface DirectorAssetCounts {
   video: number;
   image: number;
+  character: number;
 }
 
-/** 创作 composer 支持的模式；video/image 有真实后端，其余为"即将推出"占位。 */
+/** 创作 composer 支持的模式；video/image/character 有真实后端，其余为
+ *  "即将推出"占位。 */
 export type ComposerMode = 'video' | 'image' | 'audio' | 'character' | 'world';
 
-export const ENABLED_COMPOSER_MODES: readonly ComposerMode[] = ['video', 'image'];
+export const ENABLED_COMPOSER_MODES: readonly ComposerMode[] = ['video', 'image', 'character'];
 
 export interface ComposerParams {
   aspectRatio: string;
@@ -47,7 +49,7 @@ export interface ComposerParams {
 
 export interface GenerateParams {
   projectId: string;
-  mode: 'video' | 'image';
+  mode: 'video' | 'image' | 'character';
   prompt: string;
   aspectRatio: string;
   resolution: string;

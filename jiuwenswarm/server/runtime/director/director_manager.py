@@ -38,13 +38,17 @@ from jiuwenswarm.server.runtime.director.director_store import (
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_MODES = ("video", "image")
+_SUPPORTED_MODES = ("video", "image", "character")
 
 _RE_STILL_RUNNING_JOB_ID = re.compile(r"^Video job (\S+) submitted and still")
 _RE_SAVED_TO = re.compile(r"Saved to:\s*(.+)")
 # "@名称" 引用：名称本身不含空白，与常见 @提及 约定一致（重命名素材时应
 # 避免空格）。
 _RE_AT_REFERENCE = re.compile(r"@(\S+)")
+# "角色" composer 的输入约定是 "名称: 描述"（如 "美妆博主: 一位..."），
+# 冒号支持全角/半角。识别出来的名称直接作为素材的 name，与图片素材命名后
+# 可用 "@名称" 引用的机制保持一致；识别不出格式时整段文本仍按描述处理。
+_RE_CHARACTER_NAME = re.compile(r"^\s*([^:：\n]{1,40})[:：]\s*(.+)$", re.DOTALL)
 
 
 class DirectorRpcError(Exception):
@@ -90,6 +94,22 @@ def _parse_generation_result(result_str: str) -> dict[str, Any]:
     # 既不是错误、还在生成中，也不是"已保存"——例如 check_video_status 的
     # "Video job {id} is still {status}." 分支：仍视为进行中，而非失败。
     return {"status": "pending"}
+
+
+def _parse_character_prompt(prompt: str) -> tuple[str | None, str]:
+    """从 "名称: 描述" 格式里拆出角色名称，用作素材的 name。
+
+    识别不出该格式（没有冒号，或冒号前/后为空）时返回 (None, prompt)，
+    整段文本原样作为生成描述——不强制用户遵守格式。
+    """
+    match = _RE_CHARACTER_NAME.match(prompt)
+    if not match:
+        return None, prompt
+    name = match.group(1).strip()
+    description = match.group(2).strip()
+    if not name or not description:
+        return None, prompt
+    return name, description
 
 
 class DirectorManager:
@@ -188,6 +208,13 @@ class DirectorManager:
         if project is None:
             raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")
 
+        # "角色"素材本质上是一张人物参考图（同样调用 generate_visual），
+        # 只是从 "名称: 描述" 里拆出名称直接作为素材命名，不需要用户生成后
+        # 再手动重命名一遍。
+        character_name: str | None = None
+        if mode == "character":
+            character_name, prompt = _parse_character_prompt(prompt)
+
         aspect_ratio = str(params.get("aspect_ratio") or "16:9")
         resolution = str(params.get("resolution") or ("720p" if mode == "video" else "512"))
         save_dir = str(get_project_assets_dir(project_id))
@@ -262,6 +289,7 @@ class DirectorManager:
             params=gen_params,
             file_path=parsed.get("file_path"),
             job_id=parsed.get("job_id"),
+            name=character_name,
         )
         project = self._store.append_asset(project_id, asset)
         return {

@@ -23,7 +23,7 @@ interface DirectorRailProps {
   onSelectProject: (projectId: string) => void;
 }
 
-type ExpandedCategory = 'projects' | 'video' | 'image' | null;
+type ExpandedCategory = 'projects' | 'video' | 'image' | 'character' | null;
 
 function rawFileUrl(path: string): string {
   return `/file-api/raw-file?path=${encodeURIComponent(path)}`;
@@ -281,13 +281,15 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
   const assetsByType = useMemo(() => {
     const video: DirectorAsset[] = [];
     const image: DirectorAsset[] = [];
+    const character: DirectorAsset[] = [];
     for (const asset of selectedProject?.assets ?? []) {
       if (asset.status !== 'ready') continue;
       if (asset.type === 'video') video.push(asset);
       else if (asset.type === 'image') image.push(asset);
+      else if (asset.type === 'character') character.push(asset);
     }
     const byRecency = (a: DirectorAsset, b: DirectorAsset) => b.updated_at - a.updated_at;
-    return { video: video.sort(byRecency), image: image.sort(byRecency) };
+    return { video: video.sort(byRecency), image: image.sort(byRecency), character: character.sort(byRecency) };
   }, [selectedProject]);
 
   const toggle = (category: ExpandedCategory) => {
@@ -442,11 +444,51 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
               </div>
             )}
 
-            <div className="director-category-row director-category-row--disabled">
+            <div
+              role="button"
+              tabIndex={0}
+              className={`director-category-row ${expanded === 'character' ? 'director-category-row--active' : ''}`}
+              onClick={() => toggle('character')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  toggle('character');
+                }
+              }}
+            >
               <span className="director-category-icon">{characterIcon}</span>
               <span className="director-category-label">{t('director.categories.character')}</span>
-              <span className="director-category-soon">{t('director.comingSoon')}</span>
+              <span className="director-category-count">{assetsByType.character.length}</span>
+              {expanded === 'character' ? chevronDown : chevronRight}
             </div>
+            {expanded === 'character' && (
+              <div className="director-asset-grid">
+                {assetsByType.character.length === 0 && (
+                  <div className="director-empty-hint">{t('director.assetsEmpty')}</div>
+                )}
+                {assetsByType.character.map((asset) => (
+                  <div
+                    key={asset.asset_id}
+                    className="director-asset-item"
+                    draggable
+                    onDragStart={(e) => handleAssetDragStart(e, asset)}
+                  >
+                    <div className="director-asset-thumb director-asset-thumb--image">
+                      {asset.file_path && (
+                        <EnlargeableImage src={rawFileUrl(asset.file_path)} alt={asset.name || asset.prompt} />
+                      )}
+                    </div>
+                    <AssetNameLabel
+                      asset={asset}
+                      fallback={t('director.categories.character')}
+                      onRename={(name) => renameAsset(selectedProject!.project_id, asset.asset_id, name)}
+                      onDelete={() => deleteAsset(selectedProject!.project_id, asset.asset_id)}
+                    />
+                    <div className="director-asset-time">{relativeTime(t, asset.updated_at)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {uploadError && (

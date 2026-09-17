@@ -70,6 +70,7 @@
     "composer": {
       "placeholderVideo": "What kind of video do you need? Describe the scene, camera movement, mood, or type @name to reference a named image as the first/last frame (up to 2)…",
       "placeholderImage": "What kind of image do you need? Describe the scene, style, composition, or type @name to reference a named image…",
+      "placeholderCharacter": "Describe this character as \"name: description\" — e.g. \"Beauty Vlogger: a highly personable Asian female beauty influencer who narrates throughout\"…",
       "durationLabel": "{{seconds}}s",
       "send": "Generate",
       "modes": {

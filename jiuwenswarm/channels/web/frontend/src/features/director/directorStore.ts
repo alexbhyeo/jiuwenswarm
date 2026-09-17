@@ -73,7 +73,7 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
   projectsLoading: false,
   projectsError: null,
   selectedProjectId: null,
-  assetCounts: { video: 0, image: 0 },
+  assetCounts: { video: 0, image: 0, character: 0 },
 
   composerMode: 'video',
   composerPrompt: '',
@@ -151,7 +151,7 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
     const mode = state.composerMode;
 
     if (!projectId || !prompt) return;
-    if (mode !== 'video' && mode !== 'image') return; // 音频/角色/世界：即将推出，无 RPC
+    if (mode !== 'video' && mode !== 'image' && mode !== 'character') return; // 音频/世界：即将推出，无 RPC
 
     stopPolling();
     set({ generating: true, generateError: null, pendingGeneration: null });
