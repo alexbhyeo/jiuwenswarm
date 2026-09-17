@@ -473,14 +473,14 @@
   gap: 2px;
   padding: 4px;
   border-radius: var(--d-radius-full);
-  background: var(--d-text-primary);
+  background: var(--d-bg-shell);
   margin-bottom: 14px;
 }
 
 .director-composer-mode {
   padding: 7px 16px;
   border-radius: var(--d-radius-full);
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--d-text-secondary);
   font-size: 12.5px;
   font-weight: 600;
   background: none;
@@ -491,10 +491,11 @@
 .director-composer-mode--active {
   background: #fff;
   color: var(--d-text-primary);
+  box-shadow: var(--d-shadow-sm);
 }
 
 .director-composer-mode--disabled {
-  color: rgba(255, 255, 255, 0.32);
+  color: var(--d-text-placeholder);
   font-weight: 500;
   cursor: default;
 }
