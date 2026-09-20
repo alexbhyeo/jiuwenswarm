@@ -173,6 +173,12 @@ _MULTIMODAL_RELOAD_ENV_KEYS = {
     "VISUAL_GEN_MODEL_NAME",
     "VISUAL_GEN_PROVIDER",
     "VISUAL_GEN_PROTOCOL",
+    "EDIT_CHAT_ENABLED",
+    "EDIT_CHAT_API_BASE",
+    "EDIT_CHAT_API_KEY",
+    "EDIT_CHAT_MODEL_NAME",
+    "EDIT_CHAT_PROVIDER",
+    "EDIT_CHAT_PROTOCOL",
 }
 _ASR_ENV_KEYS = {
     "ASR_API_BASE",
@@ -777,6 +783,7 @@ _FORWARD_REQ_METHODS = frozenset({
     "director.generate.check_status",
     "director.asset.rename",
     "director.asset.delete",
+    "director.edit_chat.send",
     "personal_context.runtime.status",
     "personal_context.runtime.start_collection",
     "personal_context.runtime.stop_collection",
@@ -956,6 +963,7 @@ _FORWARD_NO_LOCAL_HANDLER_METHODS = frozenset({
     "director.generate.check_status",
     "director.asset.rename",
     "director.asset.delete",
+    "director.edit_chat.send",
     "personal_context.runtime.status",
     "personal_context.runtime.start_collection",
     "personal_context.runtime.stop_collection",
@@ -1072,6 +1080,14 @@ _CONFIG_SET_ENV_MAP = {
     "visual_gen_provider": "VISUAL_GEN_PROVIDER",
     "visual_gen_protocol": "VISUAL_GEN_PROTOCOL",
     "visual_gen_enabled": "VISUAL_GEN_ENABLED",
+    # edit chat（导演模式 · 剪辑 tab 对话助手）- 独立槽位，与上面的生成类
+    # 槽位无关：适合生成图片/视频的模型不一定适合开放式对话，反之亦然。
+    "edit_chat_api_base": "EDIT_CHAT_API_BASE",
+    "edit_chat_api_key": "EDIT_CHAT_API_KEY",
+    "edit_chat_model": "EDIT_CHAT_MODEL_NAME",
+    "edit_chat_provider": "EDIT_CHAT_PROVIDER",
+    "edit_chat_protocol": "EDIT_CHAT_PROTOCOL",
+    "edit_chat_enabled": "EDIT_CHAT_ENABLED",
     # audio 模型
     "audio_api_base": "AUDIO_API_BASE",
     "audio_api_key": "AUDIO_API_KEY",

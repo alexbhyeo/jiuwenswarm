@@ -262,6 +262,7 @@ class ReqMethod(Enum):
     DIRECTOR_GENERATE_CHECK_STATUS = "director.generate.check_status"
     DIRECTOR_ASSET_RENAME = "director.asset.rename"
     DIRECTOR_ASSET_DELETE = "director.asset.delete"
+    DIRECTOR_EDIT_CHAT_SEND = "director.edit_chat.send"
 
     PERSONAL_CONTEXT_RUNTIME_STATUS = "personal_context.runtime.status"
     PERSONAL_CONTEXT_RUNTIME_START_COLLECTION = (

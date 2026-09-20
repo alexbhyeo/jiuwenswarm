@@ -119,6 +119,16 @@ export const SETTINGS_CONFIG_FIELDS: readonly ConfigFieldContract[] = [
   envField('visual_gen_provider', 'agent', 'text', 'VISUAL_GEN_PROVIDER'),
   envField('visual_gen_protocol', 'agent', 'text', 'VISUAL_GEN_PROTOCOL'),
   envField('visual_gen_enabled', 'agent', 'boolean', 'VISUAL_GEN_ENABLED'),
+  // Edit chat (导演模式 · 剪辑 tab conversational assistant) - dedicated
+  // slot, independent of the generation slots above: a model tuned for
+  // image/video generation isn't necessarily a good fit for open-ended
+  // conversation, and vice versa.
+  envField('edit_chat_api_base', 'agent', 'text', 'EDIT_CHAT_API_BASE'),
+  envField('edit_chat_api_key', 'agent', 'text', 'EDIT_CHAT_API_KEY'),
+  envField('edit_chat_model', 'agent', 'text', 'EDIT_CHAT_MODEL_NAME'),
+  envField('edit_chat_provider', 'agent', 'text', 'EDIT_CHAT_PROVIDER'),
+  envField('edit_chat_protocol', 'agent', 'text', 'EDIT_CHAT_PROTOCOL'),
+  envField('edit_chat_enabled', 'agent', 'boolean', 'EDIT_CHAT_ENABLED'),
 
   yamlField('permissions_enabled', 'security', 'boolean', 'permissions.enabled'),
 

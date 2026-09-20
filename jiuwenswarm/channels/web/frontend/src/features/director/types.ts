@@ -20,12 +20,22 @@ export interface DirectorAsset {
   updated_at: number;
 }
 
+export type EditChatRole = 'user' | 'assistant';
+
+export interface EditChatMessage {
+  role: EditChatRole;
+  content: string;
+  image_asset_ids: string[];
+  created_at: number;
+}
+
 export interface DirectorProject {
   project_id: string;
   name: string;
   created_at: number;
   updated_at: number;
   assets: DirectorAsset[];
+  edit_chat_messages: EditChatMessage[];
 }
 
 export interface DirectorAssetCounts {

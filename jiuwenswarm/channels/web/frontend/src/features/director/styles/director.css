@@ -1259,6 +1259,256 @@
   color: var(--d-text-secondary);
 }
 
+/* 剪辑 tab 的主区（预览+时间线）与右侧对话助手并排 —— 原来的
+   stage/timeline 内容不变，只是从"整栏唯一内容"变成这行的左边一列。 */
+.director-edit-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.director-edit-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ===== 剪辑对话助手（Edit chat） ===== */
+
+.director-edit-chat {
+  width: 360px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--d-border-default);
+  background: var(--d-bg-card);
+}
+
+.director-edit-chat--empty {
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.director-edit-chat-header {
+  padding: 14px 18px;
+  font-size: 13.5px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--d-border-default);
+}
+
+.director-edit-chat-thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.director-edit-chat-empty-hint {
+  font-size: 12.5px;
+  color: var(--d-text-secondary);
+  text-align: center;
+  padding: 24px 0;
+  line-height: 1.6;
+}
+
+.director-edit-chat-msg {
+  max-width: 88%;
+  padding: 9px 12px;
+  border-radius: var(--d-radius-lg);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.director-edit-chat-msg--user {
+  align-self: flex-end;
+  background: var(--d-accent);
+  color: #fff;
+  border-bottom-right-radius: var(--d-radius-sm);
+}
+
+.director-edit-chat-msg--assistant {
+  align-self: flex-start;
+  background: var(--d-bg-shell);
+  color: var(--d-text-primary);
+  border-bottom-left-radius: var(--d-radius-sm);
+}
+
+.director-edit-chat-msg-images {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.director-edit-chat-msg-images img {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: var(--d-radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+.director-edit-chat-msg-body {
+  white-space: pre-wrap;
+}
+
+.director-edit-chat-expand-btn {
+  display: block;
+  margin-top: 6px;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: inherit;
+  opacity: 0.75;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.director-edit-chat-msg--thinking {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.director-edit-chat-thinking-label {
+  font-size: 12px;
+  color: var(--d-text-secondary);
+  position: relative;
+}
+
+.director-edit-chat-thinking-label::after {
+  content: '...';
+  display: inline-block;
+  width: 1.2em;
+  overflow: hidden;
+  vertical-align: bottom;
+  animation: director-edit-chat-thinking-dots 1.2s steps(4) infinite;
+}
+
+@keyframes director-edit-chat-thinking-dots {
+  0% { width: 0; }
+  100% { width: 1.2em; }
+}
+
+.director-edit-chat-error {
+  margin: 0 18px 10px;
+  font-size: 12px;
+  color: #c0392b;
+  background: rgba(192, 57, 43, 0.08);
+  border-radius: var(--d-radius-md);
+  padding: 8px 12px;
+}
+
+.director-edit-chat-pending-images {
+  display: flex;
+  gap: 6px;
+  padding: 10px 18px 0;
+  flex-wrap: wrap;
+}
+
+.director-edit-chat-pending-image {
+  position: relative;
+  width: 44px;
+  height: 44px;
+}
+
+.director-edit-chat-pending-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--d-radius-sm);
+  border: 1px solid var(--d-border-default);
+}
+
+.director-edit-chat-pending-image button {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--d-radius-full);
+  border: none;
+  background: var(--d-text-primary);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.director-edit-chat-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--d-border-default);
+}
+
+.director-edit-chat-input {
+  flex: 1;
+  min-height: 36px;
+  max-height: 120px;
+  padding: 8px 12px;
+  border: 1px solid var(--d-border-default);
+  border-radius: var(--d-radius-lg);
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--d-text-primary);
+  background: var(--d-bg-page);
+  resize: none;
+}
+
+.director-edit-chat-input:focus {
+  outline: none;
+  border-color: var(--d-border-strong);
+}
+
+.director-edit-chat-input::placeholder {
+  color: var(--d-text-placeholder);
+}
+
+.director-edit-chat-input:disabled {
+  opacity: 0.6;
+}
+
+.director-edit-chat-send-btn {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--d-radius-full);
+  background: var(--d-send-active);
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.director-edit-chat-send-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.director-edit-chat-at-menu {
+  bottom: 100%;
+  top: auto;
+  left: 18px;
+  margin-bottom: 6px;
+}
+
 /* ===== 实验室（Lab）节点画布 — 基于 @xyflow/react ===== */
 
 .lab-canvas-wrap {

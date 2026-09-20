@@ -25,7 +25,13 @@ const METHOD = {
   generateCheckStatus: 'director.generate.check_status',
   assetRename: 'director.asset.rename',
   assetDelete: 'director.asset.delete',
+  editChatSend: 'director.edit_chat.send',
 } as const;
+
+// 剪辑对话每轮都要把该项目已有的历史消息整份重发一遍给模型（无服务端会话
+// 状态，"上下文"就是这份历史本身），加上可能引用的参考图片，随对话轮数
+// 增长请求体会变大；给比其余 director.* 调用更宽裕的超时。
+const EDIT_CHAT_TIMEOUT_MS = 120_000;
 
 // generate_video 内部轮询上限是 120s（12 次 * 10s sleep），每次 sleep 之间还有一次
 // GET 轮询请求的真实网络耗时。首帧/尾帧引用（@名称）会把参考图片整张
@@ -186,6 +192,25 @@ export function directorAssetDelete(projectId: string, assetId: string): Promise
     asset_id: assetId,
   })
     .then(normalizeDeleteAssetResult)
+    .catch((err) => {
+      throw toDirectorError(err);
+    });
+}
+
+/** 剪辑 tab 对话助手：发一条消息，等一条真实的 AI 回复。没有单独的"取历史"
+ *  接口——project.edit_chat_messages 已经随 directorProjectsList/Get 一起
+ *  返回，切换到某个项目时就有完整对话历史了。 */
+export function directorEditChatSend(
+  projectId: string,
+  text: string,
+  imageAssetIds: string[] = []
+): Promise<ProjectResult> {
+  return webRequest<unknown>(
+    METHOD.editChatSend,
+    { project_id: projectId, text, image_asset_ids: imageAssetIds },
+    { timeoutMs: EDIT_CHAT_TIMEOUT_MS }
+  )
+    .then(normalizeProjectResult)
     .catch((err) => {
       throw toDirectorError(err);
     });

@@ -35,6 +35,13 @@ const visualGenFields = [
   'visual_gen_api_key',
   'visual_gen_model',
 ] as const;
+const editChatFields = [
+  'edit_chat_provider',
+  'edit_chat_protocol',
+  'edit_chat_api_base',
+  'edit_chat_api_key',
+  'edit_chat_model',
+] as const;
 
 type SaveConfig = (updates: Record<string, string>, operation: string) => Promise<unknown>;
 
@@ -585,6 +592,122 @@ export function VisualGenSettings({ disabled }: SettingsCustomItemProps) {
           save={
             dialog.enableOnSave
               ? (updates, operation) => saveConfig({ ...updates, visual_gen_enabled: toConfigBoolean(true) }, operation)
+              : saveConfig
+          }
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+      <SettingsConfirmDialog
+        open={deleteTarget}
+        title={t('settingsPanel.agent.deleteModelTitle')}
+        message={t('settingsPanel.agent.deleteModelConfirm', { name })}
+        confirming={deleting}
+        error={deleteError}
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => {
+          if (!deleting) setDeleteTarget(false);
+        }}
+      />
+    </>
+  );
+}
+
+export function EditChatSettings({ disabled }: SettingsCustomItemProps) {
+  const { t } = useTranslation();
+  const { isConnected } = useSettingsServices();
+  const { values, savingKeys, save } = useSettingsSource();
+  const [dialog, setDialog] = useState<{ enableOnSave: boolean } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const saveConfig: SaveConfig = (updates, operation) => save(updates, operation);
+
+  const configured = editChatFields.every((name) => String(values[name] ?? '').trim());
+  const enabled = configured && parseConfigBoolean(values.edit_chat_enabled);
+  const busy = [...editChatFields, 'edit_chat_enabled'].some((field) => savingKeys.has(field));
+  const name = t('settingsPanel.fields.edit_chat_enabled.title');
+
+  const toggle = async (nextEnabled: boolean) => {
+    if (nextEnabled && !configured) {
+      setDialog({ enableOnSave: true });
+      return;
+    }
+    try {
+      await saveConfig({ edit_chat_enabled: toConfigBoolean(nextEnabled) }, 'settingsPanel.fields.edit_chat_enabled.title');
+    } catch {
+      // Surfaced via savingKeys/isConnected state already; nothing further to do here.
+    }
+  };
+
+  const confirmDelete = async () => {
+    const updates: Record<string, string> = Object.fromEntries(editChatFields.map((field) => [field, '']));
+    if (parseConfigBoolean(values.edit_chat_enabled)) {
+      updates.edit_chat_enabled = toConfigBoolean(false);
+    }
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await saveConfig(updates, 'settingsPanel.fields.edit_chat_enabled.title');
+      setDeleteTarget(false);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : t('settingsPanel.feedback.saveFailed'));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <>
+      <SettingRow
+        className="settings-agent-media__row"
+        title={name}
+        description={t('settingsPanel.fields.edit_chat_enabled.description')}
+        subSettings={
+          configured ? (
+            <div className="settings-agent-media__model-card">
+              <strong className="settings-agent-media__model-name">{String(values.edit_chat_model)}</strong>
+              <div className="settings-agent-media__actions">
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  icon={<settingsActionIcons.edit aria-hidden />}
+                  title={t('common.modify')}
+                  aria-label={`${t('common.modify')} ${name}`}
+                  disabled={disabled || !isConnected || busy}
+                  onClick={() => setDialog({ enableOnSave: false })}
+                />
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  icon={<settingsActionIcons.delete aria-hidden />}
+                  title={t('common.delete')}
+                  aria-label={`${t('common.delete')} ${name}`}
+                  disabled={disabled || !isConnected || busy}
+                  onClick={() => {
+                    setDeleteError('');
+                    setDeleteTarget(true);
+                  }}
+                />
+              </div>
+            </div>
+          ) : null
+        }
+      >
+        <Switch
+          checked={enabled}
+          disabled={disabled || !isConnected || busy}
+          aria-label={t('settingsPanel.agent.toggleCapability', { name })}
+          onChange={(nextEnabled) => void toggle(nextEnabled)}
+        />
+      </SettingRow>
+      {dialog ? (
+        <AgentConfigDialog
+          titleKey="settingsPanel.agent.editChatConfigTitle"
+          fields={editChatFields}
+          config={values}
+          save={
+            dialog.enableOnSave
+              ? (updates, operation) => saveConfig({ ...updates, edit_chat_enabled: toConfigBoolean(true) }, operation)
               : saveConfig
           }
           onClose={() => setDialog(null)}

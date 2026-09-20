@@ -151,6 +151,16 @@
       "importMedia": "Import Media",
       "importHint": "Import images and video, or drag generated assets directly from the Assets panel onto the timeline",
       "trackHint": "Drag images or videos from Assets here to start editing"
+    },
+    "editChat": {
+      "title": "Edit Assistant",
+      "placeholder": "Talk through your edit with the assistant — type @name to reference a named image…",
+      "send": "Send",
+      "thinking": "Thinking",
+      "expand": "Expand",
+      "collapse": "Collapse",
+      "emptyHint": "Describe what you're going for — shots, pacing, story structure — the assistant can discuss it with you and suggest an approach.",
+      "noProject": "Select or create a project in Create first"
     }
   },
   "applicationPlugins": {
@@ -357,6 +367,7 @@
       "videoConfigTitle": "Configure video understanding model",
       "videoGenConfigTitle": "Configure video generation model",
       "visualGenConfigTitle": "Configure visual generation model",
+      "editChatConfigTitle": "Configure Edit chat model",
       "toggleCapability": "Toggle {{name}} capability",
       "saveAndEnable": "Save and enable",
       "savedRestartRequired": "Saved; takes effect after restart.",
@@ -480,6 +491,15 @@
       "visual_gen_enabled": {
         "title": "Visual generation",
         "description": "Enable image generation tools (text-to-image); disabling it keeps the saved model configuration."
+      },
+      "edit_chat_provider": { "title": "Model provider" },
+      "edit_chat_protocol": { "title": "Protocol" },
+      "edit_chat_api_base": { "title": "API URL", "placeholder": "e.g. https://openrouter.ai/api/v1" },
+      "edit_chat_api_key": { "title": "API key", "placeholder": "e.g. sk-..." },
+      "edit_chat_model": { "title": "Model name", "placeholder": "e.g. anthropic/claude-sonnet-4.5" },
+      "edit_chat_enabled": {
+        "title": "Edit chat",
+        "description": "Enable the AI chat assistant in Director Mode's Edit tab; disabling it keeps the saved model configuration."
       },
       "permissions_mode": {
         "title": "Global permission mode",

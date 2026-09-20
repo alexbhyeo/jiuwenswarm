@@ -1,6 +1,6 @@
 import { settingsNavigationIcons } from '../../../../assets/settings';
 import type { SettingsModuleDefinition } from '../../registry/types';
-import { AgentMediaSettings, AgentSearchSettings, VideoGenSettings, VisualGenSettings } from './AgentSettings';
+import { AgentMediaSettings, AgentSearchSettings, EditChatSettings, VideoGenSettings, VisualGenSettings } from './AgentSettings';
 
 export const agentModule: SettingsModuleDefinition = {
   id: 'agent',
@@ -47,6 +47,7 @@ export const agentModule: SettingsModuleDefinition = {
         { id: 'media-tools-settings', component: 'custom', render: AgentMediaSettings },
         { id: 'video-gen-settings', component: 'custom', render: VideoGenSettings },
         { id: 'visual-gen-settings', component: 'custom', render: VisualGenSettings },
+        { id: 'edit-chat-settings', component: 'custom', render: EditChatSettings },
       ],
     },
   ],

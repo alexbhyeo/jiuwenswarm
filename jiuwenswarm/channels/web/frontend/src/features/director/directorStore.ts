@@ -56,6 +56,18 @@ interface DirectorState {
   uploadAsset: (projectId: string, file: File) => Promise<void>;
   uploading: boolean;
   uploadError: string | null;
+
+  // 剪辑 tab 对话助手。draft/pendingImageIds 是输入框还没发送出去的草稿，
+  // 消息历史本身随 DirectorProject.edit_chat_messages 一起存在 projects
+  // 数组里，不需要另开一份。
+  editChatDraft: string;
+  editChatPendingImageIds: string[];
+  editChatSending: boolean;
+  editChatError: string | null;
+  setEditChatDraft: (text: string) => void;
+  addEditChatPendingImage: (assetId: string) => void;
+  removeEditChatPendingImage: (assetId: string) => void;
+  sendEditChatMessage: (projectId: string) => Promise<void>;
 }
 
 // 轮询中的 job 共享同一个定时器句柄，避免重复轮询同一个 asset。
@@ -86,6 +98,11 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
 
   uploading: false,
   uploadError: null,
+
+  editChatDraft: '',
+  editChatPendingImageIds: [],
+  editChatSending: false,
+  editChatError: null,
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 
@@ -235,6 +252,37 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
     } catch (e) {
       const message = e instanceof DirectorApiError ? e.message : e instanceof Error ? e.message : String(e);
       set({ uploading: false, uploadError: message });
+    }
+  },
+
+  setEditChatDraft: (text) => set({ editChatDraft: text }),
+  addEditChatPendingImage: (assetId) =>
+    set((s) =>
+      s.editChatPendingImageIds.includes(assetId)
+        ? s
+        : { editChatPendingImageIds: [...s.editChatPendingImageIds, assetId] }
+    ),
+  removeEditChatPendingImage: (assetId) =>
+    set((s) => ({ editChatPendingImageIds: s.editChatPendingImageIds.filter((id) => id !== assetId) })),
+
+  sendEditChatMessage: async (projectId) => {
+    const state = get();
+    const text = state.editChatDraft.trim();
+    if (!projectId || !text || state.editChatSending) return;
+
+    set({ editChatSending: true, editChatError: null });
+    try {
+      const { directorEditChatSend } = await import('./directorApi');
+      const { project } = await directorEditChatSend(projectId, text, state.editChatPendingImageIds);
+      set((s) => ({
+        projects: s.projects.map((p) => (p.project_id === project.project_id ? project : p)),
+        editChatSending: false,
+        editChatDraft: '',
+        editChatPendingImageIds: [],
+      }));
+    } catch (e) {
+      const message = e instanceof DirectorApiError ? e.message : e instanceof Error ? e.message : String(e);
+      set({ editChatSending: false, editChatError: message });
     }
   },
 }));

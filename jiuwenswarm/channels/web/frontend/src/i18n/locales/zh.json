@@ -151,6 +151,16 @@
       "importMedia": "导入素材",
       "importHint": "支持导入图片与视频，或从左侧「素材」面板直接拖拽已生成的内容到时间线",
       "trackHint": "将「素材」中的图片或视频拖拽到此处，开始剪辑"
+    },
+    "editChat": {
+      "title": "剪辑助手",
+      "placeholder": "和剪辑助手聊聊你的想法，输入 @名称 引用已命名的图片…",
+      "send": "发送",
+      "thinking": "思考中",
+      "expand": "展开",
+      "collapse": "收起",
+      "emptyHint": "描述你想剪出来的效果——分镜、节奏、叙事结构，剪辑助手可以和你一起讨论、给建议。",
+      "noProject": "请先在「创作」中选择或新建一个项目"
     }
   },
   "applicationPlugins": {
@@ -357,6 +367,7 @@
       "videoConfigTitle": "配置视频理解模型",
       "videoGenConfigTitle": "配置视频生成模型",
       "visualGenConfigTitle": "配置图像生成模型",
+      "editChatConfigTitle": "配置剪辑对话模型",
       "toggleCapability": "切换{{name}}能力",
       "saveAndEnable": "保存并启用",
       "savedRestartRequired": "配置已保存，重启后生效。",
@@ -466,6 +477,12 @@
       "visual_gen_api_key": { "title": "API 密钥", "placeholder": "例如 sk-..." },
       "visual_gen_model": { "title": "模型名称", "placeholder": "例如 google/gemini-3.1-flash-image" },
       "visual_gen_enabled": { "title": "图像生成", "description": "启用图像生成工具（文生图）；关闭后仍保留已保存的模型配置。" },
+      "edit_chat_provider": { "title": "模型提供商" },
+      "edit_chat_protocol": { "title": "协议" },
+      "edit_chat_api_base": { "title": "API 地址", "placeholder": "例如 https://openrouter.ai/api/v1" },
+      "edit_chat_api_key": { "title": "API 密钥", "placeholder": "例如 sk-..." },
+      "edit_chat_model": { "title": "模型名称", "placeholder": "例如 anthropic/claude-sonnet-4.5" },
+      "edit_chat_enabled": { "title": "剪辑对话", "description": "启用「导演模式 · 剪辑」里的 AI 对话助手；关闭后仍保留已保存的模型配置。" },
       "permissions_mode": { "title": "全局权限模式", "description": "为普通 Agent 与 Team 选择统一的安全护栏模式。" },
       "a2ui_enabled": { "title": "启用 A2UI", "description": "允许将支持的结果渲染成交互式界面。" },
       "rsi_enabled": {

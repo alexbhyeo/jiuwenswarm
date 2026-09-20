@@ -74,12 +74,40 @@ class DirectorAsset:
 
 
 @dataclass
+class EditChatMessage:
+    """剪辑 tab 对话助手的一轮消息（用户或助手）.
+
+    与 DirectorAsset 同样存于整份 director_state.json 里，不单开存储——
+    对话历史本来就是这个项目的一部分数据，没必要再引入一种新的持久化方式。
+    """
+
+    role: str  # "user" | "assistant"
+    content: str
+    image_asset_ids: list[str] = field(default_factory=list)
+    created_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> "EditChatMessage":
+        raw_ids = data.get("image_asset_ids")
+        return EditChatMessage(
+            role=str(data.get("role") or "user"),
+            content=str(data.get("content") or ""),
+            image_asset_ids=[str(x) for x in raw_ids] if isinstance(raw_ids, list) else [],
+            created_at=float(data.get("created_at") or time.time()),
+        )
+
+
+@dataclass
 class DirectorProject:
     project_id: str
     name: str
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     assets: list[DirectorAsset] = field(default_factory=list)
+    edit_chat_messages: list[EditChatMessage] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -88,6 +116,7 @@ class DirectorProject:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "assets": [asset.to_dict() for asset in self.assets],
+            "edit_chat_messages": [msg.to_dict() for msg in self.edit_chat_messages],
         }
 
     @staticmethod
@@ -102,12 +131,23 @@ class DirectorProject:
             if isinstance(raw_assets, list)
             else []
         )
+        raw_messages = data.get("edit_chat_messages")
+        edit_chat_messages = (
+            [
+                EditChatMessage.from_dict(item)
+                for item in raw_messages
+                if isinstance(item, dict)
+            ]
+            if isinstance(raw_messages, list)
+            else []
+        )
         return DirectorProject(
             project_id=str(data.get("project_id") or ""),
             name=str(data.get("name") or ""),
             created_at=float(data.get("created_at") or time.time()),
             updated_at=float(data.get("updated_at") or time.time()),
             assets=assets,
+            edit_chat_messages=edit_chat_messages,
         )
 
 
@@ -195,6 +235,22 @@ class DirectorStore:
         if project is None:
             raise KeyError(project_id)
         project.assets.append(asset)
+        project.updated_at = time.time()
+        self._save(projects)
+        return project
+
+    def append_edit_chat_messages(
+        self, project_id: str, messages: list[EditChatMessage]
+    ) -> DirectorProject:
+        """一次性追加多条消息（典型调用：一条用户消息 + 一条助手回复），
+        只落一次盘——避免用户消息和助手回复分两次写导致中间状态被
+        并发读到，也少一次磁盘往返。
+        """
+        projects = self._load()
+        project = projects.get(project_id)
+        if project is None:
+            raise KeyError(project_id)
+        project.edit_chat_messages.extend(messages)
         project.updated_at = time.time()
         self._save(projects)
         return project

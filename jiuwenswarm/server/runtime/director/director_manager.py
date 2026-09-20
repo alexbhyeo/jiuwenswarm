@@ -29,10 +29,16 @@ from jiuwenswarm.agents.harness.common.tools.visual_gen_tools import (
     visual_gen_configured,
     visual_gen_enabled,
 )
+from jiuwenswarm.agents.harness.common.tools.edit_chat_tools import (
+    chat_with_editor,
+    edit_chat_configured,
+    edit_chat_enabled,
+)
 from jiuwenswarm.server.runtime.director.director_store import (
     DirectorAsset,
     DirectorProject,
     DirectorStore,
+    EditChatMessage,
     get_project_assets_dir,
 )
 
@@ -45,6 +51,14 @@ _RE_SAVED_TO = re.compile(r"Saved to:\s*(.+)")
 # "@名称" 引用：名称本身不含空白，与常见 @提及 约定一致（重命名素材时应
 # 避免空格）。
 _RE_AT_REFERENCE = re.compile(r"@(\S+)")
+
+_EDIT_CHAT_SYSTEM_PROMPT = (
+    "你是「导演模式 · 剪辑」里的视频剪辑助手，帮助用户规划分镜、节奏与叙事结构，"
+    "讨论素材如何组织成一个连贯的短片。你可以分析、建议、拆解镜头方案，"
+    "但目前还不能真正执行剪辑操作——无法直接剪切、拼接、导出视频，也无法保存"
+    "任何改动。如果用户要求你直接完成剪辑或保存结果，明确说明这一点，"
+    "然后继续给出具体、可执行的建议，供用户自己在时间线上操作。"
+)
 # "角色" composer 的输入约定是 "名称: 描述"（如 "美妆博主: 一位..."），
 # 冒号支持全角/半角。识别出来的名称直接作为素材的 name，与图片素材命名后
 # 可用 "@名称" 引用的机制保持一致；识别不出格式时整段文本仍按描述处理。
@@ -372,4 +386,62 @@ class DirectorManager:
                 logger.exception("[DirectorManager] 删除素材文件失败: %s", asset.file_path)
 
         return {"project": project.to_dict(), "asset_counts": self._store.asset_counts()}
+
+    async def handle_director_edit_chat_send(self, params: dict) -> dict:
+        """剪辑 tab 对话助手：发一条用户消息，拿到一条真实的 AI 回复.
+
+        与 handle_director_generate 同样是无状态直连调用（chat_with_editor
+        直接打 chat/completions），不经过 Agent/会话；但这里是"多轮对话"而
+        不是一次性生成，所以每次调用都把该项目已有的历史消息重新拼进
+        messages 里发给模型——没有服务端会话状态，"上下文"就是
+        director_state.json 里存的这份消息列表本身。
+
+        没有单独的"取历史"RPC：project.to_dict() 已经带上
+        edit_chat_messages，现有的 director.projects.get/list 打开项目时
+        就能拿到完整对话历史，不需要再开一个端点。
+        """
+        project_id = str(params.get("project_id") or "").strip()
+        text = str(params.get("text") or "").strip()
+        raw_image_ids = params.get("image_asset_ids")
+        image_asset_ids = [str(x) for x in raw_image_ids if str(x)] if isinstance(raw_image_ids, list) else []
+
+        if not project_id:
+            raise DirectorRpcError("INVALID_PARAMS", "缺少 project_id")
+        if not text:
+            raise DirectorRpcError("INVALID_PARAMS", "消息不能为空")
+        if not (edit_chat_enabled() and edit_chat_configured()):
+            raise DirectorRpcError("NOT_CONFIGURED", "剪辑对话未配置，请先在设置中配置「剪辑对话」")
+
+        project = self._store.get_project(project_id)
+        if project is None:
+            raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")
+
+        image_paths = [
+            path
+            for path in (self._resolve_asset_path(project, asset_id) for asset_id in image_asset_ids)
+            if path
+        ]
+
+        history_messages = [{"role": m.role, "content": m.content} for m in project.edit_chat_messages]
+        messages = [
+            {"role": "system", "content": _EDIT_CHAT_SYSTEM_PROMPT},
+            *history_messages,
+            {"role": "user", "content": text},
+        ]
+
+        # 用户这一轮先单独落盘，即使随后的模型调用失败，输入也不会丢——
+        # 用户不用重新打一遍字，重试时历史里已经有这条消息了。
+        user_message = EditChatMessage(role="user", content=text, image_asset_ids=image_asset_ids)
+        project = self._store.append_edit_chat_messages(project_id, [user_message])
+
+        async with self._lock:
+            reply_text = await chat_with_editor(messages, image_paths=image_paths or None)
+
+        if reply_text.startswith("[ERROR]:"):
+            raise DirectorRpcError("GENERATION_FAILED", reply_text)
+
+        assistant_message = EditChatMessage(role="assistant", content=reply_text)
+        project = self._store.append_edit_chat_messages(project_id, [assistant_message])
+
+        return {"project": project.to_dict()}
 

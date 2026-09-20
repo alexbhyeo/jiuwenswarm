@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { useDirectorStore } from '../directorStore';
 import { DirectorTabs } from './DirectorTabs';
+import { EditChatPanel } from './EditChatPanel';
 
 const backIcon = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -36,7 +37,7 @@ export function EditTabShell() {
   const setActiveTab = useDirectorStore((s) => s.setActiveTab);
 
   return (
-    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+    <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <div className="director-lab-topbar">
         <div className="director-lab-breadcrumb">
           <button type="button" className="director-lab-back" onClick={() => setActiveTab('create')}>
@@ -61,37 +62,43 @@ export function EditTabShell() {
         </div>
       </div>
 
-      <div className="director-edit-stage">
-        <div className="director-edit-dropzone">
-          <div className="director-edit-dropzone-title">
-            {importIcon}
-            {t('director.edit.importMedia')}
+      <div className="director-edit-body">
+        <div className="director-edit-main">
+          <div className="director-edit-stage">
+            <div className="director-edit-dropzone">
+              <div className="director-edit-dropzone-title">
+                {importIcon}
+                {t('director.edit.importMedia')}
+              </div>
+              <div className="director-edit-dropzone-hint">{t('director.edit.importHint')}</div>
+            </div>
           </div>
-          <div className="director-edit-dropzone-hint">{t('director.edit.importHint')}</div>
-        </div>
-      </div>
 
-      <div className="director-edit-timeline">
-        <div className="director-edit-toolbar-row">
-          <div className="director-edit-toolbar-left">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+          <div className="director-edit-timeline">
+            <div className="director-edit-toolbar-row">
+              <div className="director-edit-toolbar-left">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button type="button" style={{ width: 28, height: 28, borderRadius: '9999px', background: 'var(--d-accent)', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }} disabled>
+                  {playIcon}
+                </button>
+                <span style={{ fontSize: 12.5, color: 'var(--d-text-secondary)', fontVariantNumeric: 'tabular-nums' }}>00:00:00</span>
+              </div>
+              <div style={{ width: 90 }} />
+            </div>
+            <div className="director-edit-ruler">
+              {RULER_MARKS.map((mark) => (
+                <span key={mark}>{mark}</span>
+              ))}
+            </div>
+            <div className="director-edit-track">
+              <span className="director-edit-track-hint">{t('director.edit.trackHint')}</span>
+            </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <button type="button" style={{ width: 28, height: 28, borderRadius: '9999px', background: 'var(--d-accent)', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }} disabled>
-              {playIcon}
-            </button>
-            <span style={{ fontSize: 12.5, color: 'var(--d-text-secondary)', fontVariantNumeric: 'tabular-nums' }}>00:00:00</span>
-          </div>
-          <div style={{ width: 90 }} />
         </div>
-        <div className="director-edit-ruler">
-          {RULER_MARKS.map((mark) => (
-            <span key={mark}>{mark}</span>
-          ))}
-        </div>
-        <div className="director-edit-track">
-          <span className="director-edit-track-hint">{t('director.edit.trackHint')}</span>
-        </div>
+
+        <EditChatPanel />
       </div>
     </div>
   );
