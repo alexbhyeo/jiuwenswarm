@@ -40,6 +40,7 @@ export function ImageNode({ id, data }: NodeProps & { data: ImageNodeData }) {
         </div>
       </div>
       <div className="lab-node-name">{data.name}</div>
+      <Handle type="target" position={Position.Left} id="in" />
       <Handle type="source" position={Position.Right} id="image" />
     </div>
   );

@@ -70,7 +70,7 @@ function LabCanvasInner() {
   const selectedProjectId = useDirectorStore((s) => s.selectedProjectId);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-  const { screenToFlowPosition, getNodes } = useReactFlow();
+  const { screenToFlowPosition, getNodes, getEdges } = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [openMenu, setOpenMenu] = useState<ToolrailMenu>(null);
   const pollTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -218,31 +218,52 @@ function LabCanvasInner() {
         const result = await directorGenerate(params);
         void useDirectorStore.getState().loadProjects();
         const outputAsset = result.project.assets.find((a) => a.asset_id === result.assetId);
-
-        const outputNodeId = nextNodeId('out');
         const outputType = outputAsset?.type === 'video' ? 'video' : 'image';
-        addNode({
-          id: outputNodeId,
-          type: outputType,
-          position: { x: node.position.x + 360, y: node.position.y },
-          data: {
-            assetId: outputAsset?.asset_id ?? null,
-            filePath: outputAsset?.file_path ?? '',
-            name: outputAsset?.name || outputAsset?.prompt || '',
-          },
-        });
-        setEdges((eds) =>
-          addEdge(
-            {
-              id: nextNodeId('edge'),
-              source: nodeId,
-              sourceHandle: 'out',
-              target: outputNodeId,
-              targetHandle: outputType === 'video' ? 'in' : undefined,
-            },
-            eds
-          )
-        );
+        const outputData = {
+          assetId: outputAsset?.asset_id ?? null,
+          filePath: outputAsset?.file_path ?? '',
+          name: outputAsset?.name || outputAsset?.prompt || '',
+        };
+
+        // 再次点这个处理节点的"生成"时，如果它的输出口已经接了一个结果
+        // 节点，就地替换那个节点的内容，而不是每点一次生成就在画布上
+        // 再摞一张新卡片——用户点"生成"是想换掉上一次的结果，不是攒出一
+        // 堆散落的历史版本。类型也可能变（比如同一个处理节点从未连接变
+        // 成挂了首尾帧，参数不变但换了个模式），这种情况下沿用旧节点的
+        // 类型没有意义，直接删旧建新，保持行为可预期。
+        const existingOutEdge = getEdges().find((e) => e.source === nodeId && e.sourceHandle === 'out');
+        const existingOutputNode = existingOutEdge
+          ? getNodes().find((n) => n.id === existingOutEdge.target)
+          : undefined;
+
+        let outputNodeId: string;
+        if (existingOutputNode && existingOutputNode.type === outputType) {
+          outputNodeId = existingOutputNode.id;
+          setNodes((nds) => nds.map((n) => (n.id === outputNodeId ? { ...n, data: outputData } : n)));
+        } else {
+          if (existingOutputNode) {
+            handleDeleteNode(existingOutputNode.id);
+          }
+          outputNodeId = nextNodeId('out');
+          addNode({
+            id: outputNodeId,
+            type: outputType,
+            position: { x: node.position.x + 360, y: node.position.y },
+            data: outputData,
+          });
+          setEdges((eds) =>
+            addEdge(
+              {
+                id: nextNodeId('edge'),
+                source: nodeId,
+                sourceHandle: 'out',
+                target: outputNodeId,
+                targetHandle: 'in',
+              },
+              eds
+            )
+          );
+        }
 
         if (outputAsset?.status === 'pending' && outputAsset.job_id) {
           pollOutputNode(nodeId, outputNodeId, selectedProjectId, outputAsset.asset_id, outputAsset.job_id);
@@ -254,7 +275,7 @@ function LabCanvasInner() {
         setProcessNodeState(nodeId, { status: 'error', error: message });
       }
     },
-    [getNodes, selectedProjectId, addNode, setEdges, setProcessNodeState, pollOutputNode]
+    [getNodes, getEdges, selectedProjectId, addNode, setNodes, setEdges, setProcessNodeState, pollOutputNode, handleDeleteNode]
   );
 
   const onDragOver = useCallback((e: React.DragEvent) => {

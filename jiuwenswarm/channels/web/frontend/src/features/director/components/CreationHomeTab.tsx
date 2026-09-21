@@ -28,7 +28,7 @@ export function CreationHomeTab() {
         </div>
       </div>
 
-      <div style={{ margin: '24px 0 24px' }}>
+      <div style={{ margin: '0 0 24px' }}>
         <DirectorTabs activeTab={activeTab} onChange={setActiveTab} />
       </div>
 
