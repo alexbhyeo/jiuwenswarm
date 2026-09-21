@@ -118,6 +118,8 @@ interface RsiNodeStageSpec {
   score: number | null;
   candidateIndex: number | null;
   totalCandidates: number | null;
+  reusedCaseCount: number | null;
+  evaluatedCaseCount: number | null;
 }
 
 export function nodeStageSpec(node: RsiTreeNode): RsiNodeStageSpec | null {
@@ -140,6 +142,8 @@ export function nodeStageSpec(node: RsiTreeNode): RsiNodeStageSpec | null {
     score: firstNumber(stage?.score),
     candidateIndex: firstNumber(stage?.candidate_index, stage?.candidateIndex),
     totalCandidates: firstNumber(stage?.total_candidates, stage?.totalCandidates),
+    reusedCaseCount: firstNumber(stage?.reused_case_count),
+    evaluatedCaseCount: firstNumber(stage?.evaluated_case_count),
   };
 }
 
@@ -153,7 +157,7 @@ export function nodeStageLabel(node: RsiTreeNode): string | null {
   if (
     namedStage &&
     id &&
-    (id.startsWith('evaluate.case.') || id.startsWith('analyze.') || id === 'generate.candidate')
+    (id.startsWith('evaluate.case.') || id.startsWith('analyze.') || id === 'generate.candidate' || id === 'source.reuse')
   ) {
     return clampText(namedStage, 40);
   }
@@ -212,6 +216,14 @@ export function nodeStageLocalizedLabel(
 ): string | null {
   const spec = nodeStageSpec(node);
   if (!spec) return null;
+  if (spec.id === 'source.reuse') {
+    return t?.('rsi.stage.sourceReuse', {
+      count: spec.reusedCaseCount ?? 0,
+      total: spec.totalCases ?? 0,
+      evaluated: spec.evaluatedCaseCount ?? 0,
+      defaultValue: spec.name ?? '',
+    }) || spec.name;
+  }
   if (spec.id.startsWith('evaluate.case.')) {
     const statusMap: Record<string, string> = {
       passed: 'casePassed',
@@ -458,7 +470,10 @@ function failureLabel(
     return '生成失败';
   }
   if (lifecycle === 'rejected') {
-    if (score != null && parentScore != null) return '得分未超过父节点';
+    if (node.extra?.iteration_unit === 'epoch') return '本轮未保留 Harness 改动';
+    if (node.failure_class === 'rejected_by_score' && score != null && parentScore != null && score <= parentScore) {
+      return '得分未超过父节点';
+    }
     return '未达到采纳条件';
   }
   if (lifecycle === 'pruned') return asText(node.failure_reason) || '搜索空间已剪枝';
@@ -677,12 +692,14 @@ export function formatArtifactScore(score: number | null, artifactType?: RsiArti
   return formatScore(score * scoreScale(artifactType), scoreDigits(artifactType));
 }
 
-// 提升百分比：↑ 5.2% / ↓ 2.1%，null 显示空串
+// Display the normalized score difference as a percentage, without dividing by the baseline.
 export function formatGain(gain: number | null): { text: string; kind: 'up' | 'down' | 'none' } {
   if (gain == null || Number.isNaN(gain)) return { text: '', kind: 'none' };
-  const pct = gain * 100;
-  if (pct >= 0) return { text: `${pct.toFixed(1)}% ↑`, kind: 'up' };
-  return { text: `${Math.abs(pct).toFixed(1)}% ↓`, kind: 'down' };
+  const delta = gain * 100;
+  if (delta === 0) return { text: '', kind: 'none' };
+  const magnitude = Number(Math.abs(delta).toFixed(1));
+  if (delta > 0) return { text: `${magnitude}% ↑`, kind: 'up' };
+  return { text: `${magnitude}% ↓`, kind: 'down' };
 }
 
 // token 用量格式化：万 tokens

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   formatArtifactScore,
+  formatGain,
   nodeChangeDisplayLabel,
   nodeScoreLines,
   nodeStageLabel,
@@ -13,11 +14,57 @@ import {
   actionsForStatus,
 } from '../node_modules/.cache/rsi-presentation/rsiPresentation.mjs';
 
+test('completed tasks show full progress even when they finish before the iteration limit', () => {
+  assert.equal(progressPercent('COMPLETED', 1, 5), 100);
+  assert.equal(progressPercent('COMPLETED', 0, 0), 100);
+  for (const status of ['RUNNING', 'PAUSED', 'FAILED', 'TERMINATED']) {
+    assert.equal(progressPercent(status, 1, 5), 20);
+  }
+  assert.equal(progressPercent('QUEUED', 0, 0), 0);
+  assert.equal(progressPercent('RUNNING', 6, 5), 100);
+});
+
+test('score gains display the absolute normalized difference as a percentage', () => {
+  assert.deepEqual(formatGain(1 - 0.6), { text: '40% ↑', kind: 'up' });
+  assert.deepEqual(formatGain(0.4 - 0), { text: '40% ↑', kind: 'up' });
+  assert.deepEqual(formatGain(0.6 - 1), { text: '40% ↓', kind: 'down' });
+  assert.deepEqual(formatGain(0.123), { text: '12.3% ↑', kind: 'up' });
+  for (const value of [null, NaN, 0]) {
+    assert.deepEqual(formatGain(value), { text: '', kind: 'none' });
+  }
+});
+
 const context = (scenario, artifactType, nodes, taskRunning = false) => ({
   scenario,
   artifactType,
   allNodes: nodes,
   taskRunning,
+});
+
+test('source reuse reports reused and newly evaluated case counts', () => {
+  const node = { extra: { stage: {
+    id: 'source.reuse', name: 'Reused existing evidence', total_cases: 8,
+    reused_case_count: 6, evaluated_case_count: 2,
+  } } };
+  assert.equal(nodeStageSpec(node).reusedCaseCount, 6);
+  assert.equal(nodeStageLabel(node), 'Reused existing evidence');
+  assert.equal(nodeStageLocalizedLabel(node, (key, options) => {
+    assert.equal(key, 'rsi.stage.sourceReuse');
+    assert.equal(options.count, 6);
+    assert.equal(options.total, 8);
+    assert.equal(options.evaluated, 2);
+    return '6/8 reused; 2 evaluated';
+  }), '6/8 reused; 2 evaluated');
+});
+
+test('rejection does not invent a score regression for a behavior or epoch gate', () => {
+  const parent = { node_id: 'parent', type: 'ADOPTED', adopted: true, score: 0.4, extra: {} };
+  const node = { node_id: 'candidate', parent_id: 'parent', type: 'REJECTED', adopted: false,
+    score: 0.8, failure_class: 'behavior_not_observed', changes: [], extra: {} };
+  const ctx = context('HARNESS', null, [parent, node]);
+  assert.equal(presentRsiNode(node, ctx).reasonLabel, '未达到采纳条件');
+  assert.equal(presentRsiNode({ ...node, extra: { iteration_unit: 'epoch' } }, ctx).reasonLabel,
+    '本轮未保留 Harness 改动');
 });
 
 test('completed tasks display 100 percent regardless of iteration progress', () => {
@@ -299,6 +346,8 @@ test('structured harness stage payloads localize by status instead of using the 
     score: 0.85,
     candidateIndex: null,
     totalCandidates: null,
+    reusedCaseCount: null,
+    evaluatedCaseCount: null,
   });
 
   const t = (key, options = {}) => {

@@ -91,7 +91,8 @@ def test_repair_round_defaults_preserve_explicit_options(params: dict, expected:
     assert _profile_options({})["max_repair_rounds"] == 3
 
 
-def test_model_resolver_uses_models_list_global_origin_index(tmp_path: Path) -> None:
+@pytest.mark.parametrize("role", ["evaluation", "analysis", "member_optimization", "judge"])
+def test_model_resolver_uses_models_list_global_origin_index(tmp_path: Path, role: str) -> None:
     entries = [
         _entry("same", alias="first", is_default=True, api_base="https://one.test/v1"),
         _entry("same", alias="second", api_base="https://two.test/v1"),
@@ -110,8 +111,9 @@ def test_model_resolver_uses_models_list_global_origin_index(tmp_path: Path) -> 
         model_builder=build_model,
     )
 
-    manifest = resolver.resolve_to_file("same#1", "tester", tmp_path)
-    payload = yaml.safe_load((tmp_path / "tester.yaml").read_text(encoding="utf-8"))
+    manifest = resolver.resolve_to_file("same#1", role, tmp_path)
+    payload = yaml.safe_load((tmp_path / f"{role}.yaml").read_text(encoding="utf-8"))
+    assert payload["model_request_config"].get("max_tokens") is None
 
     assert manifest["origin_index"] == 1
     assert manifest["model_name"] == "same"
@@ -119,6 +121,79 @@ def test_model_resolver_uses_models_list_global_origin_index(tmp_path: Path) -> 
     assert payload["model_client_config"]["max_retries"] == 0
     assert payload["model_request_config"]["model"] == "same"
     assert payload["model_client_config"]["api_key"] == "secret-same"
+
+
+@pytest.mark.parametrize("window, expected", [(None, 1048576), (262144, 262144), (131072, 131072)])
+@pytest.mark.parametrize("role", ["evaluation", "analysis", "member_optimization", "judge"])
+def test_rsi_capacity_preserves_explicit_gateway_limits(tmp_path, window, expected, role):
+    entry = _entry("deepseek-v4-pro")
+    entry["model_config_obj"]["context_window"] = window
+    resolver = RsiModelConfigResolver(
+        config_loader=lambda: {},
+        defaults_loader=lambda _: [entry],
+        zen_loader=lambda: [],
+        model_builder=lambda mcc, mco: SimpleNamespace(
+            model_client_config=_FakeModelConfig(mcc),
+            model_config=_FakeModelConfig({"model_name": mcc["model_name"], **mco}),
+        ),
+    )
+    resolver.resolve_to_file("deepseek-v4-pro", role, tmp_path)
+    payload = yaml.safe_load((tmp_path / f"{role}.yaml").read_text(encoding="utf-8"))
+    assert payload["model_request_config"]["context_window"] == expected
+    assert entry["model_config_obj"]["context_window"] == window
+
+
+@pytest.mark.parametrize("name", ["deepseek-v4-pro", "other-model"])
+@pytest.mark.parametrize("role", ["analysis", "member_optimization", "judge", "evaluation", "chat"])
+def test_optimizer_defaults_are_scoped_and_preserve_connection(tmp_path, name, role):
+    entry = _entry(name)
+    entry["model_config_obj"]["context_window"] = 262144
+    entry["model_client_config"]["timeout"] = 360
+    resolver = RsiModelConfigResolver(
+        config_loader=lambda: {},
+        defaults_loader=lambda _: [entry],
+        zen_loader=lambda: [],
+        model_builder=lambda mcc, mco: SimpleNamespace(
+            model_client_config=_FakeModelConfig(mcc),
+            model_config=_FakeModelConfig({"model_name": mcc["model_name"], **mco}),
+        ),
+    )
+    resolver.resolve_to_file(name, role, tmp_path)
+    payload = yaml.safe_load((tmp_path / f"{role}.yaml").read_text(encoding="utf-8"))
+    assert payload["model_request_config"]["context_window"] == 262144
+    assert payload["model_client_config"]["timeout"] == 360
+    assert payload["model_client_config"]["api_key"] == entry["model_client_config"]["api_key"]
+    assert payload["model_client_config"]["api_base"] == entry["model_client_config"]["api_base"]
+    assert payload["model_request_config"]["model"] == name
+    assert entry["model_config_obj"]["context_window"] == 262144
+    assert entry["model_client_config"]["timeout"] == 360
+
+
+@pytest.mark.parametrize("name", ["deepseek-v4-pro", "qwen-plus", "custom-gateway-model"])
+def test_shared_rsi_policy_has_no_model_selection_and_preserves_output(tmp_path, name):
+    from importlib.resources import files
+
+    path = files("jiuwenswarm.resources").joinpath("rsi").joinpath("runtime_defaults.yaml")
+    policy = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert set(policy) == {"rsi_optimizer_roles", "timeout"}
+    entry = _entry(name)
+    entry["model_config_obj"].update(context_window=131072, max_tokens=32768)
+    resolver = RsiModelConfigResolver(
+        config_loader=lambda: {},
+        defaults_loader=lambda _: [entry],
+        zen_loader=lambda: [],
+        model_builder=lambda mcc, mco: SimpleNamespace(
+            model_client_config=_FakeModelConfig(mcc),
+            model_config=_FakeModelConfig({"model_name": mcc["model_name"], **mco}),
+        ),
+    )
+    resolver.resolve_to_file(name, "analysis", tmp_path)
+    request = yaml.safe_load((tmp_path / "analysis.yaml").read_text(encoding="utf-8"))["model_request_config"]
+    assert request["model"] == name
+    assert request["context_window"] == 131072
+    assert request["max_tokens"] is None
+    payload = yaml.safe_load((tmp_path / "analysis.yaml").read_text(encoding="utf-8"))
+    assert payload["model_client_config"]["timeout"] == 900
 
 
 def test_model_resolver_rejects_unknown_reference_without_default_fallback(
@@ -267,6 +342,7 @@ def test_materializer_copies_dataset_wraps_single_harness_and_writes_validation_
     assert refs["source_sha256"] == _tree_digest(materialized_package)
     assert profile_payload["max_epochs"] == 4
     assert profile_payload["data_loader"]["batch_size"] == 1
+    assert profile_payload["scheduling"]["full_evaluation_concurrency"] == 3
     assert profile_payload["member_optimizer"]["sibling_candidate_count"] == 1
     assert profile_payload["member_optimizer"]["max_issue_attempts_per_batch"] == 8
     assert profile_payload["member_optimizer"]["max_repair_rounds_per_batch"] == 3

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 from copy import deepcopy
 from dataclasses import dataclass
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, Callable
 
@@ -20,6 +21,7 @@ from jiuwenswarm.agents.harness.common.rsi.errors import (
     RsiModelConfigInvalid,
     RsiModelNotFound,
 )
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +198,13 @@ class RsiModelConfigResolver:
         # latter in the task file to match openjiuwen's standalone examples.
         request_data.pop("model_name", None)
         request_data["model"] = model_name
+        if request_data.get("context_window") is None:
+            from openjiuwen.core.context_engine.context.context_utils import ContextUtils
+
+            # Persist the resolved capacity, not an unrelated fixed UI default.
+            # A gateway-specific limit explicitly set on the model remains authoritative.
+            request_data["context_window"] = ContextUtils.resolve_context_max(model_name=model_name)
+        _apply_rsi_optimizer_defaults(model_name, role_name, client_data, request_data)
         payload = {
             "model_client_config": client_data,
             "model_request_config": request_data,
@@ -260,6 +269,26 @@ def _matches(entry: dict[str, Any], requested: str) -> bool:
 def _model_name(entry: dict[str, Any]) -> str:
     mcc = entry.get("model_client_config") if isinstance(entry, dict) else None
     return str((mcc or {}).get("model_name") or "").strip() if isinstance(mcc, dict) else ""
+
+
+def _apply_rsi_optimizer_defaults(
+    model_name: str, role: str, client_data: dict[str, Any], request_data: dict[str, Any],
+) -> None:
+    """Apply packaged RSI policy to copied configs, never to the shared model registry."""
+    resource = files("jiuwenswarm.resources").joinpath("rsi").joinpath("runtime_defaults.yaml")
+    policy = yaml.safe_load(resource.read_text(encoding="utf-8"))
+    if role not in policy["rsi_optimizer_roles"]:
+        return
+    from openjiuwen.rsi.harness_rsi.member_optimizer.model_config import with_rsi_output_budget
+
+    # RSI leaves output length to the provider without changing model identity or credentials.
+    adjusted = with_rsi_output_budget({"model_request_config": {**request_data, "model": model_name}})
+    request_data.update(adjusted["model_request_config"])
+    if client_data.get("timeout") is None:
+        value = policy["timeout"]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise RsiModelConfigInvalid("RSI timeout default must be a positive integer")
+        client_data["timeout"] = value
 
 
 def _dump_model_part(value: Any) -> Any:
