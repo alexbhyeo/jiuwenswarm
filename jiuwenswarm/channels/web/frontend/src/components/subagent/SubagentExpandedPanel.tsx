@@ -4,7 +4,15 @@ import { useTranslation } from 'react-i18next';
 import ProcessingIcon from '../../assets/subagent/processing.svg?react';
 import BackIcon from '../../assets/back.svg?react';
 import { getSubagentStatusLabelKey } from '../../features/subagent/subagentStatusPresentation';
-import { extractSubagentTasks, finalizeSubagentTasks, getSubagentActivityPreview, groupSubagentActivities, type SubagentActivityGroup } from '../../features/subagent/subagentActivityPresentation';
+import {
+  decorateSubagentActivityGroups,
+  extractSubagentTasks,
+  finalizeSubagentTasks,
+  getSubagentActivityPreview,
+  groupSubagentActivities,
+  shouldShowSubagentBusyIndicator,
+  type SubagentActivityGroup,
+} from '../../features/subagent/subagentActivityPresentation';
 import { selectSubagentActivities, selectSubagentHistoryRestoring, selectSubagentResult, selectSubagentTurns, selectSubagents, useSubagentStore } from '../../stores/subagentStore';
 import type { Subagent, SubagentActivity, SubagentActivityKind, SubagentTurn } from '../../types/subagent';
 import { MemberTaskListBar, MemberTaskListItems, type MemberTaskListItem } from '../teamArea/MemberTaskList';
@@ -106,17 +114,21 @@ function ActivityRow({ group, isLast, isSubagentRunning }: { group: SubagentActi
   const activity = group.activity;
   const latestActivity = group.activities[group.activities.length - 1] ?? activity;
   const isThinking = activity.kind === 'thinking';
-  const isRunning = isLast && isSubagentRunning && (latestActivity.kind === 'thinking' || latestActivity.kind === 'tool_call');
+  const isRunning = shouldShowSubagentBusyIndicator({
+    isLast,
+    isSubagentRunning,
+    latestKind: latestActivity.kind,
+  });
   const label = isThinking
     ? t('subagent.activity.thinking')
     : activityToolLabel(activity.tool_name, t) ?? activityLabel(activity.kind, t);
   const summary = getSubagentActivityPreview(group);
-  const timestamp = formatTime(latestActivity.at_ms);
+  const timestamp = group.synthetic ? '' : formatTime(latestActivity.at_ms);
   const detailRows = buildActivityDetailRows(group, t);
   const detailsId = `subagent-activity-details-${activity.activity_id}`;
 
   return (
-    <li className="subagent-activity-row" data-testid="subagent-activity-row" data-variant={activity.activity_id}>
+    <li className="subagent-activity-row" data-testid="subagent-activity-row" data-variant={activity.activity_id} data-synthetic={group.synthetic ? 'true' : undefined}>
       <div className="subagent-activity-row__icon" aria-hidden="true">
         <ActivityIcon activity={activity} />
       </div>
@@ -136,7 +148,7 @@ function ActivityRow({ group, isLast, isSubagentRunning }: { group: SubagentActi
         data-testid="subagent-activity-row-toggle"
       >
         {isRunning ? (
-          <ProcessingIcon className="subagent-activity-row__processing shrink-0 text-muted animate-spin" aria-label={t('subagent.running')} role="img" />
+          <ProcessingIcon className="subagent-activity-row__processing shrink-0 text-muted animate-spin" aria-label={t('subagent.running')} role="img" data-testid="subagent-activity-row-busy" />
         ) : (
           <ChevronRight className={`subagent-activity-row__chevron ${expanded ? 'subagent-activity-row__chevron--expanded' : ''}`} aria-hidden="true" />
         )}
@@ -237,6 +249,13 @@ function SubagentDetail({ sessionId, subagentId, onBack }: { sessionId: string; 
               ? activities
               : activities.filter(activity => activity.task_id === turn.task_id);
             const activityGroups = groupSubagentActivities(turnActivities);
+            const isTurnRunning = subagent.status === 'running' && turn.task_id === latestTurnId;
+            const visibleGroups = decorateSubagentActivityGroups(activityGroups, {
+              isSubagentRunning: isTurnRunning,
+              subagentId: subagent.subagent_id,
+              taskId: turn.task_id,
+              atMs: turnActivities[turnActivities.length - 1]?.at_ms ?? turn.started_at,
+            });
             const turnResult = (historyRestoring && turn.result?.source === 'wait' ? undefined : turn.result)
               ?? (!historyRestoring && visibleTurns.length === 1 ? result : undefined)
               ?? (turn.task_id === latestTurnId ? legacyFallbackResult : undefined);
@@ -255,14 +274,14 @@ function SubagentDetail({ sessionId, subagentId, onBack }: { sessionId: string; 
                 </div>
 
                 <div className="subagent-activity-section" data-testid="subagent-turn-activity-section">
-                  {turnActivities.length > 0 ? (
+                  {visibleGroups.length > 0 ? (
                     <ol className="subagent-activity-list" aria-label={t('subagent.activityTitle')} data-testid="subagent-activity-list">
-                      {activityGroups.map((group, index) => (
+                      {visibleGroups.map((group, index) => (
                         <ActivityRow
                           key={group.activity.activity_id}
                           group={group}
-                          isLast={index === activityGroups.length - 1}
-                          isSubagentRunning={subagent.status === 'running' && turn.task_id === latestTurnId}
+                          isLast={index === visibleGroups.length - 1}
+                          isSubagentRunning={isTurnRunning}
                         />
                       ))}
                     </ol>
@@ -285,7 +304,7 @@ function SubagentDetail({ sessionId, subagentId, onBack }: { sessionId: string; 
               </section>
             );
           })}
-          {activities.length === 0 && !visibleTurns.some(turn => turn.result?.content?.trim()) ? (
+          {activities.length === 0 && subagent.status !== 'running' && !visibleTurns.some(turn => turn.result?.content?.trim()) ? (
             <div className="subagent-detail__state" data-testid="subagent-detail-activity-empty">{t('subagent.activityEmpty')}</div>
           ) : null}
         </div>
@@ -352,6 +371,15 @@ const SubagentOverviewCard = memo(function SubagentOverviewCard({
   const activities = selectSubagentActivities(runtime, subagent.subagent_id);
   const activityGroups = useMemo(() => groupSubagentActivities(activities), [activities]);
   const isRunning = subagent.status === 'running';
+  const visibleGroups = useMemo(() => {
+    const lastActivity = activities[activities.length - 1];
+    return decorateSubagentActivityGroups(activityGroups, {
+      isSubagentRunning: isRunning,
+      subagentId: subagent.subagent_id,
+      taskId: lastActivity?.task_id || '__pending__',
+      atMs: lastActivity?.at_ms,
+    });
+  }, [activities, activityGroups, isRunning, subagent.subagent_id]);
 
   return (
     <div
@@ -391,15 +419,15 @@ const SubagentOverviewCard = memo(function SubagentOverviewCard({
           aria-label={t('subagent.activityTitle')}
           data-testid="team-area-member-overview-card-activities"
         >
-          {activityGroups.length === 0 ? (
+          {visibleGroups.length === 0 ? (
             <li className="flex h-full items-center justify-center text-sm text-text-muted">{t('subagent.activityEmpty')}</li>
           ) : (
-            activityGroups.map((group, index) => (
+            visibleGroups.map((group, index) => (
               <ActivityRow
                 key={group.activity.activity_id}
                 group={group}
-                isLast={index === activityGroups.length - 1}
-                isSubagentRunning={isRunning && index === activityGroups.length - 1}
+                isLast={index === visibleGroups.length - 1}
+                isSubagentRunning={isRunning}
               />
             ))
           )}

@@ -1,10 +1,78 @@
-import type { SubagentActivity } from '../../types/subagent';
+import type { SubagentActivity, SubagentActivityKind } from '../../types/subagent';
 
 export interface SubagentActivityGroup {
   activity: SubagentActivity;
   activities: SubagentActivity[];
   summary: string;
   count: number;
+  synthetic?: boolean;
+}
+
+export const SUBAGENT_SYNTHETIC_THINKING_ID_PREFIX = '__synthetic_thinking__';
+
+export function isInFlightSubagentActivityKind(kind: SubagentActivityKind | undefined): boolean {
+  return kind === 'thinking' || kind === 'tool_call';
+}
+
+export function latestSubagentActivityKind(
+  groups: SubagentActivityGroup[],
+): SubagentActivityKind | undefined {
+  const last = groups[groups.length - 1];
+  const latest = last?.activities[last.activities.length - 1] ?? last?.activity;
+  return latest?.kind;
+}
+
+/** Spinner belongs on the last row only while that row is still in flight. */
+export function shouldShowSubagentBusyIndicator(input: {
+  isLast: boolean;
+  isSubagentRunning: boolean;
+  latestKind?: SubagentActivityKind;
+}): boolean {
+  return Boolean(
+    input.isLast && input.isSubagentRunning && isInFlightSubagentActivityKind(input.latestKind),
+  );
+}
+
+function createSyntheticThinkingGroup(input: {
+  subagentId: string;
+  taskId: string;
+  atMs?: number;
+}): SubagentActivityGroup {
+  const taskId = input.taskId || '__pending__';
+  const activity: SubagentActivity = {
+    activity_id: `${SUBAGENT_SYNTHETIC_THINKING_ID_PREFIX}:${taskId}`,
+    subagent_id: input.subagentId,
+    task_id: taskId,
+    sequence: Number.MAX_SAFE_INTEGER,
+    kind: 'thinking',
+    summary: '',
+    at_ms: input.atMs ?? 0,
+  };
+  return {
+    activity,
+    activities: [activity],
+    summary: '',
+    count: 1,
+    synthetic: true,
+  };
+}
+
+/**
+ * Keep a thinking placeholder while the subagent is running but the last real
+ * event is not an in-flight tool_call / thinking chunk.
+ */
+export function decorateSubagentActivityGroups(
+  groups: SubagentActivityGroup[],
+  input: {
+    isSubagentRunning: boolean;
+    subagentId: string;
+    taskId: string;
+    atMs?: number;
+  },
+): SubagentActivityGroup[] {
+  if (!input.isSubagentRunning) return groups;
+  if (isInFlightSubagentActivityKind(latestSubagentActivityKind(groups))) return groups;
+  return [...groups, createSyntheticThinkingGroup(input)];
 }
 
 export type SubagentTaskStatus = 'pending' | 'in_progress' | 'completed';

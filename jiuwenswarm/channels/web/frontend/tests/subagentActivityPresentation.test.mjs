@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  decorateSubagentActivityGroups,
   extractSubagentTasks,
   finalizeSubagentTasks,
   getSubagentActivityPreview,
   groupSubagentActivities,
+  shouldShowSubagentBusyIndicator,
 } from '../node_modules/.cache/subagent-activity/subagentActivityPresentation.mjs';
 
 function activity(activityId, sequence, overrides = {}) {
@@ -238,3 +240,85 @@ test('keeps thinking collapsed preview bounded and empty for empty summaries', (
     activity('thinking-empty', 2, { summary: '' }),
   ])[0]), '');
 });
+
+test('busy indicator stays on in-flight thinking and tool_call rows only', () => {
+  assert.equal(shouldShowSubagentBusyIndicator({
+    isLast: true,
+    isSubagentRunning: true,
+    latestKind: 'tool_call',
+  }), true);
+  assert.equal(shouldShowSubagentBusyIndicator({
+    isLast: true,
+    isSubagentRunning: true,
+    latestKind: 'thinking',
+  }), true);
+  assert.equal(shouldShowSubagentBusyIndicator({
+    isLast: true,
+    isSubagentRunning: true,
+    latestKind: 'tool_result',
+  }), false);
+  assert.equal(shouldShowSubagentBusyIndicator({
+    isLast: true,
+    isSubagentRunning: false,
+    latestKind: 'thinking',
+  }), false);
+});
+
+test('running with no activities keeps a synthetic thinking placeholder', () => {
+  const groups = decorateSubagentActivityGroups([], {
+    isSubagentRunning: true,
+    subagentId: 'agent-a',
+    taskId: 'task-a',
+  });
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].synthetic, true);
+  assert.equal(groups[0].activity.kind, 'thinking');
+  assert.equal(shouldShowSubagentBusyIndicator({
+    isLast: true,
+    isSubagentRunning: true,
+    latestKind: groups[0].activity.kind,
+  }), true);
+});
+
+test('running after a completed tool keeps a synthetic thinking placeholder', () => {
+  const grouped = groupSubagentActivities([
+    activity('call-1', 1, { kind: 'tool_call', tool_name: 'search', summary: 'search()' }),
+    activity('result-1', 2, { kind: 'tool_result', tool_name: 'search', summary: 'ok' }),
+  ]);
+  const groups = decorateSubagentActivityGroups(grouped, {
+    isSubagentRunning: true,
+    subagentId: 'agent-a',
+    taskId: 'task-a',
+  });
+  assert.deepEqual(groups.map(group => [group.activity.kind, Boolean(group.synthetic)]), [
+    ['tool_call', false],
+    ['tool_result', false],
+    ['thinking', true],
+  ]);
+});
+
+test('in-flight thinking is not duplicated by a synthetic placeholder', () => {
+  const grouped = groupSubagentActivities([
+    activity('call-1', 1, { kind: 'tool_call', tool_name: 'search', summary: 'search()' }),
+    activity('thinking-1', 2, { summary: 'next step' }),
+  ]);
+  const groups = decorateSubagentActivityGroups(grouped, {
+    isSubagentRunning: true,
+    subagentId: 'agent-a',
+    taskId: 'task-a',
+  });
+  assert.equal(groups.length, 2);
+  assert.equal(groups.some(group => group.synthetic), false);
+});
+
+test('idle or closed turns do not keep a synthetic thinking placeholder', () => {
+  const grouped = groupSubagentActivities([
+    activity('result-1', 1, { kind: 'tool_result', tool_name: 'search', summary: 'ok' }),
+  ]);
+  assert.equal(decorateSubagentActivityGroups(grouped, {
+    isSubagentRunning: false,
+    subagentId: 'agent-a',
+    taskId: 'task-a',
+  }).length, 1);
+});
+
