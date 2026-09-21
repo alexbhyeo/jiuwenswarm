@@ -51,7 +51,11 @@ def _error_body(code: str, message: str) -> dict[str, str]:
 def handle_director_asset_upload_http(*, content_type: str, body: bytes) -> tuple[int, dict[str, Any]]:
     """处理 ``POST /file-api/director/upload``，返回 (status, json_body).
 
-    表单字段：project_id（必填）、file（必填，图片或视频）。
+    表单字段：project_id（必填）、file（必填，图片或视频）、asset_type
+    （可选："image" | "video" | "character"）。角色素材本质上也是一张
+    图片，文件扩展名本身分不出"这是一张普通图片还是角色参考图"——前端从
+    "素材 · 角色"分类上传时显式传 asset_type=character 来区分；不传时
+    沿用原来按扩展名推断 image/video 的行为，兼容既有调用方。
     """
     try:
         fields = parse_multipart_form(content_type, body)
@@ -69,14 +73,28 @@ def handle_director_asset_upload_http(*, content_type: str, body: bytes) -> tupl
     filename = str(file_field.get("filename") or "upload.bin")
     ext = Path(filename).suffix.lower()
     if ext in _ALLOWED_IMAGE_EXT:
-        asset_type = "image"
+        inferred_type = "image"
     elif ext in _ALLOWED_VIDEO_EXT:
-        asset_type = "video"
+        inferred_type = "video"
     else:
         allowed = ", ".join(sorted(_ALLOWED_IMAGE_EXT | _ALLOWED_VIDEO_EXT))
         return _ERROR_STATUS["INVALID_PARAMS"], _error_body(
             "INVALID_PARAMS", f"不支持的文件类型: {ext or '(无扩展名)'}；仅支持 {allowed}"
         )
+
+    requested_type = str(fields.get("asset_type") or "").strip()
+    if requested_type == "character":
+        if inferred_type != "image":
+            return _ERROR_STATUS["INVALID_PARAMS"], _error_body(
+                "INVALID_PARAMS", "角色素材只能上传图片文件"
+            )
+        asset_type = "character"
+    elif requested_type in ("image", "video") and requested_type != inferred_type:
+        return _ERROR_STATUS["INVALID_PARAMS"], _error_body(
+            "INVALID_PARAMS", f"文件扩展名 {ext} 与所选分类（{requested_type}）不匹配"
+        )
+    else:
+        asset_type = inferred_type
 
     content = bytes(file_field["content"])
     # 以原始文件名（去扩展名）作为素材的默认展示名——上传的素材一般本来就有

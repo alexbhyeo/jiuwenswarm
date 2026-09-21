@@ -53,7 +53,7 @@ interface DirectorState {
   generate: () => Promise<void>;
   renameAsset: (projectId: string, assetId: string, name: string) => Promise<void>;
   deleteAsset: (projectId: string, assetId: string) => Promise<void>;
-  uploadAsset: (projectId: string, file: File) => Promise<void>;
+  uploadAsset: (projectId: string, file: File, assetType?: 'image' | 'video' | 'character') => Promise<void>;
   uploading: boolean;
   uploadError: string | null;
 
@@ -254,11 +254,11 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
     }
   },
 
-  uploadAsset: async (projectId, file) => {
+  uploadAsset: async (projectId, file, assetType) => {
     set({ uploading: true, uploadError: null });
     try {
       const { directorAssetUpload } = await import('./directorApi');
-      const { project, assetCounts } = await directorAssetUpload(projectId, file);
+      const { project, assetCounts } = await directorAssetUpload(projectId, file, assetType);
       set((s) => ({
         uploading: false,
         projects: s.projects.map((p) => (p.project_id === project.project_id ? project : p)),

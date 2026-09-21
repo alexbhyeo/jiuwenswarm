@@ -238,11 +238,19 @@ export interface UploadAssetResult {
 }
 
 // 上传走普通 multipart HTTP（不经 WS RPC）——见 director_multipart_http.py，
-// 与 SkillPanel 的 /file-api/skills/* 上传同构。
-export async function directorAssetUpload(projectId: string, file: File): Promise<UploadAssetResult> {
+// 与 SkillPanel 的 /file-api/skills/* 上传同构。assetType 传"character"
+// 时，同一张图片文件会被存成角色素材而不是普通图片素材——文件扩展名本身
+// 分不出这两者，靠这个字段显式区分（不传时沿用按扩展名推断 image/video
+// 的旧行为）。
+export async function directorAssetUpload(
+  projectId: string,
+  file: File,
+  assetType?: 'image' | 'video' | 'character'
+): Promise<UploadAssetResult> {
   const form = new FormData();
   form.append('project_id', projectId);
   form.append('file', file);
+  if (assetType) form.append('asset_type', assetType);
   let resp: Response;
   try {
     resp = await fetch('/file-api/director/upload', { method: 'POST', body: form });

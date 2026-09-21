@@ -269,10 +269,12 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
 
   // 依次串行上传，避免多个文件几乎同时到达时各自独立的
   // director_state.json 读改写互相覆盖（同类问题见 director. 前缀无状态路由修复）。
-  const handleUploadFiles = async (files: FileList) => {
+  // assetType 显式指定落到哪个分类——"素材 · 角色"上传的图片要存成
+  // character 素材而不是普通 image 素材，文件扩展名本身分不出这两者。
+  const handleUploadFiles = async (files: FileList, assetType: 'image' | 'video' | 'character') => {
     if (!selectedProject) return;
     for (const file of Array.from(files)) {
-      await uploadAsset(selectedProject.project_id, file);
+      await uploadAsset(selectedProject.project_id, file, assetType);
     }
   };
 
@@ -358,7 +360,7 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
             >
               <span className="director-category-icon">{videoIcon}</span>
               <span className="director-category-label">{t('director.categories.video')}</span>
-              <CategoryUploadButton accept="video/*" disabled={uploading} onFiles={handleUploadFiles} />
+              <CategoryUploadButton accept="video/*" disabled={uploading} onFiles={(files) => handleUploadFiles(files, 'video')} />
               <span className="director-category-count">{assetsByType.video.length}</span>
               {expanded === 'video' ? chevronDown : chevronRight}
             </div>
@@ -411,7 +413,7 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
             >
               <span className="director-category-icon">{imageIcon}</span>
               <span className="director-category-label">{t('director.categories.image')}</span>
-              <CategoryUploadButton accept="image/*" disabled={uploading} onFiles={handleUploadFiles} />
+              <CategoryUploadButton accept="image/*" disabled={uploading} onFiles={(files) => handleUploadFiles(files, 'image')} />
               <span className="director-category-count">{assetsByType.image.length}</span>
               {expanded === 'image' ? chevronDown : chevronRight}
             </div>
@@ -458,6 +460,7 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
             >
               <span className="director-category-icon">{characterIcon}</span>
               <span className="director-category-label">{t('director.categories.character')}</span>
+              <CategoryUploadButton accept="image/*" disabled={uploading} onFiles={(files) => handleUploadFiles(files, 'character')} />
               <span className="director-category-count">{assetsByType.character.length}</span>
               {expanded === 'character' ? chevronDown : chevronRight}
             </div>
