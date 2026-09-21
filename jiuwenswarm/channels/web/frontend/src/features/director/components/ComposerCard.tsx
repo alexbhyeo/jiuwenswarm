@@ -89,14 +89,16 @@ export function ComposerCard() {
 
   const resolutionOptions = composerMode === 'video' ? VIDEO_RESOLUTION_OPTIONS : IMAGE_RESOLUTION_OPTIONS;
 
-  // "@" 引用跨类别：无论当前是图片还是视频生成模式，素材来源永远是该项目
-  // "素材 · 图片"分类里已命名、已就绪的图片（见 director_manager.
-  // _resolve_at_references）——图片模式最多用 1 个当参考图，视频模式最多用
-  // 2 个，按输入顺序分别对应 generate_video 的首帧/尾帧。
+  // "@" 引用跨类别：无论当前是图片、视频还是角色生成模式，素材来源永远是
+  // 该项目"素材 · 图片"和"素材 · 角色"分类里已命名、已就绪的图片（见
+  // director_manager._resolve_at_references）——角色素材本质上就是一张
+  // 人物参考图，和普通图片素材一样可以被引用。图片模式最多用 1 个当
+  // 参考图，视频模式最多用 2 个，按输入顺序分别对应 generate_video 的
+  // 首帧/尾帧。
   const namedImageNames = useMemo(() => {
     if (!selectedProject) return [];
     const names = selectedProject.assets
-      .filter((a) => a.type === 'image' && a.status === 'ready' && a.name)
+      .filter((a) => (a.type === 'image' || a.type === 'character') && a.status === 'ready' && a.name)
       .map((a) => a.name as string);
     return Array.from(new Set(names));
   }, [selectedProject]);

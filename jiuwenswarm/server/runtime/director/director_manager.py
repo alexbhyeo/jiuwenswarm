@@ -154,10 +154,12 @@ class DirectorManager:
     def _resolve_at_references(
         self, project: DirectorProject, prompt: str, max_refs: int
     ) -> tuple[str, list[str]]:
-        """解析提示词中最多 max_refs 个 "@名称" 引用为已命名图片素材的路径.
+        """解析提示词中最多 max_refs 个 "@名称" 引用为已命名图片/角色素材的路径.
 
         跨类别：无论当前是图片还是视频生成模式，@ 引用总是从该项目"素材 ·
-        图片"分类里找已命名、已就绪的图片（视频素材不可作为引用源）。按出现
+        图片"和"素材 · 角色"分类里找已命名、已就绪的图片（视频素材不可作为
+        引用源；角色素材本质上就是一张人物参考图，和普通图片素材同等对待
+        ——见 handle_director_generate 里 "角色"素材生成时的注释）。按出现
         顺序取前 max_refs 个命中，命中的 token 从提示词里移除（其余文本原样
         发给模型）。image 模式下 max_refs=1，结果整体作为 generate_visual 的
         reference_image_path；video 模式下 max_refs=2，调用方把结果按顺序
@@ -172,7 +174,7 @@ class DirectorManager:
             if len(resolved) >= max_refs:
                 break
             asset = self._store.find_asset_by_name(project.project_id, match.group(1))
-            if not (asset and asset.type == "image" and asset.status == "ready" and asset.file_path):
+            if not (asset and asset.type in ("image", "character") and asset.status == "ready" and asset.file_path):
                 continue
             resolved.append(asset.file_path)
             start, end = match.start() - offset, match.end() - offset
@@ -182,15 +184,16 @@ class DirectorManager:
         return (cleaned or prompt, resolved) if resolved else (prompt, [])
 
     def _resolve_asset_path(self, project: DirectorProject, asset_id: str) -> str | None:
-        """按 asset_id 直接取一张就绪图片素材的路径（不经过 "@名称" 文本解析）.
+        """按 asset_id 直接取一张就绪图片/角色素材的路径（不经过 "@名称" 文本解析）.
 
         供 实验室 节点画布使用——节点间的连线本身就是显式引用，不需要（也不该）
-        把连线再编码成提示词里的 "@名称" 文本。
+        把连线再编码成提示词里的 "@名称" 文本。角色素材本质上就是一张人物
+        参考图，和普通图片素材同等对待。
         """
         if not asset_id:
             return None
         asset = next((a for a in project.assets if a.asset_id == asset_id), None)
-        if asset and asset.type == "image" and asset.status == "ready" and asset.file_path:
+        if asset and asset.type in ("image", "character") and asset.status == "ready" and asset.file_path:
             return asset.file_path
         return None
 
