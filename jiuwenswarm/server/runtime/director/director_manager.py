@@ -445,3 +445,29 @@ class DirectorManager:
 
         return {"project": project.to_dict()}
 
+    async def handle_director_lab_canvas_save(self, params: dict) -> dict:
+        """实验室节点画布持久化：切换 tab 会整个卸载 LabCanvas（React 组件
+        状态随之清空），之前画布节点/连线只存在 useNodesState 的内存里，一
+        离开 实验室 tab 就丢——这里把前端 debounce 后发来的完整节点/连线
+        快照整体落盘到该项目，下次打开 实验室 tab 时从 project.lab_nodes/
+        lab_edges 里原样恢复。
+        """
+        project_id = str(params.get("project_id") or "").strip()
+        raw_nodes = params.get("nodes")
+        raw_edges = params.get("edges")
+
+        if not project_id:
+            raise DirectorRpcError("INVALID_PARAMS", "缺少 project_id")
+        if not isinstance(raw_nodes, list) or not isinstance(raw_edges, list):
+            raise DirectorRpcError("INVALID_PARAMS", "nodes/edges 必须是数组")
+
+        nodes = [item for item in raw_nodes if isinstance(item, dict)]
+        edges = [item for item in raw_edges if isinstance(item, dict)]
+
+        try:
+            project = self._store.save_lab_canvas(project_id, nodes, edges)
+        except KeyError:
+            raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}") from None
+
+        return {"project": project.to_dict()}
+

@@ -26,6 +26,7 @@ const METHOD = {
   assetRename: 'director.asset.rename',
   assetDelete: 'director.asset.delete',
   editChatSend: 'director.edit_chat.send',
+  labCanvasSave: 'director.lab_canvas.save',
 } as const;
 
 // 剪辑对话每轮都要把该项目已有的历史消息整份重发一遍给模型（无服务端会话
@@ -210,6 +211,20 @@ export function directorEditChatSend(
     { project_id: projectId, text, image_asset_ids: imageAssetIds },
     { timeoutMs: EDIT_CHAT_TIMEOUT_MS }
   )
+    .then(normalizeProjectResult)
+    .catch((err) => {
+      throw toDirectorError(err);
+    });
+}
+
+/** 实验室画布持久化：整份节点/连线快照覆盖式保存（debounce 调用，见
+ *  LabCanvas.tsx），不做增量 diff。 */
+export function directorLabCanvasSave(
+  projectId: string,
+  nodes: unknown[],
+  edges: unknown[]
+): Promise<ProjectResult> {
+  return webRequest<unknown>(METHOD.labCanvasSave, { project_id: projectId, nodes, edges })
     .then(normalizeProjectResult)
     .catch((err) => {
       throw toDirectorError(err);

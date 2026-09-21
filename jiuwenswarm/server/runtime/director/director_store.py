@@ -108,6 +108,12 @@ class DirectorProject:
     updated_at: float = field(default_factory=time.time)
     assets: list[DirectorAsset] = field(default_factory=list)
     edit_chat_messages: list[EditChatMessage] = field(default_factory=list)
+    # 实验室节点画布（卡片摆放位置、连线、每张处理卡片的参数）。前端节点/
+    # 边对象结构由 @xyflow/react 定义、后端不关心——原样存成不透明的
+    # dict 列表整体落盘/整体取回，就像 DirectorAsset.params 那样，避免在
+    # 后端重复维护一份前端画布的 schema。
+    lab_nodes: list[dict[str, Any]] = field(default_factory=list)
+    lab_edges: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -117,6 +123,8 @@ class DirectorProject:
             "updated_at": self.updated_at,
             "assets": [asset.to_dict() for asset in self.assets],
             "edit_chat_messages": [msg.to_dict() for msg in self.edit_chat_messages],
+            "lab_nodes": self.lab_nodes,
+            "lab_edges": self.lab_edges,
         }
 
     @staticmethod
@@ -141,6 +149,18 @@ class DirectorProject:
             if isinstance(raw_messages, list)
             else []
         )
+        raw_lab_nodes = data.get("lab_nodes")
+        lab_nodes = (
+            [item for item in raw_lab_nodes if isinstance(item, dict)]
+            if isinstance(raw_lab_nodes, list)
+            else []
+        )
+        raw_lab_edges = data.get("lab_edges")
+        lab_edges = (
+            [item for item in raw_lab_edges if isinstance(item, dict)]
+            if isinstance(raw_lab_edges, list)
+            else []
+        )
         return DirectorProject(
             project_id=str(data.get("project_id") or ""),
             name=str(data.get("name") or ""),
@@ -148,6 +168,8 @@ class DirectorProject:
             updated_at=float(data.get("updated_at") or time.time()),
             assets=assets,
             edit_chat_messages=edit_chat_messages,
+            lab_nodes=lab_nodes,
+            lab_edges=lab_edges,
         )
 
 
@@ -251,6 +273,24 @@ class DirectorStore:
         if project is None:
             raise KeyError(project_id)
         project.edit_chat_messages.extend(messages)
+        project.updated_at = time.time()
+        self._save(projects)
+        return project
+
+    def save_lab_canvas(
+        self, project_id: str, nodes: list[dict[str, Any]], edges: list[dict[str, Any]]
+    ) -> DirectorProject:
+        """整体覆盖式保存实验室画布——前端每次都传完整的当前节点/连线快照
+        （debounce 后台自动保存，见 LabCanvas.tsx），不做增量 diff，逻辑上
+        与浏览器 localStorage.setItem 等价，只是换成了落盘到
+        director_state.json，随项目数据一起持久化、跨设备/清缓存也不丢。
+        """
+        projects = self._load()
+        project = projects.get(project_id)
+        if project is None:
+            raise KeyError(project_id)
+        project.lab_nodes = nodes
+        project.lab_edges = edges
         project.updated_at = time.time()
         self._save(projects)
         return project

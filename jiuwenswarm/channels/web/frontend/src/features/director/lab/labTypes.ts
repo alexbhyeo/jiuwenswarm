@@ -1,6 +1,7 @@
-// 实验室（Lab）节点画布的数据模型。画布状态是会话内的、不持久化的——
-// 拖入/生成的素材本身仍然是真实的 DirectorAsset（写入 director_state.json），
-// 画布只是摆放和连线这些素材的临时视图。
+// 实验室（Lab）节点画布的数据模型。拖入/生成的素材本身是真实的
+// DirectorAsset（写入 director_state.json）；画布的卡片摆放/连线/参数
+// 快照随 DirectorProject.lab_nodes/lab_edges 一起持久化（见 LabCanvas.tsx
+// 的 debounce 保存），切换 tab 或刷新页面都不会丢。
 
 export type ProcessKind = 'text2image' | 'text2video' | 'image2video' | 'imageRef';
 

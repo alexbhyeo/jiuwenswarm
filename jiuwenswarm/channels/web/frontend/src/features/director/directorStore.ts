@@ -68,6 +68,17 @@ interface DirectorState {
   addEditChatPendingImage: (assetId: string) => void;
   removeEditChatPendingImage: (assetId: string) => void;
   sendEditChatMessage: (projectId: string) => Promise<void>;
+
+  // 实验室画布的"会话内权威副本"：LabCanvas 每次节点/连线变化都同步写
+  // 一份到这里（不 debounce），切 tab 再切回来时优先从这里恢复。真正落盘
+  // 到 director_state.json 走的是 debounce 后的 directorLabCanvasSave
+  // RPC——那条路径是异步的，如果只依赖它，切 tab 时组件已经重新挂载、
+  // 请求却还没落盘完成，会读到 project.lab_nodes 里那份过时的数据
+  // （尤其是 剪辑 tab 根本不会重新拉取 projects 列表，创作 tab 拉取的
+  // 时机也和这次保存请求完成的时机是两条独立的异步链路，谁先谁后没有
+  // 保证）。这份内存副本是同步写入的，不存在这个竞态。
+  labCanvasByProject: Record<string, { nodes: unknown[]; edges: unknown[] }>;
+  setLabCanvas: (projectId: string, nodes: unknown[], edges: unknown[]) => void;
 }
 
 // 轮询中的 job 共享同一个定时器句柄，避免重复轮询同一个 asset。
@@ -103,6 +114,10 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
   editChatPendingImageIds: [],
   editChatSending: false,
   editChatError: null,
+
+  labCanvasByProject: {},
+  setLabCanvas: (projectId, nodes, edges) =>
+    set((s) => ({ labCanvasByProject: { ...s.labCanvasByProject, [projectId]: { nodes, edges } } })),
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 

@@ -36,6 +36,11 @@ export interface DirectorProject {
   updated_at: number;
   assets: DirectorAsset[];
   edit_chat_messages: EditChatMessage[];
+  /** 实验室节点画布快照（卡片位置/连线/每张处理卡片的参数）。结构由
+   *  @xyflow/react 的 Node/Edge 定义，这里按后端一样的不透明 dict 对待——
+   *  LabCanvas.tsx 负责序列化/反序列化成真正的 Node[]/Edge[]。 */
+  lab_nodes: Record<string, unknown>[];
+  lab_edges: Record<string, unknown>[];
 }
 
 export interface DirectorAssetCounts {

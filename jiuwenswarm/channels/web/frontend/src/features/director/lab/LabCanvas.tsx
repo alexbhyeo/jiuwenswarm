@@ -13,7 +13,7 @@ import {
   type NodeTypes,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDirectorStore } from '../directorStore';
 import { DIRECTOR_ASSET_DRAG_MIME } from '../types';
@@ -65,11 +65,54 @@ const videoGroupIcon = (
 
 type ToolrailMenu = 'image' | 'video' | null;
 
+// 画布持久化的 debounce 间隔：节点拖拽/连线时会连续触发多次
+// onNodesChange/onEdgesChange，等操作停下来一小段时间再落盘一次，避免
+// 拖动过程中每一帧都发一次保存请求。
+const LAB_CANVAS_SAVE_DEBOUNCE_MS = 800;
+
+// LabTabShell 用 key={selectedProjectId} 强制在切换项目/切换 tab 时整个
+// 重新挂载 LabCanvas，所以这里只需要在"挂载那一刻"读一次初始状态。
+//
+// 优先读 directorStore.labCanvasByProject（同步写入的会话内权威副本），
+// 只有它还没有这个项目的记录时（比如这个项目在当前会话里第一次打开
+// 实验室 tab、或者页面整个刷新过）才回退到 project.lab_nodes/lab_edges
+// ——后者来自 directorProjectsList/Get 的响应，只在页面加载时或个别地方
+// 手动 loadProjects() 时刷新，不能保证和"刚保存完"这件事同步：剪辑 tab
+// 压根不会重新拉取 projects 列表，创作 tab 拉取的时机和画布保存请求
+// 完成的时机也是两条独立的异步链路，谁先谁后没有保证。这正是最初只依赖
+// project.lab_nodes 时，切到 剪辑/创作 卡片会丢的根因。
+function readInitialCanvas(projectId: string | null): { nodes: Node[]; edges: Edge[] } {
+  if (!projectId) return { nodes: [], edges: [] };
+  const state = useDirectorStore.getState();
+  const cached = state.labCanvasByProject[projectId];
+  if (cached) {
+    return { nodes: cached.nodes as Node[], edges: cached.edges as Edge[] };
+  }
+  const project = state.projects.find((p) => p.project_id === projectId);
+  return {
+    nodes: (project?.lab_nodes as Node[] | undefined) ?? [],
+    edges: (project?.lab_edges as Edge[] | undefined) ?? [],
+  };
+}
+
+// 保存前把"生成中"状态归一成 idle——切换 tab 会连轮询定时器一起卸载，
+// 保存下来的快照如果还带着 generating，下次打开画布时既没有真实在跑的
+// 轮询、卡片又会一直显示转圈，不如落盘时就还原成用户可以直接重新点
+// "生成"的正常状态。
+function sanitizeNodesForSave(nodes: Node[]): Node[] {
+  return nodes.map((n) =>
+    n.type === 'process' && (n.data as ProcessNodeData)?.status === 'generating'
+      ? { ...n, data: { ...n.data, status: 'idle' } }
+      : n
+  );
+}
+
 function LabCanvasInner() {
   const { t } = useTranslation();
   const selectedProjectId = useDirectorStore((s) => s.selectedProjectId);
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const initialCanvas = useRef(readInitialCanvas(selectedProjectId)).current;
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialCanvas.nodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialCanvas.edges);
   const { screenToFlowPosition, getNodes, getEdges } = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [openMenu, setOpenMenu] = useState<ToolrailMenu>(null);
@@ -277,6 +320,61 @@ function LabCanvasInner() {
     },
     [getNodes, getEdges, selectedProjectId, addNode, setNodes, setEdges, setProcessNodeState, pollOutputNode, handleDeleteNode]
   );
+
+  // 画布持久化分两层：
+  //
+  // 1) 同步写一份到 directorStore.labCanvasByProject（会话内权威副本）。
+  //    这是修复"切到 剪辑/创作 卡片就丢"的关键一步——切 tab 会立刻卸载
+  //    LabCanvas 并在切回来时重新挂载读取初始状态，如果只靠下面 (2) 的
+  //    异步落盘，组件早已经重新挂载、请求却可能还没落盘完成（尤其是
+  //    剪辑 tab 根本不会重新拉取 projects 列表），读到的就是过时数据。
+  //    这里的写入是同步的、不 debounce，不存在这个竞态。
+  // 2) debounce 之后再调用后端 RPC 落盘到 director_state.json，只为了
+  //    "整个页面刷新/重启应用后还能恢复"这一更强的持久化需求——静默
+  //    失败：这是后台自动保存，不是用户主动发起的操作，弹错误提示只会
+  //    打断正在画布上摆卡片的用户。
+  const latestCanvasRef = useRef({ nodes, edges });
+  latestCanvasRef.current = { nodes, edges };
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const skipNextBackendSaveRef = useRef(true); // 跳过挂载那一次——刚从存量数据读出来的没必要原样再存一遍
+
+  useEffect(() => {
+    if (selectedProjectId) {
+      useDirectorStore.getState().setLabCanvas(selectedProjectId, nodes, edges);
+    }
+
+    if (skipNextBackendSaveRef.current) {
+      skipNextBackendSaveRef.current = false;
+      return;
+    }
+    if (!selectedProjectId) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveTimerRef.current = null;
+      const { nodes: n, edges: e } = latestCanvasRef.current;
+      void import('../directorApi').then(({ directorLabCanvasSave }) =>
+        directorLabCanvasSave(selectedProjectId, sanitizeNodesForSave(n), e).catch(() => {})
+      );
+    }, LAB_CANVAS_SAVE_DEBOUNCE_MS);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [nodes, edges, selectedProjectId]);
+
+  // 切换 tab 会卸载整个 LabCanvas，上面的 debounce 定时器还没触发就先被
+  // 清掉了——离开前最后一次改动如果不在这里补一次同步保存就会丢。
+  // labCanvasByProject 的同步写入已经在上面的 effect 里跟着每次
+  // nodes/edges 变化即时更新了，这里只需要再补一次后端落盘。
+  useEffect(() => {
+    return () => {
+      if (!selectedProjectId) return;
+      const { nodes: n, edges: e } = latestCanvasRef.current;
+      void import('../directorApi').then(({ directorLabCanvasSave }) =>
+        directorLabCanvasSave(selectedProjectId, sanitizeNodesForSave(n), e).catch(() => {})
+      );
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProjectId]);
 
   const onDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
