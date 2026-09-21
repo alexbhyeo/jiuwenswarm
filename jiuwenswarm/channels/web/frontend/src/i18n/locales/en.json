@@ -136,6 +136,7 @@
       "firstFrame": "First Frame",
       "lastFrame": "Last Frame",
       "generateFailed": "Generation failed",
+      "generateTimeoutGaveUp": "Timed out waiting for the result — check the assets panel shortly, or click Generate again",
       "process": {
         "text2image": "Text to Image",
         "text2video": "Text to Video",

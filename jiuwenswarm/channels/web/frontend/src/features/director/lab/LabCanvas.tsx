@@ -16,8 +16,8 @@ import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDirectorStore } from '../directorStore';
-import { DIRECTOR_ASSET_DRAG_MIME } from '../types';
-import type { DirectorAssetDragPayload, GenerateParams } from '../types';
+import { DIRECTOR_ASSET_DRAG_MIME, DirectorApiError } from '../types';
+import type { DirectorAsset, DirectorAssetDragPayload, GenerateParams } from '../types';
 import { LabActionsProvider, type ResolvedGenerateInput } from './LabActionsContext';
 import { ImageNode } from './nodes/ImageNode';
 import { VideoNode } from './nodes/VideoNode';
@@ -41,6 +41,17 @@ function nextNodeId(prefix: string): string {
 
 const IMAGE_PROCESS_KINDS: ProcessKind[] = ['text2image', 'imageRef'];
 const VIDEO_PROCESS_KINDS: ProcessKind[] = ['text2video', 'image2video'];
+
+// director.generate 的客户端超时（GENERATE_TIMEOUT_MS，见 directorApi.ts）
+// 只是前端等不下去了主动放弃——WS 请求本身没有取消机制，后端那次
+// generate_video/generate_visual 调用仍在继续跑，跑完照样会把结果写进
+// director_state.json，只是这条响应到达时前端已经把这个请求从 pending
+// 表里删掉、不会再被处理。"请求超时"因此不等于"生成失败"：这里超时后
+// 转入用项目素材列表的轮询去把这个迟到的结果找回来，而不是直接报错——
+// 只有轮询到期还是没等到结果，或者真的等到一个 status=failed 的素材，
+// 才算成真正的失败。
+const GENERATE_RECOVERY_POLL_INTERVAL_MS = 5000;
+const GENERATE_RECOVERY_MAX_ATTEMPTS = 120; // 120 * 5s = 10 分钟，覆盖比 5 分钟客户端超时更长的真实生成耗时
 
 const plusIcon = (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round">
@@ -227,6 +238,109 @@ function LabCanvasInner() {
     [setNodes, setProcessNodeState, t]
   );
 
+  // 把"生成结果"接到处理节点的输出口——同一个节点再次点"生成"时就地替换
+  // 已有的输出节点，而不是每次都在画布上再摞一张新卡片。handleGenerate
+  // 的正常成功路径、和下面 recoverFromGenerateTimeout 从超时里"捞回"迟到
+  // 结果的路径，都要做这同一件事，所以抽成共享函数。
+  const applyGenerateResult = useCallback(
+    (nodeId: string, node: Node, outputAsset: DirectorAsset | undefined): string => {
+      const outputType = outputAsset?.type === 'video' ? 'video' : 'image';
+      const outputData = {
+        assetId: outputAsset?.asset_id ?? null,
+        filePath: outputAsset?.file_path ?? '',
+        name: outputAsset?.name || outputAsset?.prompt || '',
+      };
+
+      const existingOutEdge = getEdges().find((e) => e.source === nodeId && e.sourceHandle === 'out');
+      const existingOutputNode = existingOutEdge
+        ? getNodes().find((n) => n.id === existingOutEdge.target)
+        : undefined;
+
+      let outputNodeId: string;
+      if (existingOutputNode && existingOutputNode.type === outputType) {
+        outputNodeId = existingOutputNode.id;
+        setNodes((nds) => nds.map((n) => (n.id === outputNodeId ? { ...n, data: outputData } : n)));
+      } else {
+        if (existingOutputNode) {
+          handleDeleteNode(existingOutputNode.id);
+        }
+        outputNodeId = nextNodeId('out');
+        addNode({
+          id: outputNodeId,
+          type: outputType,
+          position: { x: node.position.x + 360, y: node.position.y },
+          data: outputData,
+        });
+        setEdges((eds) =>
+          addEdge(
+            {
+              id: nextNodeId('edge'),
+              source: nodeId,
+              sourceHandle: 'out',
+              target: outputNodeId,
+              targetHandle: 'in',
+            },
+            eds
+          )
+        );
+      }
+      return outputNodeId;
+    },
+    [getEdges, getNodes, setNodes, addNode, setEdges, handleDeleteNode]
+  );
+
+  // director.generate 客户端超时后的"找回"轮询：定期重新拉这个项目的素材
+  // 列表，找一个 priorAssetIds 里没有、类型和这次生成模式一致的新素材——
+  // 后端那次调用没有被取消，迟早会把结果（成功或失败）写进
+  // director_state.json，这里只是换一种方式重新读到它。找到 ready 就按
+  // 正常成功路径接上输出节点；找到 failed 才真正报错；重试到
+  // GENERATE_RECOVERY_MAX_ATTEMPTS 次还是一无所获，才当作超时失败展示
+  // 给用户——避免用户明明看到画布上"生成完成"了、进程节点却还卡在一个
+  // 过时的"请求超时"错误上。
+  const recoverFromGenerateTimeout = useCallback(
+    (nodeId: string, node: Node, projectId: string, priorAssetIds: Set<string>, mode: 'video' | 'image', attempt = 0) => {
+      const timer = setTimeout(async () => {
+        let newAsset: DirectorAsset | undefined;
+        try {
+          const { directorProjectsGet } = await import('../directorApi');
+          const { project } = await directorProjectsGet(projectId);
+          useDirectorStore.setState((s) => ({
+            projects: s.projects.map((p) => (p.project_id === project.project_id ? project : p)),
+          }));
+          newAsset = project.assets.find((a) => !priorAssetIds.has(a.asset_id) && a.type === mode);
+        } catch {
+          // 网络抖动一类的临时错误——安静地重试，不提前把这个中间态暴露
+          // 给用户；真正的失败信息只来自实际找到的、status=failed 的素材，
+          // 或者下面重试到期还是一无所获。
+        }
+
+        if (newAsset) {
+          pollTimers.current.delete(nodeId);
+          if (newAsset.status === 'failed') {
+            setProcessNodeState(nodeId, { status: 'error', error: newAsset.error || t('director.lab.generateFailed') });
+            return;
+          }
+          const outputNodeId = applyGenerateResult(nodeId, node, newAsset);
+          if (newAsset.status === 'pending' && newAsset.job_id) {
+            pollOutputNode(nodeId, outputNodeId, projectId, newAsset.asset_id, newAsset.job_id);
+          } else {
+            setProcessNodeState(nodeId, { status: 'idle' });
+          }
+          return;
+        }
+
+        if (attempt + 1 >= GENERATE_RECOVERY_MAX_ATTEMPTS) {
+          pollTimers.current.delete(nodeId);
+          setProcessNodeState(nodeId, { status: 'error', error: t('director.lab.generateTimeoutGaveUp') });
+          return;
+        }
+        recoverFromGenerateTimeout(nodeId, node, projectId, priorAssetIds, mode, attempt + 1);
+      }, GENERATE_RECOVERY_POLL_INTERVAL_MS);
+      pollTimers.current.set(nodeId, timer);
+    },
+    [applyGenerateResult, pollOutputNode, setProcessNodeState, t]
+  );
+
   const handleGenerate = useCallback(
     async (nodeId: string, resolved: ResolvedGenerateInput) => {
       // resolved 直接来自 ProcessNode 自己算对勾时用的那份数据
@@ -238,6 +352,14 @@ function LabCanvasInner() {
       const data = node.data as ProcessNodeData;
       const mode = PROCESS_KIND_MODE[data.kind];
       const prompt = resolved.prompt.trim();
+
+      // 超时后要去项目素材列表里"找回"迟到的结果，得先知道生成前有哪些
+      // 素材——找一个这个集合里没有的、类型匹配的新素材，就是这次生成
+      // 迟到的那份结果。
+      const priorAssetIds = new Set(
+        useDirectorStore.getState().projects.find((p) => p.project_id === selectedProjectId)?.assets.map((a) => a.asset_id) ??
+          []
+      );
 
       setProcessNodeState(nodeId, { status: 'generating', error: null });
 
@@ -261,52 +383,7 @@ function LabCanvasInner() {
         const result = await directorGenerate(params);
         void useDirectorStore.getState().loadProjects();
         const outputAsset = result.project.assets.find((a) => a.asset_id === result.assetId);
-        const outputType = outputAsset?.type === 'video' ? 'video' : 'image';
-        const outputData = {
-          assetId: outputAsset?.asset_id ?? null,
-          filePath: outputAsset?.file_path ?? '',
-          name: outputAsset?.name || outputAsset?.prompt || '',
-        };
-
-        // 再次点这个处理节点的"生成"时，如果它的输出口已经接了一个结果
-        // 节点，就地替换那个节点的内容，而不是每点一次生成就在画布上
-        // 再摞一张新卡片——用户点"生成"是想换掉上一次的结果，不是攒出一
-        // 堆散落的历史版本。类型也可能变（比如同一个处理节点从未连接变
-        // 成挂了首尾帧，参数不变但换了个模式），这种情况下沿用旧节点的
-        // 类型没有意义，直接删旧建新，保持行为可预期。
-        const existingOutEdge = getEdges().find((e) => e.source === nodeId && e.sourceHandle === 'out');
-        const existingOutputNode = existingOutEdge
-          ? getNodes().find((n) => n.id === existingOutEdge.target)
-          : undefined;
-
-        let outputNodeId: string;
-        if (existingOutputNode && existingOutputNode.type === outputType) {
-          outputNodeId = existingOutputNode.id;
-          setNodes((nds) => nds.map((n) => (n.id === outputNodeId ? { ...n, data: outputData } : n)));
-        } else {
-          if (existingOutputNode) {
-            handleDeleteNode(existingOutputNode.id);
-          }
-          outputNodeId = nextNodeId('out');
-          addNode({
-            id: outputNodeId,
-            type: outputType,
-            position: { x: node.position.x + 360, y: node.position.y },
-            data: outputData,
-          });
-          setEdges((eds) =>
-            addEdge(
-              {
-                id: nextNodeId('edge'),
-                source: nodeId,
-                sourceHandle: 'out',
-                target: outputNodeId,
-                targetHandle: 'in',
-              },
-              eds
-            )
-          );
-        }
+        const outputNodeId = applyGenerateResult(nodeId, node, outputAsset);
 
         if (outputAsset?.status === 'pending' && outputAsset.job_id) {
           pollOutputNode(nodeId, outputNodeId, selectedProjectId, outputAsset.asset_id, outputAsset.job_id);
@@ -314,11 +391,27 @@ function LabCanvasInner() {
           setProcessNodeState(nodeId, { status: 'idle' });
         }
       } catch (e) {
+        // "请求超时"只是前端等不下去了主动放弃这条 WS 请求，不代表生成
+        // 服务商真的失败了——generate_video/generate_visual 那次调用仍在
+        // 后端继续跑，很可能过一会儿就会正常写出结果。这种情况下不能立刻
+        // 报错，转成轮询项目素材列表去把这个结果找回来；真正的失败信息
+        // 只应该来自服务商/后端明确返回的错误，或者轮询到期还是一无所获。
+        if (e instanceof DirectorApiError && e.code === 'REQUEST_TIMEOUT') {
+          recoverFromGenerateTimeout(nodeId, node, selectedProjectId, priorAssetIds, mode);
+          return;
+        }
         const message = e instanceof Error ? e.message : String(e);
         setProcessNodeState(nodeId, { status: 'error', error: message });
       }
     },
-    [getNodes, getEdges, selectedProjectId, addNode, setNodes, setEdges, setProcessNodeState, pollOutputNode, handleDeleteNode]
+    [
+      getNodes,
+      selectedProjectId,
+      setProcessNodeState,
+      applyGenerateResult,
+      pollOutputNode,
+      recoverFromGenerateTimeout,
+    ]
   );
 
   // 画布持久化分两层：
