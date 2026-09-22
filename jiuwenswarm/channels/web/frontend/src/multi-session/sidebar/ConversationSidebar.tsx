@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronDown, CircleAlert, Code2, LoaderCircle, Workflow } from 'lucide-react';
+import { Check, ChevronDown, CircleAlert, Code2, LoaderCircle, Palette, Workflow } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useChatStore, type ChatRuntime } from '../../stores/chatStore';
 import { webClient } from '../../services/webClient';
@@ -12,7 +12,7 @@ import {
   filterJobsForProject,
   type SidebarCronJob,
 } from '../../stores';
-import type { AgentMode, ProjectInfo, Session } from '../../types';
+import type { AgentMode, ProjectInfo, Session, WorkMode } from '../../types';
 import {
   getConversationMenuItems,
   getProjectNewLabel,
@@ -82,6 +82,7 @@ interface ConversationSidebarProps {
   onNew: (options?: NewConversationOptions) => void;
   onSelect: (session: Session) => void;
   onDelete: (session: Session) => void;
+  onSelectDesignProject?: (project: ProjectInfo) => void;
   /** 跳转到"定时任务"主面板；该入口原来在最左侧图标栏，现移到工作小窗口的"新建任务"下方 */
   onOpenCron: () => void;
   /** 当前是否正停留在定时任务面板，用于给下面这个入口按钮加选中态 */
@@ -757,6 +758,7 @@ export function ConversationSidebar({
   onSelect,
   onDelete,
   onOpenCron,
+  onSelectDesignProject,
   isCronActive,
   collapsed = false,
   floating = false,
@@ -796,6 +798,7 @@ export function ConversationSidebar({
     sessionVisibility,
     pinnedSessions,
     expandedProjectIds,
+    selectedProject,
     setSelectedProject,
     toggleProjectExpanded,
     createProject,
@@ -826,7 +829,7 @@ export function ConversationSidebar({
     };
   }, [workModeMenuOpen]);
 
-  const switchWorkMode = async (nextMode: 'work' | 'code') => {
+  const switchWorkMode = async (nextMode: WorkMode) => {
     setWorkModeMenuOpen(false);
     if (nextMode === workMode) return;
     await setWorkMode(nextMode);
@@ -1275,7 +1278,9 @@ export function ConversationSidebar({
           aria-expanded={workModeMenuOpen}
           data-testid="multi-session-work-mode-trigger"
         >
-          <span data-testid="multi-session-work-mode-label" data-variant={workMode}>{workMode === 'code' ? t('codeMode.code') : t('codeMode.work')}</span>
+          <span data-testid="multi-session-work-mode-label" data-variant={workMode}>
+            {workMode === 'code' ? t('codeMode.code') : workMode === 'design' ? t('nav.design') : t('codeMode.work')}
+          </span>
           <ChevronDown size={15} className={workModeMenuOpen ? 'is-open' : ''} />
         </button>
         {workModeMenuOpen ? (
@@ -1310,6 +1315,21 @@ export function ConversationSidebar({
               </span>
               {workMode === 'code' ? <Check size={16} /> : null}
             </button>
+            <button
+              type="button"
+              className={workMode === 'design' ? 'is-active' : ''}
+              onClick={() => void switchWorkMode('design')}
+              role="menuitemradio"
+              aria-checked={workMode === 'design'}
+              data-testid="multi-session-work-mode-menu-design"
+            >
+              <Palette size={17} />
+              <span>
+                <strong>{t('nav.design')}</strong>
+                <small>{t('designer.subtitle')}</small>
+              </span>
+              {workMode === 'design' ? <Check size={16} /> : null}
+            </button>
           </div>
         ) : null}
         <button
@@ -1322,7 +1342,53 @@ export function ConversationSidebar({
           <SidebarCollapseIcon aria-hidden />
         </button>
       </div>
-      <div className="conversation-sidebar__operations" data-testid="multi-session-operations">
+      {workMode === 'design' ? (
+        <>
+          <div className="conversation-sidebar__operations" data-testid="design-sidebar-operations">
+            <button
+              type="button"
+              className="conversation-sidebar__new"
+              onClick={() => {
+                setSelectedProject(null);
+                onNew();
+              }}
+              data-testid="design-sidebar-new-project"
+            >
+              <NewTaskIcon aria-hidden />
+              <span>{t('multiSession.project.newProject')}</span>
+            </button>
+          </div>
+          <div className="conversation-sidebar__body" data-testid="design-sidebar-projects">
+            <div className="conversation-sidebar__group">
+              <div className="conversation-sidebar__section-heading">
+                <span className="conversation-sidebar__label">{t('multiSession.project.projects')}</span>
+              </div>
+              <div className="conversation-sidebar__group-list">
+                {projects.length === 0 ? (
+                  <div className="conversation-sidebar__empty">{t('multiSession.project.noProjects')}</div>
+                ) : projects.map((project) => (
+                  <button
+                    key={project.project_id}
+                    type="button"
+                    className={`conversation-sidebar__design-project${project.project_id === selectedProject?.project_id ? ' is-active' : ''}`}
+                    onClick={() => {
+                      setSelectedProject(project);
+                      onSelectDesignProject?.(project);
+                    }}
+                    data-testid="design-sidebar-project"
+                    data-variant={project.project_id}
+                    title={project.name}
+                  >
+                    <Palette size={16} aria-hidden />
+                    <span>{project.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </>
+      ) : null}
+      <div className="conversation-sidebar__operations" data-testid="multi-session-operations" style={workMode === 'design' ? { display: 'none' } : undefined}>
         <button type="button" className="conversation-sidebar__new" onClick={() => {
           setSelectedProject(null);
           setPinError(null);
@@ -1342,7 +1408,7 @@ export function ConversationSidebar({
           <span data-testid="multi-session-open-cron-label">{t('nav.cron')}</span>
         </button>
       </div>
-      <div className="conversation-sidebar__body" data-testid="multi-session-sidebar-body">
+      <div className="conversation-sidebar__body" data-testid="multi-session-sidebar-body" style={workMode === 'design' ? { display: 'none' } : undefined}>
         {hasPinnedSection ? (
           <div className="conversation-sidebar__group conversation-sidebar__group--pinned" data-testid="multi-session-pinned-group">
             <div className="conversation-sidebar__section-heading" data-testid="multi-session-pinned-group-heading">

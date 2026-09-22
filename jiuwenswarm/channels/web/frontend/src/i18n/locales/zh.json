@@ -57,7 +57,7 @@
   "designer": {
     "loading": "正在加载设计工作流…",
     "emptyTitle": "还没有设计工作流",
-    "emptyDescription": "在任务页输入描述并选择「设计」，或稍后再来查看此项目下的工作流。",
+    "emptyDescription": "描述你的项目，创建独立的设计工作区与工作流。",
     "loadErrorTitle": "加载失败",
     "loadErrorFallback": "无法读取设计工作流，请稍后重试。",
     "toggleLabel": "设计",
@@ -66,7 +66,7 @@
     "attachmentsBlocked": "设计模式暂不支持附件，请先移除附件后再发送。",
     "chat": {
       "title": "设计助手",
-      "emptyHint": "描述创作意图，并可附上图片、视频或音频作为参考。",
+      "emptyHint": "需要帮你设计些什么？",
       "inputPlaceholder": "描述你想创作的内容，可附上参考素材…",
       "collapse": "收起聊天",
       "expand": "展开聊天",
@@ -508,36 +508,101 @@
         "title": "技能索引",
         "description": "启用已安装技能的树状目录，增强智能体的结构化技能发现能力（*可能消耗额外 Token）"
       },
-      "free_search_ddg_enabled": { "title": "DuckDuckGo 搜索", "description": "启用 DuckDuckGo 免费搜索来源。" },
-      "free_search_bing_enabled": { "title": "Bing 搜索", "description": "启用 Bing 免费搜索来源。" },
-      "jina_api_key": { "title": "Jina API 密钥" },
-      "bocha_api_key": { "title": "博查 API 密钥" },
-      "perplexity_api_key": { "title": "Perplexity API 密钥" },
-      "serper_api_key": { "title": "Serper API 密钥" },
-      "github_token": { "title": "GitHub 访问令牌" },
-      "vision_api_base": { "title": "API 地址" },
-      "vision_api_key": { "title": "API 密钥" },
-      "vision_model": { "title": "模型名称" },
-      "vision_provider": { "title": "模型提供商" },
-      "audio_api_base": { "title": "API 地址" },
-      "audio_api_key": { "title": "API 密钥" },
-      "audio_model": { "title": "模型名称" },
-      "audio_provider": { "title": "模型提供商" },
-      "video_api_base": { "title": "API 地址" },
-      "video_api_key": { "title": "API 密钥" },
-      "video_model": { "title": "模型名称" },
-      "video_provider": { "title": "模型提供商" },
-      "video_gen_api_base": { "title": "API 地址" },
-      "video_gen_api_key": { "title": "API 密钥" },
-      "video_gen_model": { "title": "模型名称" },
-      "video_gen_provider": { "title": "模型提供商" },
-      "image_gen_api_base": { "title": "API 地址" },
-      "image_gen_api_key": { "title": "API 密钥" },
-      "image_gen_model": { "title": "模型名称" },
-      "image_gen_provider": { "title": "模型提供商" },
-      "permissions_mode": { "title": "全局权限模式", "description": "为普通 Agent 与 Team 选择统一的安全护栏模式。" },
-      "a2ui_enabled": { "title": "启用 A2UI", "description": "允许将支持的结果渲染成交互式界面。" },
-      "trajectory_ui_enabled": { "title": "启用轨迹界面", "description": "在单 Agent 和集群模式中显示对话与轨迹切换，并启用轨迹观测数据链路。" },
+      "free_search_ddg_enabled": {
+        "title": "DuckDuckGo 搜索",
+        "description": "启用 DuckDuckGo 免费搜索来源。"
+      },
+      "free_search_bing_enabled": {
+        "title": "Bing 搜索",
+        "description": "启用 Bing 免费搜索来源。"
+      },
+      "jina_api_key": {
+        "title": "Jina API 密钥"
+      },
+      "bocha_api_key": {
+        "title": "博查 API 密钥"
+      },
+      "perplexity_api_key": {
+        "title": "Perplexity API 密钥"
+      },
+      "serper_api_key": {
+        "title": "Serper API 密钥"
+      },
+      "github_token": {
+        "title": "GitHub 访问令牌"
+      },
+      "vision_api_base": {
+        "title": "API 地址"
+      },
+      "vision_api_key": {
+        "title": "API 密钥"
+      },
+      "vision_model": {
+        "title": "模型名称"
+      },
+      "vision_provider": {
+        "title": "模型提供商"
+      },
+      "audio_api_base": {
+        "title": "API 地址"
+      },
+      "audio_api_key": {
+        "title": "API 密钥"
+      },
+      "audio_model": {
+        "title": "模型名称"
+      },
+      "audio_provider": {
+        "title": "模型提供商"
+      },
+      "video_api_base": {
+        "title": "API 地址"
+      },
+      "video_api_key": {
+        "title": "API 密钥"
+      },
+      "video_model": {
+        "title": "模型名称"
+      },
+      "video_provider": {
+        "title": "模型提供商"
+      },
+      "video_gen_api_base": {
+        "title": "API 地址"
+      },
+      "video_gen_api_key": {
+        "title": "API 密钥"
+      },
+      "video_gen_model": {
+        "title": "模型名称"
+      },
+      "video_gen_provider": {
+        "title": "模型提供商"
+      },
+      "image_gen_api_base": {
+        "title": "API 地址"
+      },
+      "image_gen_api_key": {
+        "title": "API 密钥"
+      },
+      "image_gen_model": {
+        "title": "模型名称"
+      },
+      "image_gen_provider": {
+        "title": "模型提供商"
+      },
+      "permissions_mode": {
+        "title": "全局权限模式",
+        "description": "为普通 Agent 与 Team 选择统一的安全护栏模式。"
+      },
+      "a2ui_enabled": {
+        "title": "启用 A2UI",
+        "description": "允许将支持的结果渲染成交互式界面。"
+      },
+      "trajectory_ui_enabled": {
+        "title": "启用轨迹界面",
+        "description": "在单 Agent 和集群模式中显示对话与轨迹切换，并启用轨迹观测数据链路。"
+      },
       "kv_cache_affinity_enabled": {
         "title": "启用算力亲和",
         "description": "仅支持使用 Ascend vLLM 推理服务部署的模型，不支持通过第三方 API Key 接入的模型。"

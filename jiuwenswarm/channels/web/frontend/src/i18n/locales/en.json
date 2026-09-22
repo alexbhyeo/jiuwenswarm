@@ -57,7 +57,7 @@
   "designer": {
     "loading": "Loading design workflow…",
     "emptyTitle": "No design workflow yet",
-    "emptyDescription": "Send a prompt with the Design option from Tasks, or come back once a workflow exists for this project.",
+    "emptyDescription": "Describe a project to create a dedicated Design workspace and workflow.",
     "loadErrorTitle": "Failed to load",
     "loadErrorFallback": "Could not load the design workflow. Please try again later.",
     "toggleLabel": "Design",
@@ -66,7 +66,7 @@
     "attachmentsBlocked": "Design mode does not support attachments yet. Remove attachments and try again.",
     "chat": {
       "title": "Design assistant",
-      "emptyHint": "Describe what you want to create. You can attach image, video, or audio references.",
+      "emptyHint": "What can I create for you?",
       "inputPlaceholder": "Describe what you want to create, and optionally attach references…",
       "collapse": "Collapse chat",
       "expand": "Expand chat",
@@ -512,32 +512,85 @@
         "title": "DuckDuckGo search",
         "description": "Enable the free DuckDuckGo search source."
       },
-      "free_search_bing_enabled": { "title": "Bing search", "description": "Enable the free Bing search source." },
-      "jina_api_key": { "title": "Jina API key" },
-      "bocha_api_key": { "title": "Bocha API key" },
-      "perplexity_api_key": { "title": "Perplexity API key" },
-      "serper_api_key": { "title": "Serper API key" },
-      "github_token": { "title": "GitHub access token" },
-      "vision_api_base": { "title": "API URL" },
-      "vision_api_key": { "title": "API key" },
-      "vision_model": { "title": "Model name" },
-      "vision_provider": { "title": "Model provider" },
-      "audio_api_base": { "title": "API URL" },
-      "audio_api_key": { "title": "API key" },
-      "audio_model": { "title": "Model name" },
-      "audio_provider": { "title": "Model provider" },
-      "video_api_base": { "title": "API URL" },
-      "video_api_key": { "title": "API key" },
-      "video_model": { "title": "Model name" },
-      "video_provider": { "title": "Model provider" },
-      "video_gen_api_base": { "title": "API URL" },
-      "video_gen_api_key": { "title": "API key" },
-      "video_gen_model": { "title": "Model name" },
-      "video_gen_provider": { "title": "Model provider" },
-      "image_gen_api_base": { "title": "API URL" },
-      "image_gen_api_key": { "title": "API key" },
-      "image_gen_model": { "title": "Model name" },
-      "image_gen_provider": { "title": "Model provider" },
+      "free_search_bing_enabled": {
+        "title": "Bing search",
+        "description": "Enable the free Bing search source."
+      },
+      "jina_api_key": {
+        "title": "Jina API key"
+      },
+      "bocha_api_key": {
+        "title": "Bocha API key"
+      },
+      "perplexity_api_key": {
+        "title": "Perplexity API key"
+      },
+      "serper_api_key": {
+        "title": "Serper API key"
+      },
+      "github_token": {
+        "title": "GitHub access token"
+      },
+      "vision_api_base": {
+        "title": "API URL"
+      },
+      "vision_api_key": {
+        "title": "API key"
+      },
+      "vision_model": {
+        "title": "Model name"
+      },
+      "vision_provider": {
+        "title": "Model provider"
+      },
+      "audio_api_base": {
+        "title": "API URL"
+      },
+      "audio_api_key": {
+        "title": "API key"
+      },
+      "audio_model": {
+        "title": "Model name"
+      },
+      "audio_provider": {
+        "title": "Model provider"
+      },
+      "video_api_base": {
+        "title": "API URL"
+      },
+      "video_api_key": {
+        "title": "API key"
+      },
+      "video_model": {
+        "title": "Model name"
+      },
+      "video_provider": {
+        "title": "Model provider"
+      },
+      "video_gen_api_base": {
+        "title": "API URL"
+      },
+      "video_gen_api_key": {
+        "title": "API key"
+      },
+      "video_gen_model": {
+        "title": "Model name"
+      },
+      "video_gen_provider": {
+        "title": "Model provider"
+      },
+      "image_gen_api_base": {
+        "title": "API URL"
+      },
+      "image_gen_api_key": {
+        "title": "API key"
+      },
+      "image_gen_model": {
+        "title": "Model name"
+      },
+      "image_gen_provider": {
+        "title": "Model provider"
+      },
       "permissions_mode": {
         "title": "Global permission mode",
         "description": "Choose the shared guardrail mode for ordinary Agents and Teams."

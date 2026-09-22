@@ -164,6 +164,15 @@ def consume_session_history(
     clean_session_id = str(session_id or "").strip()
     if not clean_session_id:
         return {"success": False, "detail": "session_id is required"}
+    from jiuwenswarm.server.runtime.session.session_metadata import get_session_metadata
+
+    if str(get_session_metadata(clean_session_id).get("work_mode") or "") == "design":
+        return {
+            "success": True,
+            "enabled": False,
+            "recorded": False,
+            "source": SESSION_FEEDBACK_SOURCE,
+        }
     if graph_dir is None:
         config = load_symphony_config()
         if not config.enabled or not config.evolution.enabled:

@@ -928,6 +928,8 @@ function parseHistoryTimelineEntry(
   const at = recordTimestampIso(record) ?? '';
 
   if (role === 'user') {
+    const userEventType = typeof record.event_type === 'string' ? record.event_type.trim() : '';
+    if (userEventType.startsWith('design.')) return null;
     const rawContent = record.content ?? record.text ?? record.body;
     if (isA2UIClientEventContent(rawContent)) {
       return null;

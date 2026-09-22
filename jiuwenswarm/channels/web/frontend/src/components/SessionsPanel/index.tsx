@@ -6,6 +6,7 @@ import { containsIgnoredDirectory } from '../../features/fileTreeFilters';
 import { isHistoryPreviewFile } from '../../features/historyFilePreview';
 import { webRequest } from '../../services/webClient';
 import { useChatStore } from '../../stores/chatStore';
+import { useWorkspaceStore } from '../../stores/workspaceStore';
 import { toDisplaySessionTitle } from '../../utils/documentMessage';
 
 function SessionErrorIndicator({ sessionId }: { sessionId: string }) {
@@ -387,7 +388,10 @@ export function SessionsPanel({
   const loadSessions = useCallback(async () => {
     setLoadingSessions(true);
     try {
-      const payload = await webRequest<SessionListResponse>('session.list', { limit: 20 });
+      const payload = await webRequest<SessionListResponse>('session.list', {
+        limit: 20,
+        work_mode: useWorkspaceStore.getState().workMode,
+      });
       const rows = Array.isArray(payload?.sessions) ? toSessionItems(payload.sessions) : [];
       setSessions(rows);
       setSessionsError(null);
