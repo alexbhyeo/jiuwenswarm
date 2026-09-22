@@ -1296,6 +1296,27 @@
   font-size: 13.5px;
   font-weight: 700;
   border-bottom: 1px solid var(--d-border-default);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.director-edit-chat-build-flow-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--d-radius-sm);
+  border: 1px solid var(--d-border-default);
+  background: var(--d-bg-card);
+  color: var(--d-text-secondary);
+  cursor: pointer;
+}
+
+.director-edit-chat-build-flow-btn:hover {
+  border-color: var(--d-border-strong);
+  color: var(--d-accent);
 }
 
 .director-edit-chat-thread {
@@ -1721,12 +1742,55 @@
 }
 
 .lab-node-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   padding: 7px 12px;
   font-size: 11.5px;
   color: var(--d-text-secondary);
+}
+
+.lab-node-name-text {
+  flex: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.lab-node-name-rename-btn {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--d-text-secondary);
+  cursor: pointer;
+}
+
+.lab-node-name-rename-btn:hover {
+  color: var(--d-accent);
+}
+
+.lab-node-name-input {
+  box-sizing: border-box;
+  width: calc(100% - 24px);
+  margin: 3px 12px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 11.5px;
+  border: 1px solid var(--d-accent);
+  border-radius: var(--d-radius-sm);
+  color: var(--d-text-primary);
+  background: var(--d-bg-card);
+}
+
+.lab-node-name-input:focus {
+  outline: none;
 }
 
 /* -- 文本节点 -- */
@@ -1812,6 +1876,7 @@
 }
 
 .lab-node-params {
+  position: relative;
   padding: 8px 12px;
   border-top: 1px solid var(--d-border-default);
   display: flex;
@@ -1827,12 +1892,66 @@
   color: var(--d-text-secondary);
 }
 
+.lab-node-param-row--clickable {
+  cursor: pointer;
+}
+
 .lab-node-param-value {
   display: inline-flex;
   align-items: center;
   gap: 3px;
   color: var(--d-text-primary);
   font-weight: 500;
+}
+
+/* 点开"生成参数"行展开的选项面板——宽高比/分辨率/时长/输出数量都用同一排
+   药丸按钮选择，点选即生效（patchProcessNode），不需要额外的确认步骤。
+   故意不用 position: absolute 悬浮——节点卡片本身不高，绝对定位悬浮在
+   "生成参数"这一行上方会直接盖住同一张卡片再往上的标题/端口区域；改成
+   跟着正常文档流展开，节点卡片打开时顺势变高，关闭时缩回去，不会互相
+   遮挡。 */
+.lab-node-params-popover {
+  background: var(--d-bg-shell);
+  border: 1px solid var(--d-border-default);
+  border-radius: var(--d-radius-md);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lab-node-params-popover-label {
+  font-size: 10.5px;
+  color: var(--d-text-secondary);
+  margin-bottom: 5px;
+}
+
+.lab-node-params-popover-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lab-node-param-pill {
+  padding: 4px 10px;
+  border-radius: var(--d-radius-full);
+  border: 1px solid var(--d-border-default);
+  background: var(--d-bg-shell);
+  color: var(--d-text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.lab-node-param-pill:hover {
+  border-color: var(--d-border-strong);
+  color: var(--d-text-primary);
+}
+
+.lab-node-param-pill--active {
+  border-color: var(--d-accent);
+  background: var(--d-accent-soft);
+  color: var(--d-accent);
+  font-weight: 600;
 }
 
 .lab-node-error {

@@ -137,6 +137,12 @@
       "lastFrame": "尾帧图片",
       "generateFailed": "生成失败",
       "generateTimeoutGaveUp": "等待生成结果超时，请稍后在素材面板中查看，或重新点击生成",
+      "aspectRatioLabel": "宽高比",
+      "resolutionLabel": "分辨率",
+      "durationLabel": "时长",
+      "outputCountLabel": "输出数量",
+      "buildFlowFromChat": "生成实验室流程图",
+      "buildFlowFromChatEmpty": "对话里还没有可以摆成流程图的生成结果",
       "process": {
         "text2image": "文生图",
         "text2video": "文生视频",

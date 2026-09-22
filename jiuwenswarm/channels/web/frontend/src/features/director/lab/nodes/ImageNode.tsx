@@ -3,6 +3,7 @@ import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLabActions } from '../LabActionsContext';
 import type { ImageNodeData } from '../labTypes';
+import { NodeNameLabel } from './NodeNameLabel';
 
 const enlargeIcon = (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -39,7 +40,7 @@ export function ImageNode({ id, data }: NodeProps & { data: ImageNodeData }) {
           </button>
         </div>
       </div>
-      <div className="lab-node-name">{data.name}</div>
+      <NodeNameLabel name={data.name} fallback={t('director.lab.refImage')} onRename={(name) => actions.renameNode(id, name)} />
       <Handle type="target" position={Position.Left} id="in" />
       <Handle type="source" position={Position.Right} id="image" />
     </div>

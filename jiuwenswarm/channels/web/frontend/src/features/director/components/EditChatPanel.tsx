@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useDirectorStore } from '../directorStore';
+import { useLabActions } from '../lab/LabActionsContext';
 import type { DirectorAsset, DirectorProject, EditChatMessage } from '../types';
 
 function rawFileUrl(path: string): string {
@@ -26,6 +27,15 @@ const imageIcon = (
     <rect x="3" y="3" width="18" height="18" rx="2.5" />
     <circle cx="9" cy="9" r="1.6" />
     <path d="m4 17 5-5 3 3 4-5 4 5" />
+  </svg>
+);
+
+const flowIcon = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="4" width="6" height="6" rx="1.2" />
+    <rect x="15" y="4" width="6" height="6" rx="1.2" />
+    <rect x="9" y="15" width="6" height="6" rx="1.2" />
+    <path d="M6 10v3a2 2 0 0 0 2 2h1M18 10v3a2 2 0 0 1-2 2h-1" />
   </svg>
 );
 
@@ -111,6 +121,7 @@ function ChatMessageBubble({ message, project, expanded, onToggleExpand }: ChatM
 
 export function EditChatPanel() {
   const { t } = useTranslation();
+  const actions = useLabActions();
   const selectedProjectId = useDirectorStore((s) => s.selectedProjectId);
   const project = useDirectorStore((s) => s.projects.find((p) => p.project_id === s.selectedProjectId) ?? null);
   const draft = useDirectorStore((s) => s.editChatDraft);
@@ -240,7 +251,17 @@ export function EditChatPanel() {
 
   return (
     <div className="director-edit-chat">
-      <div className="director-edit-chat-header">{t('director.editChat.title')}</div>
+      <div className="director-edit-chat-header">
+        <span>{t('director.editChat.title')}</span>
+        <button
+          type="button"
+          className="director-edit-chat-build-flow-btn"
+          title={t('director.lab.buildFlowFromChat')}
+          onClick={() => actions.buildFlowFromChat()}
+        >
+          {flowIcon}
+        </button>
+      </div>
 
       <div className="director-edit-chat-thread" ref={threadRef}>
         {messages.length === 0 && !sending && (

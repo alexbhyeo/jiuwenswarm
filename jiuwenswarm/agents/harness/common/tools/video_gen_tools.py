@@ -45,6 +45,12 @@ _POLL_INTERVAL_SECONDS = 10
 _MAX_POLL_SECONDS = 120
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled", "expired"}
 
+# 见 visual_gen_tools 模块同款注释：多个生成请求并发打到同一个服务商时，
+# 偶发在提交这一步就被对端直接断连（RemoteProtocolError），不是任务本身
+# 有问题，短暂退避后重试通常就能成功。
+_TRANSIENT_RETRY_ATTEMPTS = 3
+_TRANSIENT_RETRY_BASE_DELAY_S = 1.5
+
 # Frame-reference images (first/last frame) are base64-embedded directly into
 # the submit request body. A full-resolution PNG from a prior 720p/1080p
 # generation can be 1.5-2MB each; with both a first and last frame that pushes
@@ -307,41 +313,72 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
         [f["frame_type"] for f in frame_images],
     )
 
+    # 提交步骤单独重试（不是把整个 submit+poll+download 都包进重试）：
+    # 观察到的失败模式是提交这一步偶发被对端直接断连（并发多个
+    # generate_video/generate_visual 请求同时打到服务商时更容易触发，见
+    # visual_gen_tools 模块同款注释），不是任务真的跑失败了；如果把整个
+    # 流程都重试，一旦断连发生在"提交已经成功、正在轮询"之后，重试会
+    # 再提交一个新任务，白白重复消耗一次生成额度。只重试提交本身，提交
+    # 成功后走正常的一次性 poll/下载流程，出问题就如实报错，不再重试。
+    submit_client: httpx.AsyncClient | None = None
+    submit: httpx.Response | None = None
+    last_submit_exc: httpx.HTTPError | None = None
     try:
-        async with httpx.AsyncClient(timeout=60, verify=get_requests_verify()) as client:
-            submit = await client.post(f"{api_base}/videos", headers=headers, json=body)
-            if submit.status_code not in (200, 201, 202):
-                return f"[ERROR]: video generation submit failed: {submit.status_code} {submit.text}"
+        for attempt in range(_TRANSIENT_RETRY_ATTEMPTS):
+            submit_client = httpx.AsyncClient(timeout=60, verify=get_requests_verify())
             try:
-                job = submit.json()
-            except ValueError as exc:
-                return f"[ERROR]: video generation submit returned invalid JSON: {exc!r}"
-            job_id = job.get("id")
-            if not job_id:
-                return f"[ERROR]: video generation submit returned no job id: {job}"
-            polling_url = job.get("polling_url") or f"{api_base}/videos/{job_id}"
-            status = job.get("status", "pending")
-            ctx = _JobContext(client=client, headers=headers, job_id=job_id)
-
-            status, job, elapsed, poll_error = await _poll_job(ctx, polling_url, status, job)
-            if poll_error:
-                return poll_error
-
-            if status not in _TERMINAL_STATUSES:
-                return (
-                    f"Video job {job_id} submitted and still {status} after {elapsed}s - generation can "
-                    f"take several minutes. Call check_video_status with job_id={job_id} to check progress "
-                    "and download it once ready."
+                submit = await submit_client.post(f"{api_base}/videos", headers=headers, json=body)
+                break
+            except httpx.RemoteProtocolError as exc:
+                await submit_client.aclose()
+                submit_client = None
+                last_submit_exc = exc
+                if attempt + 1 >= _TRANSIENT_RETRY_ATTEMPTS:
+                    return f"[ERROR]: video generation submit failed after {attempt + 1} attempts: {exc!r}"
+                logger.warning(
+                    "[generate_video] transient connection drop on submit (attempt %d/%d), retrying: %r",
+                    attempt + 1, _TRANSIENT_RETRY_ATTEMPTS, exc,
                 )
-            if status != "completed":
-                return (
-                    f"[ERROR]: video job {job_id} ended with status {status}: "
-                    f"{job.get('error', 'no error detail provided')}"
-                )
+                await asyncio.sleep(_TRANSIENT_RETRY_BASE_DELAY_S * (attempt + 1))
 
-            return await _download_video(ctx, api_base, save_dir)
+        if submit is None or submit_client is None:
+            return f"[ERROR]: video generation submit failed after {_TRANSIENT_RETRY_ATTEMPTS} attempts: {last_submit_exc!r}"
+
+        if submit.status_code not in (200, 201, 202):
+            return f"[ERROR]: video generation submit failed: {submit.status_code} {submit.text}"
+        try:
+            job = submit.json()
+        except ValueError as exc:
+            return f"[ERROR]: video generation submit returned invalid JSON: {exc!r}"
+        job_id = job.get("id")
+        if not job_id:
+            return f"[ERROR]: video generation submit returned no job id: {job}"
+        polling_url = job.get("polling_url") or f"{api_base}/videos/{job_id}"
+        status = job.get("status", "pending")
+        ctx = _JobContext(client=submit_client, headers=headers, job_id=job_id)
+
+        status, job, elapsed, poll_error = await _poll_job(ctx, polling_url, status, job)
+        if poll_error:
+            return poll_error
+
+        if status not in _TERMINAL_STATUSES:
+            return (
+                f"Video job {job_id} submitted and still {status} after {elapsed}s - generation can "
+                f"take several minutes. Call check_video_status with job_id={job_id} to check progress "
+                "and download it once ready."
+            )
+        if status != "completed":
+            return (
+                f"[ERROR]: video job {job_id} ended with status {status}: "
+                f"{job.get('error', 'no error detail provided')}"
+            )
+
+        return await _download_video(ctx, api_base, save_dir)
     except httpx.HTTPError as exc:
         return f"[ERROR]: video generation request failed: {exc!r}"
+    finally:
+        if submit_client is not None:
+            await submit_client.aclose()
 
 
 @tool(

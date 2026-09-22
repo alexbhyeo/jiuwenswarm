@@ -252,8 +252,18 @@ class DirectorManager:
 
     def __init__(self) -> None:
         self._store = DirectorStore()
-        # 同一进程内多个 director.generate RPC 并发到达时，串行化对
-        # director_state.json 的读改写；见 director_store 模块 docstring。
+        # 不是用来保护 director_state.json 的——DirectorStore 的
+        # _load/_save（含 append_asset 等）全程没有一个 await，在 asyncio
+        # 单线程协作调度下天然不会被另一个协程打断，本来就不需要这把锁
+        # （见 director_store 模块 docstring）。这把锁目前只用来串行化
+        # 剪辑助手 一轮对话里可能连续发起的多次工具调用/模型请求（见
+        # handle_director_edit_chat_send 及其调用的
+        # _execute_generate_design_image / _execute_generate_shot_video）
+        # ——那些调用之间本身就该按模型给的顺序一个接一个跑，用锁保证顺序
+        # 更省事。handle_director_generate 里对 generate_visual/
+        # generate_video 的调用不再用这把锁：那是"打给生成服务商的这次
+        # 请求要不要排队"的效率决定，不是正确性要求，去掉锁能让 实验室
+        # 一张处理卡片同时开的多份输出真正并发跑起来，而不是排队等最慢的。
         self._lock = asyncio.Lock()
 
     async def handle_director_projects_list(self, params: dict) -> dict:
@@ -383,17 +393,25 @@ class DirectorManager:
                 gen_params["first_frame_path"] = first_frame_path
             if last_frame_path:
                 gen_params["last_frame_path"] = last_frame_path
-            async with self._lock:
-                result_str = await generate_video._func(
-                    prompt=cleaned_prompt,
-                    aspect_ratio=aspect_ratio,
-                    resolution=resolution,
-                    duration_seconds=duration_seconds,
-                    first_frame_path=first_frame_path,
-                    last_frame_path=last_frame_path,
-                    generate_audio=generate_audio,
-                    save_dir=save_dir,
-                )
+            # 这里故意不拿 self._lock：它序列化的是"打给生成服务商的这次
+            # 请求"本身，不是 director_state.json 的读改写——后者
+            # （DirectorStore._load/_save，见下面 append_asset）全程没有一个
+            # await，在 asyncio 单线程协作调度下本来就不可能被另一个协程的
+            # 同类调用打断，天然互斥，不靠这把锁保护。锁如果继续包住这次
+            # await，效果只是白白把多个并发的 director.generate 请求（比如
+            # 实验室 一张处理卡片同时开了几份输出）在生成服务商那一步强行
+            # 排成队——串行等最慢的是效率问题，不是正确性问题，去掉锁才能
+            # 真正让它们并发跑起来。
+            result_str = await generate_video._func(
+                prompt=cleaned_prompt,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                duration_seconds=duration_seconds,
+                first_frame_path=first_frame_path,
+                last_frame_path=last_frame_path,
+                generate_audio=generate_audio,
+                save_dir=save_dir,
+            )
         else:
             if not (visual_gen_enabled() and visual_gen_configured()):
                 raise DirectorRpcError("NOT_CONFIGURED", "图片生成未配置，请先在设置中配置「图片处理」")
@@ -406,14 +424,15 @@ class DirectorManager:
             gen_params = {"aspect_ratio": aspect_ratio, "resolution": resolution}
             if reference_image_path:
                 gen_params["reference_image_path"] = reference_image_path
-            async with self._lock:
-                result_str = await generate_visual._func(
-                    prompt=cleaned_prompt,
-                    aspect_ratio=aspect_ratio,
-                    resolution=resolution,
-                    reference_image_path=reference_image_path,
-                    save_dir=save_dir,
-                )
+            # 同上：不拿锁，让多个并发的图片生成请求真正并发打到服务商，而
+            # 不是在这里排队串行。
+            result_str = await generate_visual._func(
+                prompt=cleaned_prompt,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                reference_image_path=reference_image_path,
+                save_dir=save_dir,
+            )
 
         parsed = _parse_generation_result(result_str)
         if parsed["status"] == "failed":

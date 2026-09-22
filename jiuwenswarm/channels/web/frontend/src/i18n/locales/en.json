@@ -137,6 +137,12 @@
       "lastFrame": "Last Frame",
       "generateFailed": "Generation failed",
       "generateTimeoutGaveUp": "Timed out waiting for the result — check the assets panel shortly, or click Generate again",
+      "aspectRatioLabel": "Aspect Ratio",
+      "resolutionLabel": "Resolution",
+      "durationLabel": "Duration",
+      "outputCountLabel": "Output Count",
+      "buildFlowFromChat": "Build flow in Lab",
+      "buildFlowFromChatEmpty": "No generated results in this conversation yet to lay out as a flow",
       "process": {
         "text2image": "Text to Image",
         "text2video": "Text to Video",

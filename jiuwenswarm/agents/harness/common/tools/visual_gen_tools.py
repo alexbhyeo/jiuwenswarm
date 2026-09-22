@@ -27,11 +27,13 @@ must all be set.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import logging
 import mimetypes
 import os
+import secrets
 import time
 from pathlib import Path
 from typing import Any
@@ -51,6 +53,15 @@ logger = logging.getLogger(__name__)
 # than respond cleanly. Downscale + re-encode as JPEG first.
 _MAX_REFERENCE_DIMENSION = 1280
 _REFERENCE_JPEG_QUALITY = 85
+
+# 观察到的另一种同类"服务商丢连接"场景：多个 generate_visual 并发打到
+# 同一个服务商时（比如 实验室 一张处理卡片一次开了好几份输出），偶发
+# RemoteProtocolError("Server disconnected without sending a response.")
+# ——不是超时、也没有明确的 4xx/5xx，纯粹是对端在并发压力下把连接掐断，
+# 不代表这次请求本身有问题。短暂退避后重试通常就能成功，不需要用户自己
+# 再点一次生成；重试次数不多，即使真的是持续性故障也不会把失败拖得太久。
+_TRANSIENT_RETRY_ATTEMPTS = 3
+_TRANSIENT_RETRY_BASE_DELAY_S = 1.5
 
 
 def visual_gen_enabled() -> bool:
@@ -211,17 +222,33 @@ async def generate_visual(
         model, api_base, aspect_ratio, resolution, bool(reference_data_uri),
     )
 
-    try:
-        async with httpx.AsyncClient(timeout=120, verify=get_requests_verify()) as client:
-            resp = await client.post(f"{api_base}/chat/completions", headers=headers, json=body)
+    data: dict[str, Any] | None = None
+    last_exc: httpx.HTTPError | None = None
+    for attempt in range(_TRANSIENT_RETRY_ATTEMPTS):
+        try:
+            async with httpx.AsyncClient(timeout=120, verify=get_requests_verify()) as client:
+                resp = await client.post(f"{api_base}/chat/completions", headers=headers, json=body)
             if resp.status_code != 200:
                 return f"[ERROR]: image generation request failed: {resp.status_code} {resp.text}"
             try:
                 data = resp.json()
             except ValueError as exc:
                 return f"[ERROR]: image generation request returned invalid JSON: {exc!r}"
-    except httpx.HTTPError as exc:
-        return f"[ERROR]: image generation request failed: {exc!r}"
+            break
+        except httpx.RemoteProtocolError as exc:
+            last_exc = exc
+            if attempt + 1 >= _TRANSIENT_RETRY_ATTEMPTS:
+                return f"[ERROR]: image generation request failed after {attempt + 1} attempts: {exc!r}"
+            logger.warning(
+                "[generate_visual] transient connection drop (attempt %d/%d), retrying: %r",
+                attempt + 1, _TRANSIENT_RETRY_ATTEMPTS, exc,
+            )
+            await asyncio.sleep(_TRANSIENT_RETRY_BASE_DELAY_S * (attempt + 1))
+        except httpx.HTTPError as exc:
+            return f"[ERROR]: image generation request failed: {exc!r}"
+
+    if data is None:
+        return f"[ERROR]: image generation request failed after {_TRANSIENT_RETRY_ATTEMPTS} attempts: {last_exc!r}"
 
     try:
         message = data["choices"][0]["message"]
@@ -242,7 +269,12 @@ async def generate_visual(
         header, _, b64data = url_field.partition(",")
         mime = header[len("data:"):].split(";")[0] if header.startswith("data:") else "image/png"
         ext = _extension_for_mime(mime)
-        filename = f"image_{int(time.time())}_{index}.{ext}"
+        # index 只在同一次调用返回多张图片时才能区分文件名——秒级时间戳
+        # 撞在一起时（并发跑多个 generate_visual 调用，各自的 index 通常都
+        # 是 0），两次调用会算出同一个文件名，后写的覆盖先写的，其中一张
+        # 图片就无声地丢了。加一段随机后缀彻底避免这种碰撞，不依赖调用之间
+        # 互相错开时间。
+        filename = f"image_{int(time.time())}_{index}_{secrets.token_hex(4)}.{ext}"
         try:
             target = _resolve_save_path(save_dir, filename)
             target.write_bytes(base64.b64decode(b64data))

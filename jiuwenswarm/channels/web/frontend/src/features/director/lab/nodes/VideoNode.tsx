@@ -2,6 +2,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { useTranslation } from 'react-i18next';
 import { useLabActions } from '../LabActionsContext';
 import type { VideoNodeData } from '../labTypes';
+import { NodeNameLabel } from './NodeNameLabel';
 
 const trashIcon = (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -28,7 +29,7 @@ export function VideoNode({ id, data }: NodeProps & { data: VideoNodeData }) {
           </button>
         </div>
       </div>
-      <div className="lab-node-name">{data.name}</div>
+      <NodeNameLabel name={data.name} fallback={t('director.categories.video')} onRename={(name) => actions.renameNode(id, name)} />
       {/* 视频输出节点没有下游用途（暂不支持视频再作为参考），保留 target
        *  句柄只是为了让"生成结果自动连线"的视觉逻辑保持一致。 */}
       <Handle type="target" position={Position.Left} id="in" />
