@@ -16,6 +16,7 @@ import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDirectorStore } from '../directorStore';
+import { EditChatPanel } from '../components/EditChatPanel';
 import { DIRECTOR_ASSET_DRAG_MIME, DirectorApiError } from '../types';
 import type { DirectorAsset, DirectorAssetDragPayload, GenerateParams } from '../types';
 import { LabActionsProvider, type ResolvedGenerateInput } from './LabActionsContext';
@@ -604,6 +605,10 @@ function LabCanvasInner() {
               </div>
             )}
           </div>
+        </div>
+
+        <div className="lab-edit-chat-overlay">
+          <EditChatPanel />
         </div>
       </div>
     </LabActionsProvider>

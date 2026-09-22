@@ -1263,28 +1263,25 @@
    stage/timeline 内容不变，只是从"整栏唯一内容"变成这行的左边一列。 */
 .director-edit-body {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
-.director-edit-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-/* ===== 剪辑对话助手（Edit chat） ===== */
+/* ===== 剪辑对话助手（Edit chat） =====
+   已从 剪辑 tab 挪到 实验室 画布上做悬浮覆盖层（见下方
+   .lab-edit-chat-overlay）——这里只保留聊天内部本身的布局（头部/消息流/
+   输入框），外层的宽度/圆角/阴影/边框交给悬浮容器决定，不再由这个类自己
+   固定宽度、画左边框。 */
 
 .director-edit-chat {
-  width: 360px;
-  flex: 0 0 auto;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  border-left: 1px solid var(--d-border-default);
   background: var(--d-bg-card);
 }
 
@@ -1888,6 +1885,27 @@
   to {
     transform: rotate(360deg);
   }
+}
+
+/* -- 剪辑助手悬浮聊天框（画布右侧） --
+   从 剪辑 tab 的固定侧栏搬到这里做悬浮卡片，和参考截图一致：画布左侧是
+   悬浮工具栏，右侧是这张带圆角/阴影、脱离文档流的浮动卡片，两者都不占用
+   画布本身的布局空间。 */
+
+.lab-edit-chat-overlay {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  width: 360px;
+  max-width: calc(100% - 32px);
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--d-border-default);
+  border-radius: var(--d-radius-lg);
+  box-shadow: var(--d-shadow-lg);
+  overflow: hidden;
 }
 
 /* -- 悬浮工具栏（左侧竖排图标按钮 + 添加菜单） -- */
