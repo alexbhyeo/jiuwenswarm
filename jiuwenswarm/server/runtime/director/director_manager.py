@@ -12,6 +12,7 @@ Agent/会话/LLM 工具调用回合 —— 这两个 @tool 函数的参数已经
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import secrets
@@ -30,7 +31,8 @@ from jiuwenswarm.agents.harness.common.tools.visual_gen_tools import (
     visual_gen_enabled,
 )
 from jiuwenswarm.agents.harness.common.tools.edit_chat_tools import (
-    chat_with_editor,
+    build_multimodal_user_message,
+    call_edit_chat_completion,
     edit_chat_configured,
     edit_chat_enabled,
 )
@@ -53,12 +55,131 @@ _RE_SAVED_TO = re.compile(r"Saved to:\s*(.+)")
 _RE_AT_REFERENCE = re.compile(r"@(\S+)")
 
 _EDIT_CHAT_SYSTEM_PROMPT = (
-    "你是「导演模式 · 剪辑」里的视频剪辑助手，帮助用户规划分镜、节奏与叙事结构，"
-    "讨论素材如何组织成一个连贯的短片。你可以分析、建议、拆解镜头方案，"
-    "但目前还不能真正执行剪辑操作——无法直接剪切、拼接、导出视频，也无法保存"
-    "任何改动。如果用户要求你直接完成剪辑或保存结果，明确说明这一点，"
-    "然后继续给出具体、可执行的建议，供用户自己在时间线上操作。"
+    "你是「导演模式 · 剪辑」里的视频创作助手，帮用户把一个故事构想变成可以"
+    "实际生成的分镜方案。用户可能会在对话里给你一段故事描述，并附上参考图片"
+    "（角色/道具/场景的参照）。收到这样的创作请求时，按下面的流程工作：\n\n"
+    "1. **故事板脚本**：先给出一份结构化的故事板脚本，包含画面比例"
+    "（aspect ratio，没有特别要求时用 16:9）、画面风格、预估总时长、"
+    "主要角色/道具列表（每个给出简短的外观/性格描述）、场景列表（每个给出"
+    "简短的氛围/环境描述）。\n"
+    "2. **生成设计图**：脚本定下来之后，为每一个主要角色/道具、以及每一个"
+    "场景，调用 generate_design_image 工具真正生成一张设计图——角色/道具用"
+    "kind=\"character\"，场景用 kind=\"scene\"。生成时用简洁、有辨识度的名称"
+    "（如 \"Boss Orange\"、\"Mysterious Briefcase\"、\"Rainy Dark Alley\"），"
+    "之后所有分镜描述里都要用 \"@名称\" 引用这些已经生成的设计图，而不是重新"
+    "描述一遍外观——@名称 会被解析成真正的参考图片，保持角色/场景在不同镜头"
+    "间的一致性。如果用户提供了参考图片，生成同一个角色/场景时把这些参考图片"
+    "的内容体现在 description 里，帮助保持相似度。\n"
+    "3. **分镜列表（Shot List）**：为每个场景写出具体的分镜，每个分镜包含"
+    "画面描述（Visual Description，用 @名称 引用出场的角色/道具）、"
+    "音效描述（Sound Effects Description），如果有台词也一并给出。\n\n"
+    "分镜列表定下来之后，如果用户要求「生成分镜关键帧」或类似的下一步，"
+    "为每个分镜调用 generate_design_image（kind=\"scene\"）生成一张关键帧"
+    "画面——描述里综合这个分镜的画面描述，并用 @名称 引用画面中出现的"
+    "角色/道具/场景设计图，保持视觉一致性；给关键帧起名时体现是第几场第几镜"
+    "（如 \"Scene1 Shot1-1 Frame\"），方便后续引用。\n\n"
+    "如果用户要求「用这些关键帧生成视频」或类似的下一步，为每个分镜调用"
+    "generate_shot_video：first_frame_name 填这个分镜关键帧的名称，"
+    "description 填这个镜头里发生的动作/运镜，duration_seconds 用分镜列表里"
+    "该镜头的时长；如果分镜有明确的首尾两帧（比如同一分镜前后有两张关键帧），"
+    "也可以填 last_frame_name 让生成的视频从首帧过渡到尾帧。\n\n"
+    "完成每一步后，向用户确认结果是否满意，是否需要调整，或者可以继续"
+    "下一步（脚本 → 设计图 → 分镜列表 → 分镜关键帧 → 分镜视频）。你现在能够"
+    "真实生成角色/道具/场景设计图、分镜关键帧、以及基于关键帧的视频片段，"
+    "但仍然不能执行真正的剪辑合成操作——无法把生成的多段视频剪切、拼接、"
+    "配上完整音轨并导出成一条成片。如果用户要求你直接完成剪辑合成或保存"
+    "最终成片，明确说明这一点，然后继续给出具体、可执行的建议，供用户自己"
+    "在时间线上把生成好的这些视频片段拼起来。"
 )
+
+# generate_design_image：让模型在对话过程中真正生成一张角色/道具设计图或
+# 场景设计图（走 generate_visual，落成该项目的真实素材），而不是只在文字里
+# 描述"应该有一张这样的图"。这是本工具唯一开放给对话模型的能力，刻意不
+# 暴露文件系统/网络访问等更大的工具面——保持这是一个范围明确的"设计图生成
+# 助手"，而不是完整 Agent。
+_EDIT_CHAT_TOOLS_SCHEMA: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_design_image",
+            "description": (
+                "生成一张角色/道具设计图或场景设计图，真实调用图片生成模型并保存为"
+                "该项目的素材。生成后可以在后续对话或分镜描述里用 @名称 引用这张图"
+                "作为参考，保持角色/场景在不同镜头间的一致性。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["character", "scene"],
+                        "description": "character：角色或道具设计图；scene：场景设计图",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "这张设计图的名称，简洁且有辨识度，之后用 @名称 引用，例如 Boss Orange 或 Mysterious Briefcase",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": (
+                            "详细的视觉描述，用于生成图片。可以用 @名称 引用之前已经生成"
+                            "的角色/道具/场景设计图作为参考，帮助保持一致性。"
+                        ),
+                    },
+                    "aspect_ratio": {
+                        "type": "string",
+                        "description": "画面比例，例如 16:9、9:16、1:1；不确定时用 16:9",
+                    },
+                },
+                "required": ["kind", "name", "description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_shot_video",
+            "description": (
+                "把一张已经生成的分镜关键帧真实转成一段视频片段（调用视频生成模型），"
+                "保存为该项目的素材。生成后可以用 @名称 引用这段视频。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "这段视频片段的名称，之后用 @名称 引用，建议体现是第几场第几镜",
+                    },
+                    "first_frame_name": {
+                        "type": "string",
+                        "description": "作为视频首帧的已生成分镜关键帧/设计图名称（不带 @ 符号）",
+                    },
+                    "last_frame_name": {
+                        "type": "string",
+                        "description": "可选：作为视频尾帧的已生成分镜关键帧名称，用于生成从首帧过渡到尾帧的视频；不提供则只用首帧生成运动视频",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "这个镜头里发生的动作/运镜描述，用于指导视频生成",
+                    },
+                    "duration_seconds": {
+                        "type": "integer",
+                        "description": "视频时长（秒），跟分镜列表里这一镜的时长保持一致，不确定时用 5",
+                    },
+                },
+                "required": ["name", "first_frame_name", "description"],
+            },
+        },
+    },
+]
+_EDIT_CHAT_MAX_TOOL_ITERATIONS = 6
+# generate_video 自身的内部轮询预算只有 ~120s（见 video_gen_tools 模块
+# docstring），真实生成经常需要更久——generate_shot_video 在工具调用内部
+# 自己接着轮询到真正完成为止，而不是把一个 status=pending 的半成品素材扔
+# 给模型：剪辑对话没有实验室画布那样的后台轮询 UI，这里不等到底，用户在
+# 对话里就永远看不到这段视频到底成没成。
+_EDIT_CHAT_VIDEO_POLL_INTERVAL_S = 10
+_EDIT_CHAT_VIDEO_POLL_MAX_ATTEMPTS = 30  # 30 * 10s = 5 分钟，叠加 generate_video 自身的 ~120s 预算
 # "角色" composer 的输入约定是 "名称: 描述"（如 "美妆博主: 一位..."），
 # 冒号支持全角/半角。识别出来的名称直接作为素材的 name，与图片素材命名后
 # 可用 "@名称" 引用的机制保持一致；识别不出格式时整段文本仍按描述处理。
@@ -390,14 +511,198 @@ class DirectorManager:
 
         return {"project": project.to_dict(), "asset_counts": self._store.asset_counts()}
 
-    async def handle_director_edit_chat_send(self, params: dict) -> dict:
-        """剪辑 tab 对话助手：发一条用户消息，拿到一条真实的 AI 回复.
+    async def _execute_edit_chat_tool_call(
+        self, project: DirectorProject, tool_call: dict[str, Any]
+    ) -> tuple[str, str | None]:
+        """执行模型发起的一次工具调用（generate_design_image 或
+        generate_shot_video），按 function.name 分派.
 
-        与 handle_director_generate 同样是无状态直连调用（chat_with_editor
-        直接打 chat/completions），不经过 Agent/会话；但这里是"多轮对话"而
-        不是一次性生成，所以每次调用都把该项目已有的历史消息重新拼进
-        messages 里发给模型——没有服务端会话状态，"上下文"就是
-        director_state.json 里存的这份消息列表本身。
+        返回 (给模型看的结果文本, 生成成功时的 asset_id 或 None)——结果文本
+        作为 role=tool 消息喂回模型，让它知道生成是否成功、该用什么名称
+        继续引用；asset_id 收集起来挂到这一轮助手消息的 image_asset_ids 上，
+        前端就能在对话里直接展示这张刚生成的图/视频（ChatMessageBubble 已经
+        按 image_asset_ids 渲染缩略图，视频缩略图不需要额外的前端改动——
+        见下方 generate_shot_video 的返回处理，asset_id 一样会被收集）。
+        """
+        function = tool_call.get("function") or {}
+        function_name = function.get("name")
+
+        try:
+            args = json.loads(function.get("arguments") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            return "工具参数不是合法的 JSON，生成失败。", None
+
+        if function_name == "generate_design_image":
+            return await self._execute_generate_design_image(project, args)
+        if function_name == "generate_shot_video":
+            return await self._execute_generate_shot_video(project, args)
+        return f"未知工具: {function_name}", None
+
+    async def _execute_generate_design_image(
+        self, project: DirectorProject, args: dict[str, Any]
+    ) -> tuple[str, str | None]:
+        kind = str(args.get("kind") or "").strip()
+        design_name = str(args.get("name") or "").strip()
+        description = str(args.get("description") or "").strip()
+        aspect_ratio = str(args.get("aspect_ratio") or "16:9").strip() or "16:9"
+
+        if kind not in ("character", "scene"):
+            return "kind 必须是 character 或 scene。", None
+        if not design_name or not description:
+            return "缺少 name 或 description，生成失败。", None
+        if not (visual_gen_enabled() and visual_gen_configured()):
+            return "图片生成未配置，请先在设置中配置「图片处理」，暂时无法生成设计图。", None
+
+        # description 里的 "@已有设计图名称" 解析成真正的参考图路径——和
+        # composer/实验室 画布同一套 "@名称" 引用机制（见 _resolve_at_references），
+        # 保持角色/场景在不同镜头间的视觉一致性。
+        cleaned_prompt, ref_paths = self._resolve_at_references(project, description, max_refs=1)
+        reference_image_path = ref_paths[0] if ref_paths else None
+        save_dir = str(get_project_assets_dir(project.project_id))
+
+        async with self._lock:
+            result_str = await generate_visual._func(
+                prompt=cleaned_prompt,
+                aspect_ratio=aspect_ratio,
+                resolution="512",
+                reference_image_path=reference_image_path,
+                save_dir=save_dir,
+            )
+
+        parsed = _parse_generation_result(result_str)
+        if parsed["status"] == "failed":
+            return f"生成失败：{parsed.get('error') or result_str}", None
+
+        gen_params: dict[str, Any] = {"aspect_ratio": aspect_ratio, "resolution": "512"}
+        if reference_image_path:
+            gen_params["reference_image_path"] = reference_image_path
+        asset = DirectorAsset(
+            asset_id=f"asset_{secrets.token_hex(4)}",
+            type="character" if kind == "character" else "image",
+            status=parsed["status"],
+            prompt=description,
+            params=gen_params,
+            file_path=parsed.get("file_path"),
+            job_id=parsed.get("job_id"),
+            name=design_name,
+        )
+        self._store.append_asset(project.project_id, asset)
+
+        kind_label = "角色/道具" if kind == "character" else "场景"
+        return f"已生成并保存「{design_name}」（{kind_label}设计图）。后续可以用 @{design_name} 引用这张图。", asset.asset_id
+
+    async def _execute_generate_shot_video(
+        self, project: DirectorProject, args: dict[str, Any]
+    ) -> tuple[str, str | None]:
+        video_name = str(args.get("name") or "").strip()
+        first_frame_name = str(args.get("first_frame_name") or "").strip()
+        last_frame_name = str(args.get("last_frame_name") or "").strip()
+        description = str(args.get("description") or "").strip()
+        try:
+            duration_seconds = int(args.get("duration_seconds") or 5)
+        except (TypeError, ValueError):
+            duration_seconds = 5
+
+        if not video_name or not first_frame_name:
+            return "缺少 name 或 first_frame_name，生成失败。", None
+        if not (video_gen_enabled() and video_gen_configured()):
+            return "视频生成未配置，请先在设置中配置「视频处理」，暂时无法生成视频。", None
+
+        first_frame_asset = self._store.find_asset_by_name(project.project_id, first_frame_name)
+        if not (
+            first_frame_asset
+            and first_frame_asset.type in ("image", "character")
+            and first_frame_asset.status == "ready"
+            and first_frame_asset.file_path
+        ):
+            return (
+                f"找不到名为「{first_frame_name}」的已生成分镜关键帧，"
+                "请先用 generate_design_image 生成这一帧，或检查名称拼写。",
+                None,
+            )
+        first_frame_path = first_frame_asset.file_path
+
+        last_frame_path = None
+        if last_frame_name:
+            last_frame_asset = self._store.find_asset_by_name(project.project_id, last_frame_name)
+            if (
+                last_frame_asset
+                and last_frame_asset.type in ("image", "character")
+                and last_frame_asset.status == "ready"
+                and last_frame_asset.file_path
+            ):
+                last_frame_path = last_frame_asset.file_path
+
+        save_dir = str(get_project_assets_dir(project.project_id))
+        prompt = description or "Generate a video based on the provided reference image(s)."
+        async with self._lock:
+            result_str = await generate_video._func(
+                prompt=prompt,
+                aspect_ratio="16:9",
+                resolution="720p",
+                duration_seconds=duration_seconds,
+                first_frame_path=first_frame_path,
+                last_frame_path=last_frame_path,
+                generate_audio=False,
+                save_dir=save_dir,
+            )
+        parsed = _parse_generation_result(result_str)
+
+        # generate_video 自身的内部轮询预算只有 ~120s，真实生成经常需要
+        # 更久——这里接着轮询到真正完成为止（成功或失败），而不是把一个
+        # status=pending 的半成品素材扔给模型：剪辑对话没有实验室画布那样
+        # 的后台轮询 UI，这里不等到底，用户在对话里就永远看不到这段视频
+        # 到底成没成。
+        attempts = 0
+        while parsed["status"] == "pending" and parsed.get("job_id") and attempts < _EDIT_CHAT_VIDEO_POLL_MAX_ATTEMPTS:
+            await asyncio.sleep(_EDIT_CHAT_VIDEO_POLL_INTERVAL_S)
+            async with self._lock:
+                result_str = await check_video_status._func(job_id=parsed["job_id"], save_dir=save_dir)
+            parsed = _parse_generation_result(result_str)
+            attempts += 1
+
+        if parsed["status"] == "failed":
+            return f"视频生成失败：{parsed.get('error') or result_str}", None
+        if parsed["status"] == "pending":
+            return (
+                f"视频「{video_name}」仍在生成中，超出了等待时间——可以稍后在素材面板里查看，"
+                "或者告诉我重新生成。",
+                None,
+            )
+
+        gen_params: dict[str, Any] = {
+            "aspect_ratio": "16:9",
+            "resolution": "720p",
+            "duration_seconds": duration_seconds,
+            "generate_audio": False,
+            "first_frame_path": first_frame_path,
+        }
+        if last_frame_path:
+            gen_params["last_frame_path"] = last_frame_path
+        asset = DirectorAsset(
+            asset_id=f"asset_{secrets.token_hex(4)}",
+            type="video",
+            status=parsed["status"],
+            prompt=description,
+            params=gen_params,
+            file_path=parsed.get("file_path"),
+            job_id=parsed.get("job_id"),
+            name=video_name,
+        )
+        self._store.append_asset(project.project_id, asset)
+        return f"已生成视频「{video_name}」。后续可以用 @{video_name} 引用这段视频。", asset.asset_id
+
+    async def handle_director_edit_chat_send(self, params: dict) -> dict:
+        """剪辑 tab 创作助手：发一条用户消息，让模型规划故事板/分镜，并在
+        需要时真正调用 generate_design_image 生成角色/场景设计图.
+
+        与 handle_director_generate 同样是无状态直连调用，不经过完整的
+        Agent/会话；但这里允许模型在一轮回复里发起若干次工具调用（OpenAI
+        兼容的 tools/tool_calls 协议）——每次工具调用都会真实生成一张设计图
+        并落成该项目的素材，调用结果（成功/失败 + 名称）作为 role=tool 消息
+        喂回模型，模型据此决定要不要接着用这张图继续规划分镜，直到给出一段
+        不再包含工具调用的最终回复，或达到 _EDIT_CHAT_MAX_TOOL_ITERATIONS
+        次迭代上限（避免模型陷入不停调用工具的死循环）。
 
         没有单独的"取历史"RPC：project.to_dict() 已经带上
         edit_chat_messages，现有的 director.projects.get/list 打开项目时
@@ -425,25 +730,57 @@ class DirectorManager:
             if path
         ]
 
+        # 这一轮开始前的历史（不含这一轮用户消息本身）——用户这一轮的文本
+        # 连同参考图片，作为一条多模态消息单独构造并追加在后面。
         history_messages = [{"role": m.role, "content": m.content} for m in project.edit_chat_messages]
-        messages = [
-            {"role": "system", "content": _EDIT_CHAT_SYSTEM_PROMPT},
-            *history_messages,
-            {"role": "user", "content": text},
-        ]
 
         # 用户这一轮先单独落盘，即使随后的模型调用失败，输入也不会丢——
         # 用户不用重新打一遍字，重试时历史里已经有这条消息了。
         user_message = EditChatMessage(role="user", content=text, image_asset_ids=image_asset_ids)
         project = self._store.append_edit_chat_messages(project_id, [user_message])
 
-        async with self._lock:
-            reply_text = await chat_with_editor(messages, image_paths=image_paths or None)
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": _EDIT_CHAT_SYSTEM_PROMPT},
+            *history_messages,
+            build_multimodal_user_message(text, image_paths),
+        ]
 
-        if reply_text.startswith("[ERROR]:"):
-            raise DirectorRpcError("GENERATION_FAILED", reply_text)
+        generated_asset_ids: list[str] = []
+        final_text = ""
+        for _ in range(_EDIT_CHAT_MAX_TOOL_ITERATIONS):
+            async with self._lock:
+                assistant_msg = await call_edit_chat_completion(messages, tools=_EDIT_CHAT_TOOLS_SCHEMA)
 
-        assistant_message = EditChatMessage(role="assistant", content=reply_text)
+            content = str(assistant_msg.get("content") or "")
+            if content.startswith("[ERROR]:"):
+                raise DirectorRpcError("GENERATION_FAILED", content)
+
+            tool_calls = assistant_msg.get("tool_calls")
+            if not tool_calls:
+                final_text = content
+                break
+
+            messages.append({"role": "assistant", "content": content, "tool_calls": tool_calls})
+            for tool_call in tool_calls:
+                result_text, asset_id = await self._execute_edit_chat_tool_call(project, tool_call)
+                if asset_id:
+                    generated_asset_ids.append(asset_id)
+                    # 同一轮里后面的工具调用（比如生成场景时引用刚生成的角色）
+                    # 要能通过 "@名称" 找到这张刚生成的图，刷新本地这份
+                    # project 快照，而不是继续用回合开始时的旧素材列表。
+                    refreshed = self._store.get_project(project.project_id)
+                    if refreshed is not None:
+                        project = refreshed
+                messages.append(
+                    {"role": "tool", "tool_call_id": tool_call.get("id"), "content": result_text}
+                )
+        else:
+            final_text = (
+                final_text
+                or "这一轮已经生成了不少设计图，先在这里停一下——可以告诉我这些设计图是否满意，或者继续说说下一步想做什么。"
+            )
+
+        assistant_message = EditChatMessage(role="assistant", content=final_text, image_asset_ids=generated_asset_ids)
         project = self._store.append_edit_chat_messages(project_id, [assistant_message])
 
         return {"project": project.to_dict()}

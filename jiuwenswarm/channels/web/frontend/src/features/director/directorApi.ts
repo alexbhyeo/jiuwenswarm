@@ -31,8 +31,11 @@ const METHOD = {
 
 // 剪辑对话每轮都要把该项目已有的历史消息整份重发一遍给模型（无服务端会话
 // 状态，"上下文"就是这份历史本身），加上可能引用的参考图片，随对话轮数
-// 增长请求体会变大；给比其余 director.* 调用更宽裕的超时。
-const EDIT_CHAT_TIMEOUT_MS = 120_000;
+// 增长请求体会变大。这一轮还可能触发若干次真实的图片/视频生成工具调用
+// （director_manager._EDIT_CHAT_TOOLS_SCHEMA），尤其是 generate_shot_video
+// 会在后端内部一直轮询到视频真正生成完成（最多约 5 分钟），叠加多次图片
+// 生成和多轮模型往返，给比其余 director.* 调用宽裕得多的超时。
+const EDIT_CHAT_TIMEOUT_MS = 600_000;
 
 // generate_video 内部轮询上限是 120s（12 次 * 10s sleep），每次 sleep 之间还有一次
 // GET 轮询请求的真实网络耗时。首帧/尾帧引用（@名称）会把参考图片整张

@@ -161,7 +161,8 @@
       "expand": "展开",
       "collapse": "收起",
       "emptyHint": "描述你想剪出来的效果——分镜、节奏、叙事结构，剪辑助手可以和你一起讨论、给建议。",
-      "noProject": "请先在「创作」中选择或新建一个项目"
+      "noProject": "请先在「创作」中选择或新建一个项目",
+      "timeoutGaveUp": "等待回复超时，请稍后刷新查看，或重新发一遍"
     }
   },
   "applicationPlugins": {

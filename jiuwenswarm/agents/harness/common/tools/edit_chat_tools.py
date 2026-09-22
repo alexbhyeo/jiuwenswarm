@@ -110,71 +110,99 @@ def _resolve_image_data_uri(path_or_url: str) -> str | None:
     return f"data:{mime};base64,{b64}"
 
 
-async def chat_with_editor(
-    messages: list[dict[str, str]],
-    image_paths: list[str] | None = None,
-) -> str:
-    """Send a conversation to the configured Edit chat model and return the
-    assistant's text reply.
+def build_multimodal_user_message(text: str, image_paths: list[str] | None) -> dict[str, Any]:
+    """Build a single user turn, embedding any reference images as
+    multimodal content parts (OpenAI-style image_url parts).
+
+    Kept separate from call_edit_chat_completion (rather than that function
+    attaching images to "the last message" on every call) because a tool-
+    calling conversation grows the message list turn by turn - images belong
+    on the one real user turn, not re-attached on every follow-up model call
+    that's really just feeding back a tool result.
+    """
+    if not image_paths:
+        return {"role": "user", "content": text}
+    data_uris = [uri for uri in (_resolve_image_data_uri(p) for p in image_paths) if uri]
+    if not data_uris:
+        return {"role": "user", "content": text}
+    return {
+        "role": "user",
+        "content": [
+            *[{"type": "image_url", "image_url": {"url": uri}} for uri in data_uris],
+            {"type": "text", "text": text},
+        ],
+    }
+
+
+async def call_edit_chat_completion(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Send one chat/completions turn to the configured Edit chat model and
+    return the assistant's raw message object (OpenAI-compatible shape:
+    {"role": "assistant", "content": str | None, "tool_calls": [...] | absent}).
+
+    Unlike a plain single-shot chat helper, this deliberately returns the
+    raw message rather than just text: the caller (director_manager's
+    tool-calling loop) needs to inspect `tool_calls` to decide whether to
+    execute a generate_design_image call and feed the result back for
+    another turn, or treat `content` as the final reply.
 
     Args:
-        messages: Full turn list so far, oldest first, each
-            {"role": "system"|"user"|"assistant", "content": str}. The caller
-            (director_manager.handle_director_edit_chat_send) is responsible
-            for building this - a system prompt plus prior history plus the
-            newest user turn.
-        image_paths: Local file paths, http(s) URLs, or data: URIs to attach
-            to the LAST message in `messages` (expected to be the newest user
-            turn) as multimodal content parts - e.g. 素材 images the user
-            referenced with "@名称". Ignored if `messages` is empty.
+        messages: Full turn list so far, oldest first - system prompt, prior
+            history, the newest user turn (see build_multimodal_user_message
+            for how to construct that one), and any assistant/tool turns
+            already appended by an in-progress tool-calling loop.
+        tools: OpenAI-style tool schema list to advertise to the model, or
+            None to disable tool calling for this call.
 
     Returns:
-        The assistant's reply text, or a "[ERROR]: ..." string on failure.
+        The assistant message dict on success. On failure, a dict with only
+        {"content": "[ERROR]: ..."} so callers can uniformly check
+        `content.startswith("[ERROR]:")` without a separate exception path.
     """
     api_key, api_base, model = _get_edit_chat_api_credentials()
     if not (api_key and api_base and model):
-        return (
-            "[ERROR]: edit chat is not configured - set the Edit chat "
-            "API key, API URL, and model name in configuration settings."
-        )
+        return {
+            "content": (
+                "[ERROR]: edit chat is not configured - set the Edit chat "
+                "API key, API URL, and model name in configuration settings."
+            )
+        }
     if not messages:
-        return "[ERROR]: messages is required."
+        return {"content": "[ERROR]: messages is required."}
 
-    wire_messages: list[dict[str, Any]] = [dict(m) for m in messages]
-    if image_paths:
-        data_uris = [uri for uri in (_resolve_image_data_uri(p) for p in image_paths) if uri]
-        if data_uris:
-            last = wire_messages[-1]
-            text = str(last.get("content") or "")
-            last["content"] = [
-                *[{"type": "image_url", "image_url": {"url": uri}} for uri in data_uris],
-                {"type": "text", "text": text},
-            ]
-
-    body: dict[str, Any] = {"model": model, "messages": wire_messages}
+    body: dict[str, Any] = {"model": model, "messages": messages}
+    if tools:
+        body["tools"] = tools
     headers = {"Authorization": f"Bearer {api_key}"}
     logger.info(
-        "[chat_with_editor] using model: %s (api_base: %s, turns: %d, images: %d)",
-        model, api_base, len(wire_messages), len(image_paths or []),
+        "[call_edit_chat_completion] using model: %s (api_base: %s, turns: %d, tools: %d)",
+        model, api_base, len(messages), len(tools or []),
     )
 
     try:
         async with httpx.AsyncClient(timeout=120, verify=get_requests_verify()) as client:
             resp = await client.post(f"{api_base}/chat/completions", headers=headers, json=body)
             if resp.status_code != 200:
-                return f"[ERROR]: edit chat request failed: {resp.status_code} {resp.text}"
+                return {"content": f"[ERROR]: edit chat request failed: {resp.status_code} {resp.text}"}
             try:
                 data = resp.json()
             except ValueError as exc:
-                return f"[ERROR]: edit chat request returned invalid JSON: {exc!r}"
+                return {"content": f"[ERROR]: edit chat request returned invalid JSON: {exc!r}"}
     except httpx.HTTPError as exc:
-        return f"[ERROR]: edit chat request failed: {exc!r}"
+        return {"content": f"[ERROR]: edit chat request failed: {exc!r}"}
 
     try:
-        reply = data["choices"][0]["message"]["content"]
+        message = data["choices"][0]["message"]
     except (KeyError, IndexError, TypeError):
-        return f"[ERROR]: unexpected response shape from provider: {data}"
+        return {"content": f"[ERROR]: unexpected response shape from provider: {data}"}
 
-    if not isinstance(reply, str) or not reply.strip():
-        return f"[ERROR]: empty reply from provider. Full response: {data}"
-    return reply
+    if not isinstance(message, dict):
+        return {"content": f"[ERROR]: unexpected message shape from provider: {data}"}
+    # 没有工具调用时才要求非空文本——纯文本轮次的空回复视为异常；带
+    # tool_calls 的轮次 content 本来就可能是 None/空字符串（模型只想调用
+    # 工具，还没打算说话），不能按同样标准判为错误。
+    if not message.get("tool_calls") and not str(message.get("content") or "").strip():
+        return {"content": f"[ERROR]: empty reply from provider. Full response: {data}"}
+    return message

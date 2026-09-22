@@ -1350,16 +1350,84 @@
   flex-wrap: wrap;
 }
 
-.director-edit-chat-msg-images img {
+.director-edit-chat-msg-images img,
+.director-edit-chat-msg-images video {
   width: 56px;
   height: 56px;
   object-fit: cover;
   border-radius: var(--d-radius-sm);
   border: 1px solid rgba(255, 255, 255, 0.4);
+  background: #000;
 }
 
 .director-edit-chat-msg-body {
-  white-space: pre-wrap;
+  white-space: normal;
+}
+
+/* 助手回复走 react-markdown 渲染（故事板脚本/分镜列表这类结构化内容需要
+   真正的加粗/列表排版，不是让 "**@名称**" 这种字面语法原样显示）——这里
+   只收紧默认的块级元素外边距，让排版在紧凑的聊天气泡里不显得松散，不
+   引入额外的字号/配色规则，跟随气泡本身的 font-size/color。 */
+.director-edit-chat-msg-body p {
+  margin: 0 0 6px;
+}
+
+.director-edit-chat-msg-body p:last-child {
+  margin-bottom: 0;
+}
+
+.director-edit-chat-msg-body ul,
+.director-edit-chat-msg-body ol {
+  margin: 4px 0 6px;
+  padding-left: 18px;
+}
+
+.director-edit-chat-msg-body li {
+  margin-bottom: 2px;
+}
+
+.director-edit-chat-msg-body li:last-child {
+  margin-bottom: 0;
+}
+
+.director-edit-chat-msg-body strong {
+  font-weight: 700;
+}
+
+.director-edit-chat-msg-body h1,
+.director-edit-chat-msg-body h2,
+.director-edit-chat-msg-body h3,
+.director-edit-chat-msg-body h4 {
+  margin: 6px 0 4px;
+  font-size: 1em;
+  font-weight: 700;
+}
+
+/* 分镜列表这类回复常见的表格（关键帧/镜头/画面要点……）——聊天面板很窄，
+   原生表格塞不下时靠横向滚动查看，单元格文字整词不折断，而不是被浏览器
+   逐字拆开换行。 */
+.director-edit-chat-table-wrap {
+  margin: 4px 0 6px;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.director-edit-chat-msg-body table {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.director-edit-chat-msg-body th,
+.director-edit-chat-msg-body td {
+  padding: 5px 8px;
+  border: 1px solid var(--d-border-strong);
+  white-space: nowrap;
+  text-align: left;
+}
+
+.director-edit-chat-msg-body th {
+  font-weight: 700;
+  background: var(--d-bg-hover);
 }
 
 .director-edit-chat-expand-btn {

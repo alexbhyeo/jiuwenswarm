@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useDirectorStore } from '../directorStore';
 import type { DirectorAsset, DirectorProject, EditChatMessage } from '../types';
 
@@ -50,6 +52,21 @@ function detectAtToken(value: string, cursor: number): AtMenuState | null {
   return { start: atIndex, query };
 }
 
+// 分镜列表这类结构化回复里模型经常用 markdown 表格（关键帧/镜头/画面要点/
+// 引用设计图……），聊天面板本身很窄，表格原生宽度撑不下时浏览器会把单元格
+// 文字整词打散换行（"@Rainy Dark Alley" 断成 "@Rai" / "ny Dark Alley"），
+// 完全不可读。这里不改表格本身的列宽策略，而是包一层可以横向滚动的容器：
+// 单元格内文字保持整词不折断，宽度不够时滚动查看，而不是把字拆开。
+function MarkdownTable({ children }: ComponentPropsWithoutRef<'table'>) {
+  return (
+    <div className="director-edit-chat-table-wrap">
+      <table>{children}</table>
+    </div>
+  );
+}
+
+const markdownComponents = { table: MarkdownTable };
+
 interface ChatMessageBubbleProps {
   message: EditChatMessage;
   project: DirectorProject;
@@ -69,12 +86,20 @@ function ChatMessageBubble({ message, project, expanded, onToggleExpand }: ChatM
     <div className={`director-edit-chat-msg director-edit-chat-msg--${message.role}`}>
       {images.length > 0 && (
         <div className="director-edit-chat-msg-images">
-          {images.map((a) => (
-            <img key={a.asset_id} src={rawFileUrl(a.file_path as string)} alt={a.name || a.prompt} />
-          ))}
+          {images.map((a) =>
+            a.type === 'video' ? (
+              <video key={a.asset_id} src={rawFileUrl(a.file_path as string)} controls playsInline preload="metadata" />
+            ) : (
+              <img key={a.asset_id} src={rawFileUrl(a.file_path as string)} alt={a.name || a.prompt} />
+            )
+          )}
         </div>
       )}
-      <div className="director-edit-chat-msg-body">{displayContent}</div>
+      <div className="director-edit-chat-msg-body">
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+          {displayContent}
+        </ReactMarkdown>
+      </div>
       {isLong && (
         <button type="button" className="director-edit-chat-expand-btn" onClick={onToggleExpand}>
           {expanded ? t('director.editChat.collapse') : t('director.editChat.expand')}

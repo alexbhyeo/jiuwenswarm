@@ -2,6 +2,7 @@
 // 集中管理：项目列表 / 当前选中项目 / 素材计数 / 当前 tab / composer 草稿 / 生成中状态。
 
 import { create } from 'zustand';
+import i18n from '../../i18n';
 import type {
   ComposerMode,
   ComposerParams,
@@ -285,6 +286,11 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
     const text = state.editChatDraft.trim();
     if (!projectId || !text || state.editChatSending) return;
 
+    // 超时后要靠"消息条数变多了没有"来判断这一轮迟到的回复有没有回来，
+    // 得先记住发送前有多少条。
+    const priorMessageCount =
+      state.projects.find((p) => p.project_id === projectId)?.edit_chat_messages.length ?? 0;
+
     set({ editChatSending: true, editChatError: null });
     try {
       const { directorEditChatSend } = await import('./directorApi');
@@ -296,11 +302,52 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
         editChatPendingImageIds: [],
       }));
     } catch (e) {
+      if (e instanceof DirectorApiError && e.code === 'REQUEST_TIMEOUT') {
+        // "请求超时"只是前端等不下去了主动放弃——这一轮很可能触发了真实的
+        // 图片/视频生成工具调用，后端仍在继续跑，跑完照样会把结果写进
+        // director_state.json。转成轮询项目数据把这个迟到的回复找回来，
+        // 而不是直接报错吓用户一跳（同一个问题、同一种修法，见
+        // LabCanvas.tsx 的 recoverFromGenerateTimeout）。
+        set({ editChatDraft: '', editChatPendingImageIds: [] });
+        recoverEditChatFromTimeout(set, projectId, priorMessageCount);
+        return;
+      }
       const message = e instanceof DirectorApiError ? e.message : e instanceof Error ? e.message : String(e);
       set({ editChatSending: false, editChatError: message });
     }
   },
 }));
+
+const EDIT_CHAT_RECOVERY_POLL_INTERVAL_MS = 5000;
+const EDIT_CHAT_RECOVERY_MAX_ATTEMPTS = 180; // 180 * 5s = 15 分钟，覆盖 generate_shot_video 内部轮询预算（约 5 分钟）加多次工具调用/模型往返的余量
+
+function recoverEditChatFromTimeout(
+  set: (partial: Partial<DirectorState> | ((state: DirectorState) => Partial<DirectorState>)) => void,
+  projectId: string,
+  priorMessageCount: number,
+  attempt = 0
+): void {
+  setTimeout(async () => {
+    try {
+      const { directorProjectsGet } = await import('./directorApi');
+      const { project } = await directorProjectsGet(projectId);
+      if (project.edit_chat_messages.length > priorMessageCount) {
+        set((s) => ({
+          projects: s.projects.map((p) => (p.project_id === project.project_id ? project : p)),
+          editChatSending: false,
+        }));
+        return;
+      }
+    } catch {
+      // 网络抖动一类的临时错误——安静地重试，不提前把这个中间态暴露给用户。
+    }
+    if (attempt + 1 >= EDIT_CHAT_RECOVERY_MAX_ATTEMPTS) {
+      set({ editChatSending: false, editChatError: i18n.t('director.editChat.timeoutGaveUp') });
+      return;
+    }
+    recoverEditChatFromTimeout(set, projectId, priorMessageCount, attempt + 1);
+  }, EDIT_CHAT_RECOVERY_POLL_INTERVAL_MS);
+}
 
 function schedulePoll(
   get: () => DirectorState,

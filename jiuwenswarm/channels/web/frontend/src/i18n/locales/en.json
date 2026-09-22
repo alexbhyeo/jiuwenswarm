@@ -161,7 +161,8 @@
       "expand": "Expand",
       "collapse": "Collapse",
       "emptyHint": "Describe what you're going for — shots, pacing, story structure — the assistant can discuss it with you and suggest an approach.",
-      "noProject": "Select or create a project in Create first"
+      "noProject": "Select or create a project in Create first",
+      "timeoutGaveUp": "Timed out waiting for a reply — refresh shortly to check, or send it again"
     }
   },
   "applicationPlugins": {
