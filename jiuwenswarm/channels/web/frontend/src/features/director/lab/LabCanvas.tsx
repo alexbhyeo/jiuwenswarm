@@ -306,12 +306,6 @@ function LabCanvasInner() {
   const applyGenerateResult = useCallback(
     (nodeId: string, node: Node, outputAsset: DirectorAsset | undefined, slotIndex: number): string => {
       const outputType = outputAsset?.type === 'video' ? 'video' : 'image';
-      const outputData = {
-        assetId: outputAsset?.asset_id ?? null,
-        filePath: outputAsset?.file_path ?? '',
-        name: outputAsset?.name || outputAsset?.prompt || '',
-        slotIndex,
-      };
 
       // 按"这个节点自己记的 slotIndex 是否等于我要找的槽位号"查找，不能用
       // 排序后数组的下标当槽位号——并发时各槽位落定的先后顺序是任意的
@@ -322,10 +316,33 @@ function LabCanvasInner() {
       const existingAtSlot = getExistingOutputNodesSorted(nodeId).find(
         (n) => ((n.data as { slotIndex?: number }).slotIndex ?? 0) === slotIndex
       );
+      const isInPlaceUpdate = !!existingAtSlot && existingAtSlot.type === outputType;
+
+      // 就地替换同一个槽位时，沿用这张卡片已经有的名字（不管是用户手动
+      // 改的还是之前哪次生成留下的），不能被这次生成结果自己的
+      // name/prompt 顶掉——否则每次点"生成"重跑同一张卡片，名字就跟着
+      // 新一轮的提示词/空名字变来变去，用户之前起的名字（以及别处 "@名字"
+      // 的引用）就对不上了。只有真正新建一个槽位（不是就地替换）时才用
+      // 生成结果自身的 name/prompt 当默认名字。
+      const preservedName = isInPlaceUpdate ? ((existingAtSlot!.data as { name?: string }).name ?? '') : '';
+      const outputData = {
+        assetId: outputAsset?.asset_id ?? null,
+        filePath: outputAsset?.file_path ?? '',
+        name: preservedName || outputAsset?.name || outputAsset?.prompt || '',
+        slotIndex,
+      };
+
+      // 沿用的名字如果和这次生成结果本身的名字不一样（每次生成在后端都是
+      // 一条全新的 DirectorAsset，name 默认是空的），把新素材也同步改成
+      // 同一个名字——"@名字" 引用（find_asset_by_name 同名取 updated_at
+      // 最新的一条）才能落到刚生成的这张新图，而不是继续指向旧图。
+      if (preservedName && outputAsset?.asset_id && preservedName !== outputAsset.name && selectedProjectId) {
+        void useDirectorStore.getState().renameAsset(selectedProjectId, outputAsset.asset_id, preservedName);
+      }
 
       let outputNodeId: string;
-      if (existingAtSlot && existingAtSlot.type === outputType) {
-        outputNodeId = existingAtSlot.id;
+      if (isInPlaceUpdate) {
+        outputNodeId = existingAtSlot!.id;
         setNodes((nds) => nds.map((n) => (n.id === outputNodeId ? { ...n, data: outputData } : n)));
       } else {
         if (existingAtSlot) {
@@ -357,7 +374,7 @@ function LabCanvasInner() {
       }
       return outputNodeId;
     },
-    [getExistingOutputNodesSorted, setNodes, addNode, setEdges, handleDeleteNode]
+    [getExistingOutputNodesSorted, setNodes, addNode, setEdges, handleDeleteNode, selectedProjectId]
   );
 
   // director.generate 客户端超时后的"找回"轮询：定期重新拉这个项目的素材
