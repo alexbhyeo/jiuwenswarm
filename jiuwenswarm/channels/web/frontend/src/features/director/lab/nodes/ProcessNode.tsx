@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLabActions } from '../LabActionsContext';
 import type { ImageNodeData, ProcessNodeData, TextNodeData } from '../labTypes';
-import { OUTPUT_COUNT_OPTIONS, PROCESS_KIND_MAX_IMAGES, PROCESS_KIND_MODE } from '../labTypes';
+import { OUTPUT_COUNT_OPTIONS, PROCESS_KIND_MAX_IMAGES, PROCESS_KIND_MODE, PROCESS_KIND_MULTI_REF } from '../labTypes';
 
 const ASPECT_RATIO_OPTIONS = ['16:9', '9:16', '1:1', '4:3'];
 const IMAGE_RESOLUTION_OPTIONS = ['512', '768', '1024'];
@@ -44,19 +44,36 @@ function useConnectedImage(nodeId: string, handleId: string): { assetId: string 
   return { assetId: data.assetId, filePath: data.filePath };
 }
 
+/** 与 useConnectedImage 相同，但收集这个端口上全部的连线（不只是第一条）
+ *  ——供 imageRef（"图片参考"）多参考图合成使用，image1 端口在这种卡片上
+ *  可以同时接多张参考图。useNodesData 支持传数组直接批量取，不需要在
+ *  循环里逐个调用 hook（违反 hooks 规则）。 */
+function useConnectedImages(nodeId: string, handleId: string): { assetId: string | null; filePath: string }[] {
+  const connections = useNodeConnections({ id: nodeId, handleType: 'target', handleId });
+  const sourceIds = connections.map((c) => c.source);
+  const sourcesData = useNodesData(sourceIds);
+  return sourcesData.map((s) => {
+    const data = s.data as unknown as ImageNodeData;
+    return { assetId: data.assetId, filePath: data.filePath };
+  });
+}
+
 export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData }) {
   const { t } = useTranslation();
   const actions = useLabActions();
   const maxImages = PROCESS_KIND_MAX_IMAGES[data.kind];
   const mode = PROCESS_KIND_MODE[data.kind];
   const outputCount = data.outputCount || 1;
+  const isMultiRef = !!PROCESS_KIND_MULTI_REF[data.kind];
 
   const text = useConnectedText(id, 'text');
-  const image1 = useConnectedImage(id, maxImages >= 1 ? 'image1' : '__none__');
+  const image1 = useConnectedImage(id, maxImages >= 1 && !isMultiRef ? 'image1' : '__none__');
   const image2 = useConnectedImage(id, maxImages >= 2 ? 'image2' : '__none__');
+  const images = useConnectedImages(id, isMultiRef ? 'image1' : '__none__');
 
   const requiresImage = maxImages > 0;
-  const canGenerate = data.status !== 'generating' && (!requiresImage || !!image1) && (text.trim().length > 0 || !!image1);
+  const hasAnyImage = isMultiRef ? images.length > 0 : !!image1;
+  const canGenerate = data.status !== 'generating' && (!requiresImage || hasAnyImage) && (text.trim().length > 0 || hasAnyImage);
 
   const [paramsOpen, setParamsOpen] = useState(false);
   const paramsRef = useRef<HTMLDivElement>(null);
@@ -98,7 +115,11 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
             <Handle type="target" position={Position.Left} id="image1" />
             <span className="lab-node-input-dot" />
             {maxImages >= 2 ? t('director.lab.firstFrame') : t('director.lab.refImage')}
-            {image1 && <span className="lab-node-input-filled">✓</span>}
+            {isMultiRef
+              ? images.length > 0 && (
+                  <span className="lab-node-input-filled">✓{images.length > 1 ? ` ×${images.length}` : ''}</span>
+                )
+              : image1 && <span className="lab-node-input-filled">✓</span>}
           </div>
         )}
         {maxImages >= 2 && (
@@ -216,7 +237,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
         type="button"
         className="lab-node-generate-btn"
         disabled={!canGenerate}
-        onClick={() => actions.generate(id, { prompt: text, image1, image2 })}
+        onClick={() => actions.generate(id, { prompt: text, image1, image2, images })}
       >
         {data.status === 'generating' ? (
           <span className="lab-node-spinner" />

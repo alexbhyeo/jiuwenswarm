@@ -12,13 +12,23 @@ export const PROCESS_KIND_MODE: Record<ProcessKind, 'image' | 'video'> = {
   imageRef: 'image',
 };
 
-/** 每种处理节点接受的图片输入上限——与后端 generate_video（首帧+尾帧）/
- *  generate_visual（单张参考图）的真实能力一一对应，不做画布端的虚假承诺。 */
+/** 每种处理节点渲染几个不同的图片输入端口——与后端 generate_video（首帧+
+ *  尾帧两个语义不同的槽位）的真实能力一一对应，不做画布端的虚假承诺。
+ *  imageRef 只有一个端口（image1），但见 PROCESS_KIND_MULTI_REF——那一个
+ *  端口本身可以接多条线，不代表"只能引用一张图"。 */
 export const PROCESS_KIND_MAX_IMAGES: Record<ProcessKind, number> = {
   text2image: 0,
   text2video: 0,
   image2video: 2,
   imageRef: 1,
+};
+
+/** 哪些处理节点的 image1 端口允许同时接多条连线——imageRef（"图片参考"）
+ *  是多参考图合成，一张或多张参考图都合法，与后端 generate_visual 的
+ *  reference_image_paths（列表）一一对应；image2video 的首帧/尾帧是两个
+ *  语义不同的独立槽位，没有"多张首帧"的概念，仍然各自只接一条线。 */
+export const PROCESS_KIND_MULTI_REF: Partial<Record<ProcessKind, boolean>> = {
+  imageRef: true,
 };
 
 export interface ImageNodeData {

@@ -162,7 +162,7 @@ async def generate_visual(
     prompt: str,
     aspect_ratio: str = "16:9",
     resolution: str = "512",
-    reference_image_path: str | None = None,
+    reference_image_paths: list[str] | None = None,
     save_dir: str | None = None,
 ) -> str:
     """
@@ -172,11 +172,13 @@ async def generate_visual(
         prompt: Text description of the image to generate.
         aspect_ratio: e.g. "16:9", "9:16", "1:1".
         resolution: e.g. "512", "1024" (short-edge pixel size).
-        reference_image_path: Optional local file path, http(s) URL, or data:
-            URI of a reference image to edit/compose from (image-to-image).
-            Support depends on the configured model - Gemini-family image
-            models accept an input image in the same chat turn; text-only
-            image models will simply ignore it.
+        reference_image_paths: Optional list of local file paths, http(s)
+            URLs, or data: URIs of one or more reference images to
+            edit/compose from (image-to-image, or multi-image composition -
+            e.g. placing a product from one reference onto a surface from
+            another). Support depends on the configured model - Gemini-family
+            image models accept multiple input images in the same chat turn;
+            text-only image models will simply ignore them.
         save_dir: Optional directory to save the image (defaults to the agent
             workspace's generated_images/ folder).
 
@@ -193,20 +195,22 @@ async def generate_visual(
     if not prompt:
         return "[ERROR]: prompt is required."
 
-    reference_data_uri = None
-    if reference_image_path:
-        reference_data_uri, err = _resolve_reference_image(reference_image_path)
+    reference_data_uris: list[str] = []
+    for path in reference_image_paths or []:
+        data_uri, err = _resolve_reference_image(path)
         if err:
             return err
+        if data_uri:
+            reference_data_uris.append(data_uri)
 
     # Not every provider/model honors aspect_ratio/resolution as separate
     # request-body fields, so the hint is also folded into the prompt text
     # itself as a best-effort fallback the model can act on directly.
     full_prompt = f"{prompt}\n\n(Aspect ratio: {aspect_ratio}, resolution: {resolution}px)"
     content: Any = full_prompt
-    if reference_data_uri:
+    if reference_data_uris:
         content = [
-            {"type": "image_url", "image_url": {"url": reference_data_uri}},
+            *({"type": "image_url", "image_url": {"url": uri}} for uri in reference_data_uris),
             {"type": "text", "text": full_prompt},
         ]
     body: dict[str, Any] = {
@@ -218,8 +222,8 @@ async def generate_visual(
     }
     headers = {"Authorization": f"Bearer {api_key}"}
     logger.info(
-        "[generate_visual] using model: %s (api_base: %s, aspect_ratio: %s, resolution: %s, reference: %s)",
-        model, api_base, aspect_ratio, resolution, bool(reference_data_uri),
+        "[generate_visual] using model: %s (api_base: %s, aspect_ratio: %s, resolution: %s, references: %d)",
+        model, api_base, aspect_ratio, resolution, len(reference_data_uris),
     )
 
     data: dict[str, Any] | None = None

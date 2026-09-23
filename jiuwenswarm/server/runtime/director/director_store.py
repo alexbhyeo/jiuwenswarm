@@ -48,7 +48,7 @@ class DirectorAsset:
     error: str | None = None
     # 用户自定义素材名——为空时前端回退展示 prompt。图片素材命名后可在同一
     # 项目内通过composer 提示词里的 "@名称" 引用，作为 generate_visual 的
-    # reference_image_path（见 director_manager._resolve_at_reference）。
+    # reference_image_paths 之一（见 director_manager._resolve_at_references）。
     name: str | None = None
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)

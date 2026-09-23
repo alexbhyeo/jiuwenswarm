@@ -50,9 +50,6 @@ _SUPPORTED_MODES = ("video", "image", "character")
 
 _RE_STILL_RUNNING_JOB_ID = re.compile(r"^Video job (\S+) submitted and still")
 _RE_SAVED_TO = re.compile(r"Saved to:\s*(.+)")
-# "@名称" 引用：名称本身不含空白，与常见 @提及 约定一致（重命名素材时应
-# 避免空格）。
-_RE_AT_REFERENCE = re.compile(r"@(\S+)")
 
 _EDIT_CHAT_SYSTEM_PROMPT = (
     "你是「导演模式 · 剪辑」里的视频创作助手，帮用户把一个故事构想变成可以"
@@ -185,6 +182,11 @@ _EDIT_CHAT_VIDEO_POLL_MAX_ATTEMPTS = 30  # 30 * 10s = 5 分钟，叠加 generate
 # 可用 "@名称" 引用的机制保持一致；识别不出格式时整段文本仍按描述处理。
 _RE_CHARACTER_NAME = re.compile(r"^\s*([^:：\n]{1,40})[:：]\s*(.+)$", re.DOTALL)
 
+# "图片参考"（imageRef）处理卡片/generate_design_image 的多参考图合成一次
+# 最多接受几张参考图——generate_visual 本身不限制数量，这里设一个实用上限
+# 避免请求体/prompt 里 @引用过多，托底供应商侧的负载与耐心。
+_MAX_IMAGE_REFERENCES = 4
+
 
 class DirectorRpcError(Exception):
     """Director RPC 稳定业务错误（带 code，供前端/网关透传）.
@@ -292,16 +294,31 @@ class DirectorManager:
         引用源；角色素材本质上就是一张人物参考图，和普通图片素材同等对待
         ——见 handle_director_generate 里 "角色"素材生成时的注释）。按出现
         顺序取前 max_refs 个命中，命中的 token 从提示词里移除（其余文本原样
-        发给模型）。image 模式下 max_refs=1，结果整体作为 generate_visual 的
-        reference_image_path；video 模式下 max_refs=2，调用方把结果按顺序
-        映射为 first_frame_path（首帧）/ last_frame_path（尾帧）——
-        generate_video 最多只接受这两张。未命中任何素材时原样返回
-        (prompt, [])。
+        发给模型）。image 模式下 max_refs=_MAX_IMAGE_REFERENCES，结果整体
+        作为 generate_visual 的 reference_image_paths（一张或多张参考图的
+        多图合成）；video 模式下 max_refs=2，调用方把结果按顺序映射为
+        first_frame_path（首帧）/ last_frame_path（尾帧）——generate_video
+        最多只接受这两张。未命中任何素材时原样返回 (prompt, [])。
+
+        "@名称" 的边界按项目里已存在的素材名称本身来定，不能假设 @引用后面
+        一定跟着空白再结束——中文文本里 "@名称" 后面通常紧跟着别的字/标点、
+        没有空格分隔（比如模型自己写的"把@道具名放在@场景名的台面上"），
+        原来那种按 \\S+ 切 token 的正则会把 "@道具名放在@场景名的台面上"
+        整段当成一个查无此素材的 token：一个引用都匹配不上，还顺带把紧跟
+        在后面的第二个 "@场景名" 也吞没在同一个 token 里，永远扫描不到。
+        这里改成直接用项目里已有的素材名称构造一个 "@(名称1|名称2|...)"
+        的联合正则，名称按长度降序排列，保证像 "Fox"/"FoxPickB" 这样互为
+        前缀的两个名称在同一位置上优先命中更长的那个。
         """
+        names = {a.name for a in project.assets if a.name}
+        if not names:
+            return (prompt, [])
+        pattern = re.compile("@(" + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)) + ")")
+
         resolved: list[str] = []
         cleaned = prompt
         offset = 0
-        for match in _RE_AT_REFERENCE.finditer(prompt):
+        for match in pattern.finditer(prompt):
             if len(resolved) >= max_refs:
                 break
             asset = self._store.find_asset_by_name(project.project_id, match.group(1))
@@ -341,8 +358,13 @@ class DirectorManager:
         prompt = str(params.get("prompt") or "").strip()
         first_frame_asset_id = str(params.get("first_frame_asset_id") or "").strip()
         last_frame_asset_id = str(params.get("last_frame_asset_id") or "").strip()
-        reference_asset_id = str(params.get("reference_asset_id") or "").strip()
-        has_explicit_reference = bool(first_frame_asset_id or last_frame_asset_id or reference_asset_id)
+        raw_reference_asset_ids = params.get("reference_asset_ids")
+        reference_asset_ids = (
+            [str(x).strip() for x in raw_reference_asset_ids if str(x).strip()]
+            if isinstance(raw_reference_asset_ids, list)
+            else []
+        )
+        has_explicit_reference = bool(first_frame_asset_id or last_frame_asset_id or reference_asset_ids)
 
         if not project_id:
             raise DirectorRpcError("INVALID_PARAMS", "缺少 project_id")
@@ -415,22 +437,31 @@ class DirectorManager:
         else:
             if not (visual_gen_enabled() and visual_gen_configured()):
                 raise DirectorRpcError("NOT_CONFIGURED", "图片生成未配置，请先在设置中配置「图片处理」")
-            reference_image_path = self._resolve_asset_path(project, reference_asset_id)
-            if reference_image_path:
-                cleaned_prompt = prompt or "Generate an image based on the provided reference image."
+            # 实验室节点画布："图片参考" 处理卡片的 image1 端口可以接多条
+            # 连线（多参考图合成），每条连线都是一个显式的 asset_id；未提供
+            # 时回退到 composer 的 "@名称" 文本解析（最多
+            # _MAX_IMAGE_REFERENCES 个 @引用），两条路径互斥、不叠加。
+            reference_image_paths = [
+                path
+                for path in (self._resolve_asset_path(project, aid) for aid in reference_asset_ids)
+                if path
+            ]
+            if reference_image_paths:
+                cleaned_prompt = prompt or "Generate an image based on the provided reference image(s)."
             else:
-                cleaned_prompt, ref_paths = self._resolve_at_references(project, prompt, max_refs=1)
-                reference_image_path = ref_paths[0] if ref_paths else None
+                cleaned_prompt, reference_image_paths = self._resolve_at_references(
+                    project, prompt, max_refs=_MAX_IMAGE_REFERENCES
+                )
             gen_params = {"aspect_ratio": aspect_ratio, "resolution": resolution}
-            if reference_image_path:
-                gen_params["reference_image_path"] = reference_image_path
+            if reference_image_paths:
+                gen_params["reference_image_paths"] = reference_image_paths
             # 同上：不拿锁，让多个并发的图片生成请求真正并发打到服务商，而
             # 不是在这里排队串行。
             result_str = await generate_visual._func(
                 prompt=cleaned_prompt,
                 aspect_ratio=aspect_ratio,
                 resolution=resolution,
-                reference_image_path=reference_image_path,
+                reference_image_paths=reference_image_paths or None,
                 save_dir=save_dir,
             )
 
@@ -572,11 +603,13 @@ class DirectorManager:
         if not (visual_gen_enabled() and visual_gen_configured()):
             return "图片生成未配置，请先在设置中配置「图片处理」，暂时无法生成设计图。", None
 
-        # description 里的 "@已有设计图名称" 解析成真正的参考图路径——和
-        # composer/实验室 画布同一套 "@名称" 引用机制（见 _resolve_at_references），
-        # 保持角色/场景在不同镜头间的视觉一致性。
-        cleaned_prompt, ref_paths = self._resolve_at_references(project, description, max_refs=1)
-        reference_image_path = ref_paths[0] if ref_paths else None
+        # description 里的 "@已有设计图名称" 解析成真正的参考图路径（可以有
+        # 多个，比如同时 @一个道具和一个场景做合成）——和 composer/实验室
+        # 画布同一套 "@名称" 引用机制（见 _resolve_at_references），保持
+        # 角色/场景在不同镜头间的视觉一致性。
+        cleaned_prompt, reference_image_paths = self._resolve_at_references(
+            project, description, max_refs=_MAX_IMAGE_REFERENCES
+        )
         save_dir = str(get_project_assets_dir(project.project_id))
 
         async with self._lock:
@@ -584,7 +617,7 @@ class DirectorManager:
                 prompt=cleaned_prompt,
                 aspect_ratio=aspect_ratio,
                 resolution="512",
-                reference_image_path=reference_image_path,
+                reference_image_paths=reference_image_paths or None,
                 save_dir=save_dir,
             )
 
@@ -593,8 +626,8 @@ class DirectorManager:
             return f"生成失败：{parsed.get('error') or result_str}", None
 
         gen_params: dict[str, Any] = {"aspect_ratio": aspect_ratio, "resolution": "512"}
-        if reference_image_path:
-            gen_params["reference_image_path"] = reference_image_path
+        if reference_image_paths:
+            gen_params["reference_image_paths"] = reference_image_paths
         asset = DirectorAsset(
             asset_id=f"asset_{secrets.token_hex(4)}",
             type="character" if kind == "character" else "image",

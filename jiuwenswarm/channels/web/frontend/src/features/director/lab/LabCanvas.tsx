@@ -25,7 +25,7 @@ import { VideoNode } from './nodes/VideoNode';
 import { TextNode } from './nodes/TextNode';
 import { ProcessNode } from './nodes/ProcessNode';
 import type { ProcessKind, ProcessNodeData } from './labTypes';
-import { PROCESS_KIND_MODE } from './labTypes';
+import { PROCESS_KIND_MODE, PROCESS_KIND_MULTI_REF } from './labTypes';
 
 const nodeTypes: NodeTypes = {
   image: ImageNode,
@@ -143,15 +143,20 @@ function LabCanvasInner() {
   const onConnect = useCallback(
     (connection: Connection) => {
       setEdges((eds) => {
-        // 一个 target handle 只接受一条连线：先把该 (target, targetHandle) 上
-        // 已有的旧连线去掉，再接入新的。
-        const filtered = eds.filter(
-          (e) => !(e.target === connection.target && e.targetHandle === connection.targetHandle)
-        );
+        // 一般情况下一个 target handle 只接受一条连线：先把该 (target,
+        // targetHandle) 上已有的旧连线去掉，再接入新的。例外是 imageRef
+        // （"图片参考"）处理卡片的 image1 端口——多参考图合成，允许同时接
+        // 多条线，不做去重替换（见 PROCESS_KIND_MULTI_REF）。
+        const targetNode = nodes.find((n) => n.id === connection.target);
+        const targetKind = (targetNode?.data as { kind?: ProcessKind } | undefined)?.kind;
+        const allowMulti = connection.targetHandle === 'image1' && targetKind && PROCESS_KIND_MULTI_REF[targetKind];
+        const filtered = allowMulti
+          ? eds
+          : eds.filter((e) => !(e.target === connection.target && e.targetHandle === connection.targetHandle));
         return addEdge({ ...connection, animated: false }, filtered);
       });
     },
-    [setEdges]
+    [setEdges, nodes]
   );
 
   const isValidConnection = useCallback(
@@ -448,7 +453,8 @@ function LabCanvasInner() {
           if (resolved.image1?.assetId) params.firstFrameAssetId = resolved.image1.assetId;
           if (resolved.image2?.assetId) params.lastFrameAssetId = resolved.image2.assetId;
         } else {
-          if (resolved.image1?.assetId) params.referenceAssetId = resolved.image1.assetId;
+          const referenceAssetIds = resolved.images.map((img) => img.assetId).filter((v): v is string => !!v);
+          if (referenceAssetIds.length > 0) params.referenceAssetIds = referenceAssetIds;
         }
 
         const result = await directorGenerate(params);
@@ -611,7 +617,14 @@ function LabCanvasInner() {
       if (!asset || !asset.file_path) continue;
 
       const params = (asset.params ?? {}) as Record<string, unknown>;
-      const referenceImagePath = typeof params.reference_image_path === 'string' ? params.reference_image_path : null;
+      // reference_image_paths（列表）是当前的存法；reference_image_path
+      // （单数）是旧数据留下的格式（这个改造之前生成的素材），两种都要
+      // 认得，不然重建流程图时历史素材会被误判成 text2image。
+      const referenceImagePaths = Array.isArray(params.reference_image_paths)
+        ? (params.reference_image_paths as unknown[]).filter((p): p is string => typeof p === 'string')
+        : typeof params.reference_image_path === 'string'
+          ? [params.reference_image_path]
+          : [];
       const firstFramePath = typeof params.first_frame_path === 'string' ? params.first_frame_path : null;
       const lastFramePath = typeof params.last_frame_path === 'string' ? params.last_frame_path : null;
 
@@ -620,7 +633,7 @@ function LabCanvasInner() {
         ? firstFramePath || lastFramePath
           ? 'image2video'
           : 'text2video'
-        : referenceImagePath
+        : referenceImagePaths.length > 0
           ? 'imageRef'
           : 'text2image';
       const mode = PROCESS_KIND_MODE[kind];
@@ -646,12 +659,15 @@ function LabCanvasInner() {
         addEdge({ id: nextNodeId('edge'), source: textNodeId, sourceHandle: 'text', target: processNodeId, targetHandle: 'text' }, eds)
       );
 
-      if (referenceImagePath) {
-        const refId = ensureImageRefNode(referenceImagePath, y - 150);
+      // imageRef 的 image1 端口允许多条连线（见 onConnect 里的
+      // PROCESS_KIND_MULTI_REF 特判），每一张参考图各自摆一张卡片、纵向
+      // 错开，全部连到同一个 image1 端口上。
+      referenceImagePaths.forEach((refPath, i) => {
+        const refId = ensureImageRefNode(refPath, y - 150 + i * 240);
         setEdges((eds) =>
           addEdge({ id: nextNodeId('edge'), source: refId, sourceHandle: 'image', target: processNodeId, targetHandle: 'image1' }, eds)
         );
-      }
+      });
       if (firstFramePath) {
         const refId = ensureImageRefNode(firstFramePath, y - 150);
         setEdges((eds) =>

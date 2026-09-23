@@ -10,6 +10,10 @@ export interface ResolvedGenerateInput {
   prompt: string;
   image1: { assetId: string | null; filePath: string } | null;
   image2: { assetId: string | null; filePath: string } | null;
+  /** imageRef（"图片参考"）处理卡片：image1 端口上连的全部参考图，按连线
+   *  顺序排列，可以是一张或多张（见 PROCESS_KIND_MULTI_REF）。其它处理
+   *  卡片这里始终是空数组，仍然只用上面的 image1/image2。 */
+  images: { assetId: string | null; filePath: string }[];
 }
 
 export interface LabActions {

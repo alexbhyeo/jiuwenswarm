@@ -74,10 +74,11 @@ export interface GenerateParams {
   durationSeconds?: number;
   generateAudio?: boolean;
   /** 实验室节点画布：连线的显式引用（asset_id），绕开 composer 的
-   *  "@名称" 文本解析。video 模式下最多首帧+尾帧两个；image 模式下最多一个。 */
+   *  "@名称" 文本解析。video 模式下最多首帧+尾帧两个；image 模式下可以是
+   *  "图片参考" 卡片上连的一张或多张参考图（多参考图合成）。 */
   firstFrameAssetId?: string;
   lastFrameAssetId?: string;
-  referenceAssetId?: string;
+  referenceAssetIds?: string[];
 }
 
 export interface GenerateResult {
