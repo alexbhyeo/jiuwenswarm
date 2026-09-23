@@ -147,7 +147,7 @@
         "text2image": "文生图",
         "text2video": "文生视频",
         "image2video": "图生视频",
-        "imageRef": "图片参考"
+        "imageRef": "图生图"
       }
     },
     "edit": {

@@ -147,7 +147,7 @@
         "text2image": "Text to Image",
         "text2video": "Text to Video",
         "image2video": "Image to Video",
-        "imageRef": "Image Reference"
+        "imageRef": "Image to Image"
       }
     },
     "edit": {
