@@ -575,9 +575,16 @@ function LabCanvasInner() {
     // 既是自己那一行的输出，也可能是下一行的参考图输入）。
     const outputNodeIdByAsset = new Map<string, string>();
     const imageNodeIdByPath = new Map<string, string>();
+    // 素材 id -> 它在画布上的 y 坐标——用来给"依赖上一个输出"的素材算摆放
+    // 位置（取它依赖的那些素材的 y 均值），既覆盖这次新摆的素材，也覆盖
+    // 已经在画布上、来自更早一次 build 的素材。
+    const assetY = new Map<string, number>();
     for (const n of getNodes()) {
       const d = n.data as { assetId?: string | null; filePath?: string } | undefined;
-      if (d?.assetId) outputNodeIdByAsset.set(d.assetId, n.id);
+      if (d?.assetId) {
+        outputNodeIdByAsset.set(d.assetId, n.id);
+        assetY.set(d.assetId, n.position.y);
+      }
       if (n.type === 'image' && d?.filePath) imageNodeIdByPath.set(d.filePath, n.id);
     }
 
@@ -589,11 +596,16 @@ function LabCanvasInner() {
     const COL_REF_X = 60;
     const COL_PROCESS_X = 420;
     const COL_OUTPUT_X = 780;
+    // 不依赖任何上一个输出的素材，各自独立占一整组（文字/处理/输出三列）
+    // 纵向摞下去；依赖别的素材输出的（引用了它的 图片参考/首尾帧），改成
+    // 在依赖的那一组右边再开一组横向摆——GROUP_STEP 是一整组三列的宽度
+    // 再加安全间距，保证下一组的文字列不会撞到上一组输出列的卡片。
+    const GROUP_STEP = 1080;
     // 接到已有画布的下方，不覆盖用户手动摆放的内容。
     const existingMaxY = getNodes().reduce((max, n) => Math.max(max, n.position.y), 0);
     let rowY = existingMaxY > 0 ? existingMaxY + ROW_HEIGHT : 60;
 
-    const ensureImageRefNode = (filePath: string, y: number): string => {
+    const ensureImageRefNode = (filePath: string, x: number, y: number): string => {
       const existing = imageNodeIdByPath.get(filePath);
       if (existing) return existing;
       const matchingAsset = project.assets.find((a) => a.file_path === filePath);
@@ -601,7 +613,7 @@ function LabCanvasInner() {
       addNode({
         id,
         type: 'image',
-        position: { x: COL_REF_X, y },
+        position: { x, y },
         data: {
           assetId: matchingAsset?.asset_id ?? null,
           filePath,
@@ -612,6 +624,26 @@ function LabCanvasInner() {
       return id;
     };
 
+    // 文件路径 -> 素材 id，用来把一个素材的"参考图/首尾帧路径"反查回是
+    // 引用了项目里哪个素材（这个项目里全部素材，不限于这次新摆的）——
+    // 从而判断它是不是"依赖上一个输出"。
+    const assetIdByFilePath = new Map<string, string>();
+    for (const a of project.assets) {
+      if (a.file_path) assetIdByFilePath.set(a.file_path, a.asset_id);
+    }
+
+    interface AssetPlan {
+      asset: DirectorAsset;
+      referenceImagePaths: string[];
+      firstFramePath: string | null;
+      lastFramePath: string | null;
+      kind: ProcessKind;
+      mode: 'image' | 'video';
+      /** 这个素材实际依赖的其它素材 id（不管是这次新摆的还是已经在画布上
+       *  的老素材），按引用顺序去重。 */
+      depAssetIds: string[];
+    }
+    const plans = new Map<string, AssetPlan>();
     for (const assetId of newAssetIds) {
       const asset = assetById.get(assetId);
       if (!asset || !asset.file_path) continue;
@@ -637,13 +669,94 @@ function LabCanvasInner() {
           ? 'imageRef'
           : 'text2image';
       const mode = PROCESS_KIND_MODE[kind];
-      const y = rowY;
-      rowY += ROW_HEIGHT;
+
+      const depAssetIds = Array.from(
+        new Set(
+          [...referenceImagePaths, firstFramePath, lastFramePath]
+            .filter((p): p is string => !!p)
+            .map((p) => assetIdByFilePath.get(p))
+            .filter((id): id is string => !!id && id !== assetId)
+        )
+      );
+
+      plans.set(assetId, { asset, referenceImagePaths, firstFramePath, lastFramePath, kind, mode, depAssetIds });
+    }
+
+    // 按依赖深度分层：完全不依赖别的素材的是第 0 层，纵向摞；依赖了第 N
+    // 层素材的排到第 N+1 层，横向摆到它右边一组。依赖的是已经在画布上的
+    // 老素材（不在这次 plans 里）时按第 0 层处理——同样让依赖方至少排到
+    // 第 1 层，从老素材右边开一组，而不是继续纵向摞在最下面。
+    const depthCache = new Map<string, number>();
+    const resolving = new Set<string>();
+    const depthOf = (assetId: string): number => {
+      const cached = depthCache.get(assetId);
+      if (cached !== undefined) return cached;
+      const plan = plans.get(assetId);
+      if (!plan || plan.depAssetIds.length === 0) {
+        depthCache.set(assetId, 0);
+        return 0;
+      }
+      if (resolving.has(assetId)) return 0; // 循环依赖兜底，理论上不会出现
+      resolving.add(assetId);
+      let maxDepDepth = -1;
+      for (const depId of plan.depAssetIds) {
+        maxDepDepth = Math.max(maxDepDepth, plans.has(depId) ? depthOf(depId) : 0);
+      }
+      resolving.delete(assetId);
+      const depth = maxDepDepth + 1;
+      depthCache.set(assetId, depth);
+      return depth;
+    };
+
+    // 同一层内避免多个素材的 y 算出来太接近而叠在一起——逐个登记已经用过
+    // 的 y，冲突就顺延一整行高度。
+    const usedYByDepth = new Map<number, number[]>();
+    const claimY = (depth: number, desired: number): number => {
+      const used = usedYByDepth.get(depth) ?? [];
+      let y = desired;
+      while (used.some((u) => Math.abs(u - y) < ROW_HEIGHT)) {
+        y += ROW_HEIGHT;
+      }
+      used.push(y);
+      usedYByDepth.set(depth, used);
+      return y;
+    };
+
+    const orderedForLayout = Array.from(plans.keys())
+      .map((id) => ({ id, depth: depthOf(id) }))
+      .sort((a, b) => a.depth - b.depth);
+
+    for (const { id: assetId, depth } of orderedForLayout) {
+      const plan = plans.get(assetId);
+      if (!plan) continue;
+      const { asset, referenceImagePaths, firstFramePath, lastFramePath, kind, mode, depAssetIds } = plan;
+
+      const y =
+        depth === 0
+          ? (() => {
+              const placed = rowY;
+              rowY += ROW_HEIGHT;
+              return placed;
+            })()
+          : claimY(
+              depth,
+              (() => {
+                const depYs = depAssetIds.map((depId) => assetY.get(depId)).filter((v): v is number => v !== undefined);
+                return depYs.length > 0 ? depYs.reduce((a, b) => a + b, 0) / depYs.length : rowY;
+              })()
+            );
+
+      const xOffset = depth * GROUP_STEP;
+      const textX = COL_TEXT_X + xOffset;
+      const refX = COL_REF_X + xOffset;
+      const processX = COL_PROCESS_X + xOffset;
+      const outputX = COL_OUTPUT_X + xOffset;
 
       const textNodeId = nextNodeId('text');
-      addNode({ id: textNodeId, type: 'text', position: { x: COL_TEXT_X, y }, data: { text: asset.prompt } });
+      addNode({ id: textNodeId, type: 'text', position: { x: textX, y }, data: { text: asset.prompt } });
 
       const processNodeId = nextNodeId('process');
+      const params = (asset.params ?? {}) as Record<string, unknown>;
       const processData: ProcessNodeData = {
         kind,
         status: 'idle',
@@ -654,39 +767,41 @@ function LabCanvasInner() {
         durationSeconds: typeof params.duration_seconds === 'number' ? params.duration_seconds : 5,
         outputCount: 1,
       };
-      addNode({ id: processNodeId, type: 'process', position: { x: COL_PROCESS_X, y }, data: processData });
+      addNode({ id: processNodeId, type: 'process', position: { x: processX, y }, data: processData });
       setEdges((eds) =>
         addEdge({ id: nextNodeId('edge'), source: textNodeId, sourceHandle: 'text', target: processNodeId, targetHandle: 'text' }, eds)
       );
 
       // imageRef 的 image1 端口允许多条连线（见 onConnect 里的
-      // PROCESS_KIND_MULTI_REF 特判），每一张参考图各自摆一张卡片、纵向
-      // 错开，全部连到同一个 image1 端口上。
+      // PROCESS_KIND_MULTI_REF 特判）——依赖的素材大多已经在上一层摆过
+      // 自己的输出节点，ensureImageRefNode 会直接复用那个节点（按文件
+      // 路径查），不会重复摆一张；只有真正找不到已有节点时才会在这一层
+      // 的参考列新开一张卡片。
       referenceImagePaths.forEach((refPath, i) => {
-        const refId = ensureImageRefNode(refPath, y - 150 + i * 240);
+        const refId = ensureImageRefNode(refPath, refX, y - 150 + i * 240);
         setEdges((eds) =>
           addEdge({ id: nextNodeId('edge'), source: refId, sourceHandle: 'image', target: processNodeId, targetHandle: 'image1' }, eds)
         );
       });
       if (firstFramePath) {
-        const refId = ensureImageRefNode(firstFramePath, y - 150);
+        const refId = ensureImageRefNode(firstFramePath, refX, y - 150);
         setEdges((eds) =>
           addEdge({ id: nextNodeId('edge'), source: refId, sourceHandle: 'image', target: processNodeId, targetHandle: 'image1' }, eds)
         );
       }
       if (lastFramePath) {
-        const refId = ensureImageRefNode(lastFramePath, y + 150);
+        const refId = ensureImageRefNode(lastFramePath, refX, y + 150);
         setEdges((eds) =>
           addEdge({ id: nextNodeId('edge'), source: refId, sourceHandle: 'image', target: processNodeId, targetHandle: 'image2' }, eds)
         );
       }
 
       const outputNodeId = nextNodeId('out');
-      const outputType = isVideo ? 'video' : 'image';
+      const outputType = asset.type === 'video' ? 'video' : 'image';
       addNode({
         id: outputNodeId,
         type: outputType,
-        position: { x: COL_OUTPUT_X, y },
+        position: { x: outputX, y },
         data: { assetId: asset.asset_id, filePath: asset.file_path, name: asset.name || asset.prompt, slotIndex: 0 },
       });
       setEdges((eds) =>
@@ -694,7 +809,8 @@ function LabCanvasInner() {
       );
 
       outputNodeIdByAsset.set(asset.asset_id, outputNodeId);
-      if (outputType === 'image') imageNodeIdByPath.set(asset.file_path, outputNodeId);
+      assetY.set(asset.asset_id, y);
+      if (outputType === 'image') imageNodeIdByPath.set(asset.file_path as string, outputNodeId);
     }
   }, [selectedProjectId, getNodes, addNode, setEdges]);
 
