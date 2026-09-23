@@ -1741,6 +1741,10 @@
   background: rgba(0, 0, 0, 0.75);
 }
 
+.lab-node-swap-input {
+  display: none;
+}
+
 .lab-node-name {
   display: flex;
   align-items: center;

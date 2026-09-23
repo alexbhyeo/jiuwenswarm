@@ -24,7 +24,7 @@ import { ImageNode } from './nodes/ImageNode';
 import { VideoNode } from './nodes/VideoNode';
 import { TextNode } from './nodes/TextNode';
 import { ProcessNode } from './nodes/ProcessNode';
-import type { ProcessKind, ProcessNodeData } from './labTypes';
+import type { ImageNodeData, ProcessKind, ProcessNodeData } from './labTypes';
 import { PROCESS_KIND_MODE, PROCESS_KIND_MULTI_REF } from './labTypes';
 
 const nodeTypes: NodeTypes = {
@@ -191,6 +191,50 @@ function LabCanvasInner() {
       }
     },
     [setNodes, nodes, selectedProjectId]
+  );
+
+  // 用本地上传的图片文件替换一张图片节点（通常是某个处理卡片生成出来的
+  // 结果）的实际内容——保留这张卡片原来的名字不变，并把新上传的素材同步
+  // 改成同一个名字，这样后续处理卡片的 "@名字" 引用（find_asset_by_name
+  // 同名取 updated_at 最新的一条）会落到刚换上来的这张图，画布上直接连线
+  // 引用它的下游卡片也会因为节点 id 不变、只是 data.filePath 更新而自动
+  // 生效——两条路径都不需要用户再手动去重新接一次线。
+  const handleSwapImage = useCallback(
+    async (nodeId: string, file: File) => {
+      if (!selectedProjectId) return;
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node || node.type !== 'image') return;
+      const data = node.data as ImageNodeData;
+      const project = useDirectorStore.getState().projects.find((p) => p.project_id === selectedProjectId);
+      const originalAsset = data.assetId ? project?.assets.find((a) => a.asset_id === data.assetId) : undefined;
+      const assetType = originalAsset?.type === 'character' ? 'character' : 'image';
+
+      try {
+        const { directorAssetUpload } = await import('../directorApi');
+        const result = await directorAssetUpload(selectedProjectId, file, assetType);
+        useDirectorStore.setState((s) => ({
+          projects: s.projects.map((p) => (p.project_id === result.project.project_id ? result.project : p)),
+        }));
+        const newAsset = result.project.assets.find((a) => a.asset_id === result.assetId);
+        if (!newAsset?.file_path) return;
+
+        setNodes((nds) =>
+          nds.map((n) =>
+            n.id === nodeId
+              ? { ...n, data: { ...n.data, assetId: newAsset.asset_id, filePath: newAsset.file_path as string } }
+              : n
+          )
+        );
+
+        if (data.name) {
+          await useDirectorStore.getState().renameAsset(selectedProjectId, newAsset.asset_id, data.name);
+        }
+      } catch {
+        // 上传/改名各自已经把出错信息写进 store 的 uploadError/
+        // projectsError，画布这里不需要再弹一次。
+      }
+    },
+    [selectedProjectId, nodes, setNodes]
   );
 
   const handleDeleteNode = useCallback(
@@ -954,6 +998,7 @@ function LabCanvasInner() {
         patchProcessNode: setProcessNodeState,
         buildFlowFromChat,
         renameNode: handleRenameNode,
+        swapImage: handleSwapImage,
       }}
     >
       <div className="lab-canvas-wrap" ref={wrapperRef}>

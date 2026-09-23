@@ -119,6 +119,7 @@
     "lab": {
       "breadcrumb": "实验室 · 多参考图合成",
       "refImage": "图片参考",
+      "swapImage": "替换为上传图片",
       "textPrompt": "文字提示",
       "samplePrompt": "一艘小船缓缓驶过平静的海面，天空湛蓝，光线柔和",
       "settingsTitle": "生成设置",

@@ -32,6 +32,11 @@ export interface LabActions {
    *  背后真正的 DirectorAsset.name（节点有 assetId 时），两边保持一致，
    *  "@名称" 引用和素材面板显示的名字才不会和画布上看到的对不上。 */
   renameNode: (nodeId: string, name: string) => void;
+  /** 用本地上传的文件替换一张图片节点的实际内容（文件路径/背后素材），
+   *  节点自己的名字保持不变——常用于把某个处理卡片生成出来的结果换成
+   *  用户自己上传的图片，同时让后续引用这个名字的处理卡片自动接上换后
+   *  的图片。 */
+  swapImage: (nodeId: string, file: File) => void;
 }
 
 const LabActionsContext = createContext<LabActions | null>(null);

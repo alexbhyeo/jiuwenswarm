@@ -119,6 +119,7 @@
     "lab": {
       "breadcrumb": "Lab · Multi-Reference Composite",
       "refImage": "Image Reference",
+      "swapImage": "Swap with uploaded image",
       "textPrompt": "Text Prompt",
       "samplePrompt": "A small boat drifts slowly across a calm sea, under a blue sky with soft light",
       "settingsTitle": "Generation Settings",
