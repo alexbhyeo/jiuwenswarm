@@ -53,6 +53,7 @@ import os
 import re
 import secrets
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -117,14 +118,38 @@ _MODELARK_ACCOUNT_HINTS = {
 # Backend detection and public entry points
 # --------------------------------------------------------------------------- #
 
+@dataclass(frozen=True)
+class GenerationTarget:
+    """The configured backend, credentials and model a generation call is sent to."""
+
+    backend: str
+    api_key: str
+    api_base: str
+    model: str
+
+
+@dataclass(frozen=True)
+class VideoRequest:
+    """What to render: the prompt plus the video options the tools expose."""
+
+    prompt: str
+    aspect_ratio: str
+    resolution: str
+    duration_seconds: int
+    generate_audio: bool = False
+    first_frame_data_uri: str | None = None
+
 def _host_of(api_base: str) -> str:
     return re.sub(r"^https?://", "", api_base.strip(), flags=re.IGNORECASE).split("/", 1)[0].split(":", 1)[0]
 
 
 def detect_backend(protocol_env: str, api_base: str) -> str | None:
-    """Which vendor-native backend the configured slot should use, or None for
-    the OpenRouter-style path: the saved 协议 (read from ``protocol_env``) names
-    it, or the API URL is one of the vendor's hosts."""
+    """Return the vendor-native backend for the configured slot, or None.
+
+    None means the OpenRouter-style path. The backend is named by the saved 协议
+    (read from ``protocol_env``), or implied by the API URL being one of the
+    vendor's hosts.
+    """
     protocol = os.environ.get(protocol_env, "").strip().lower()
     if protocol in (MINIMAX, MODELARK):
         return protocol
@@ -136,53 +161,28 @@ def detect_backend(protocol_env: str, api_base: str) -> str | None:
     return None
 
 
-async def generate_image(
-    backend: str,
-    api_key: str,
-    api_base: str,
-    model: str,
-    prompt: str,
-    aspect_ratio: str,
-    save_dir: str | None,
-) -> str:
-    if backend == MINIMAX:
-        return await _minimax_generate_image(api_key, api_base, model, prompt, aspect_ratio, save_dir)
-    if backend == MODELARK:
-        return await _modelark_generate_image(api_key, api_base, model, prompt, aspect_ratio, save_dir)
-    return f"[ERROR]: unknown generation backend: {backend!r}"
+async def generate_image(target: GenerationTarget, prompt: str, aspect_ratio: str, save_dir: str | None) -> str:
+    if target.backend == MINIMAX:
+        return await _minimax_generate_image(target, prompt, aspect_ratio, save_dir)
+    if target.backend == MODELARK:
+        return await _modelark_generate_image(target, prompt, aspect_ratio, save_dir)
+    return f"[ERROR]: unknown generation backend: {target.backend!r}"
 
 
-async def submit_video(
-    backend: str,
-    api_key: str,
-    api_base: str,
-    model: str,
-    prompt: str,
-    aspect_ratio: str,
-    resolution: str,
-    duration_seconds: int,
-    generate_audio: bool,
-    first_frame_data_uri: str | None,
-    save_dir: str | None,
-) -> str:
-    if backend == MINIMAX:  # H3 has no audio switch
-        return await _minimax_submit_video(
-            api_key, api_base, model, prompt, aspect_ratio, resolution, duration_seconds, first_frame_data_uri, save_dir
-        )
-    if backend == MODELARK:
-        return await _modelark_submit_video(
-            api_key, api_base, model, prompt, aspect_ratio, resolution, duration_seconds,
-            generate_audio, first_frame_data_uri, save_dir,
-        )
-    return f"[ERROR]: unknown generation backend: {backend!r}"
+async def submit_video(target: GenerationTarget, request: VideoRequest, save_dir: str | None) -> str:
+    if target.backend == MINIMAX:  # H3 has no audio switch
+        return await _minimax_submit_video(target, request, save_dir)
+    if target.backend == MODELARK:
+        return await _modelark_submit_video(target, request, save_dir)
+    return f"[ERROR]: unknown generation backend: {target.backend!r}"
 
 
-async def check_video(backend: str, api_key: str, api_base: str, task_id: str, save_dir: str | None) -> str:
-    if backend == MINIMAX:
-        return await _minimax_check_video(api_key, api_base, task_id, save_dir)
-    if backend == MODELARK:
-        return await _modelark_check_video(api_key, api_base, task_id, save_dir)
-    return f"[ERROR]: unknown generation backend: {backend!r}"
+async def check_video(target: GenerationTarget, task_id: str, save_dir: str | None) -> str:
+    if target.backend == MINIMAX:
+        return await _minimax_check_video(target, task_id, save_dir)
+    if target.backend == MODELARK:
+        return await _modelark_check_video(target, task_id, save_dir)
+    return f"[ERROR]: unknown generation backend: {target.backend!r}"
 
 
 # --------------------------------------------------------------------------- #
@@ -279,8 +279,10 @@ def _minimax_auth_failure_message(roots: list[str], detail: str) -> str:
 
 
 def _minimax_base_error(payload: Any) -> str | None:
-    """MiniMax reports failures in ``base_resp`` (HTTP 200) or in an ``error``
-    object; returns a readable message, or None when the call succeeded."""
+    """Return a readable error for a MiniMax response, or None on success.
+
+    MiniMax reports failures in ``base_resp`` (HTTP 200) or in an ``error`` object.
+    """
     if not isinstance(payload, dict):
         return f"unexpected response: {payload!r}"
     base = payload.get("base_resp")
@@ -293,8 +295,9 @@ def _minimax_base_error(payload: Any) -> str | None:
 
 
 async def _minimax_generate_image(
-    api_key: str, api_base: str, model: str, prompt: str, aspect_ratio: str, save_dir: str | None
+    target: GenerationTarget, prompt: str, aspect_ratio: str, save_dir: str | None
 ) -> str:
+    api_key, api_base, model = target.api_key, target.api_base, target.model
     aspect = aspect_ratio if aspect_ratio in _MINIMAX_IMAGE_ASPECT_RATIOS else "1:1"
     body = {
         "model": model,
@@ -343,8 +346,7 @@ async def _minimax_generate_image(
 
 
 def _minimax_video_resolution(resolution: str) -> str:
-    """The tool's resolution vocabulary ("480p"/"720p"/"1080p") -> H3's
-    "768P" / "2K"."""
+    """Map the tool's resolution ("480p"/"720p"/"1080p") to H3's "768P" / "2K"."""
     text = (resolution or "").strip().upper()
     if text == "2K":
         return "2K"
@@ -352,17 +354,10 @@ def _minimax_video_resolution(resolution: str) -> str:
     return "768P" if not digits or int(digits) <= 768 else "2K"
 
 
-async def _minimax_submit_video(
-    api_key: str,
-    api_base: str,
-    model: str,
-    prompt: str,
-    aspect_ratio: str,
-    resolution: str,
-    duration_seconds: int,
-    first_frame_data_uri: str | None,
-    save_dir: str | None,
-) -> str:
+async def _minimax_submit_video(target: GenerationTarget, request: VideoRequest, save_dir: str | None) -> str:
+    api_key, api_base, model = target.api_key, target.api_base, target.model
+    prompt, aspect_ratio, resolution = request.prompt, request.aspect_ratio, request.resolution
+    duration_seconds, first_frame_data_uri = request.duration_seconds, request.first_frame_data_uri
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt[:_MINIMAX_VIDEO_PROMPT_LIMIT]}]
     if first_frame_data_uri:
         content.append({"type": "image_url", "image_url": {"url": first_frame_data_uri}, "role": "first_frame"})
@@ -444,7 +439,8 @@ async def _minimax_finish(
     return await _download_video(client, task_id, url, save_dir, "the remote source URL is time-limited")
 
 
-async def _minimax_check_video(api_key: str, api_base: str, task_id: str, save_dir: str | None) -> str:
+async def _minimax_check_video(target: GenerationTarget, task_id: str, save_dir: str | None) -> str:
+    api_key, api_base = target.api_key, target.api_base
     roots = _minimax_candidate_roots(api_base)
     headers = {"Authorization": f"Bearer {api_key}"}
     try:
@@ -500,9 +496,11 @@ def _modelark_error_detail(payload: Any) -> str | None:
 
 
 def _modelark_is_auth_failure(http_status: int, payload: Any) -> bool:
-    """A request that failed because of the key or the region it was sent to:
-    a rejected key (401 / AuthenticationError), or "model not found" - which is
-    how a host answers when the key/model belongs to a different region."""
+    """Return whether a request failed because of the key or the region it went to.
+
+    That is a rejected key (401 / AuthenticationError), or "model not found", which
+    is how a host answers when the key/model belongs to a different region.
+    """
     if http_status == 401:
         return True
     err = payload.get("error") if isinstance(payload, dict) else None
@@ -521,16 +519,19 @@ def _modelark_auth_failure_message(bases: list[str], detail: str) -> str:
 
 
 async def _modelark_post(
-    client: httpx.AsyncClient, bases: list[str], path: str, headers: dict[str, str], body: dict[str, Any], label: str
+    client: httpx.AsyncClient, bases: list[str], path: str, headers: dict[str, str], body: dict[str, Any]
 ) -> tuple[str, httpx.Response | None, Any, str | None]:
-    """POST to the first base that accepts the key. Returns (base, response,
-    payload, error); a non-None error is the finished tool result."""
+    """POST to the first base that accepts the key.
+
+    Returns (base, response, payload, error); a non-None error is the finished
+    tool result.
+    """
     resp: httpx.Response | None = None
     payload: Any = None
     base = bases[0]
     for index, candidate in enumerate(bases):
         base = candidate
-        logger.info("[%s] ModelArk POST %s%s", label, base, path)
+        logger.info("ModelArk POST %s%s", base, path)
         resp = await client.post(f"{base}{path}", headers=headers, json=body)
         try:
             payload = resp.json()
@@ -538,7 +539,7 @@ async def _modelark_post(
             return base, resp, None, f"[ERROR]: ModelArk returned a non-JSON response: {resp.status_code} {resp.text[:300]}"
         if _modelark_is_auth_failure(resp.status_code, payload):
             if index + 1 < len(bases):
-                logger.warning("[%s] ModelArk rejected the key on %s, trying %s", label, base, bases[index + 1])
+                logger.warning("ModelArk rejected the key on %s, trying %s", base, bases[index + 1])
                 continue
             return base, resp, payload, _modelark_auth_failure_message(
                 bases, _modelark_error_detail(payload) or str(resp.status_code)
@@ -548,8 +549,9 @@ async def _modelark_post(
 
 
 async def _modelark_generate_image(
-    api_key: str, api_base: str, model: str, prompt: str, aspect_ratio: str, save_dir: str | None
+    target: GenerationTarget, prompt: str, aspect_ratio: str, save_dir: str | None
 ) -> str:
+    api_key, api_base, model = target.api_key, target.api_base, target.model
     body = {
         "model": model,
         # Seedream takes a size tier rather than an aspect ratio, so the ratio is stated in the
@@ -565,7 +567,7 @@ async def _modelark_generate_image(
     try:
         async with httpx.AsyncClient(timeout=180, verify=get_requests_verify()) as client:
             _, resp, payload, error = await _modelark_post(
-                client, _modelark_candidate_bases(api_base), "/images/generations", headers, body, "generate_visual"
+                client, _modelark_candidate_bases(api_base), "/images/generations", headers, body
             )
             if error:
                 return error
@@ -596,18 +598,11 @@ async def _modelark_generate_image(
     return "Image generated successfully!\nSaved to: " + ", ".join(saved)
 
 
-async def _modelark_submit_video(
-    api_key: str,
-    api_base: str,
-    model: str,
-    prompt: str,
-    aspect_ratio: str,
-    resolution: str,
-    duration_seconds: int,
-    generate_audio: bool,
-    first_frame_data_uri: str | None,
-    save_dir: str | None,
-) -> str:
+async def _modelark_submit_video(target: GenerationTarget, request: VideoRequest, save_dir: str | None) -> str:
+    api_key, api_base, model = target.api_key, target.api_base, target.model
+    prompt, aspect_ratio, resolution = request.prompt, request.aspect_ratio, request.resolution
+    duration_seconds, first_frame_data_uri = request.duration_seconds, request.first_frame_data_uri
+    generate_audio = request.generate_audio
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     if first_frame_data_uri:
         content.append({"type": "image_url", "image_url": {"url": first_frame_data_uri}, "role": "first_frame"})
@@ -628,7 +623,7 @@ async def _modelark_submit_video(
     try:
         async with httpx.AsyncClient(timeout=60, verify=get_requests_verify()) as client:
             base, resp, payload, error = await _modelark_post(
-                client, _modelark_candidate_bases(api_base), "/contents/generations/tasks", headers, body, "generate_video"
+                client, _modelark_candidate_bases(api_base), "/contents/generations/tasks", headers, body
             )
             if error:
                 return error
@@ -685,7 +680,8 @@ async def _modelark_finish(
     return await _download_video(client, task_id, url, save_dir, "the remote source URL expires after 24h")
 
 
-async def _modelark_check_video(api_key: str, api_base: str, task_id: str, save_dir: str | None) -> str:
+async def _modelark_check_video(target: GenerationTarget, task_id: str, save_dir: str | None) -> str:
+    api_key, api_base = target.api_key, target.api_base
     bases = _modelark_candidate_bases(api_base)
     headers = {"Authorization": f"Bearer {api_key}"}
     try:

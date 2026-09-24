@@ -135,7 +135,8 @@ async def generate_visual(
     # /images/generations) are not OpenAI-compatible, so they have their own backends.
     backend = gen_toolkits.detect_backend("VISUAL_GEN_PROTOCOL", api_base)
     if backend:
-        return await gen_toolkits.generate_image(backend, api_key, api_base, model, prompt, aspect_ratio, save_dir)
+        target = gen_toolkits.GenerationTarget(backend, api_key, api_base, model)
+        return await gen_toolkits.generate_image(target, prompt, aspect_ratio, save_dir)
 
     # Not every provider/model honors aspect_ratio/resolution as separate
     # request-body fields, so the hint is also folded into the prompt text

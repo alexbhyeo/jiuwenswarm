@@ -257,10 +257,11 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
     # are not OpenRouter's /videos API, so they have their own backends.
     backend = gen_toolkits.detect_backend("VIDEO_GEN_PROTOCOL", api_base)
     if backend:
-        return await gen_toolkits.submit_video(
-            backend, api_key, api_base, model, prompt, aspect_ratio, resolution, duration_seconds,
-            generate_audio, frame_data_uri, save_dir,
+        target = gen_toolkits.GenerationTarget(backend, api_key, api_base, model)
+        request = gen_toolkits.VideoRequest(
+            prompt, aspect_ratio, resolution, duration_seconds, generate_audio, frame_data_uri
         )
+        return await gen_toolkits.submit_video(target, request, save_dir)
 
     body: dict[str, Any] = {
         "model": model,
@@ -337,7 +338,7 @@ async def check_video_status(job_id: str, save_dir: str | None = None) -> str:
     Returns:
         Path to the generated video file, or a status message if still running.
     """
-    api_key, api_base, _ = _get_video_gen_api_credentials()
+    api_key, api_base, model = _get_video_gen_api_credentials()
     if not (api_key and api_base):
         return (
             "[ERROR]: video generation is not configured - set the Video processing "
@@ -349,7 +350,8 @@ async def check_video_status(job_id: str, save_dir: str | None = None) -> str:
 
     backend = gen_toolkits.detect_backend("VIDEO_GEN_PROTOCOL", api_base)
     if backend:
-        return await gen_toolkits.check_video(backend, api_key, api_base, job_id, save_dir)
+        target = gen_toolkits.GenerationTarget(backend, api_key, api_base, model)
+        return await gen_toolkits.check_video(target, job_id, save_dir)
 
     headers = {"Authorization": f"Bearer {api_key}"}
     try:
