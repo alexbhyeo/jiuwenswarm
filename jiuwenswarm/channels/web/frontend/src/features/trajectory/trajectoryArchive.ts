@@ -10,6 +10,7 @@
  */
 
 import type { WebConnectionState } from '../../types';
+import { isTeamAgentMode } from '../planMode/wireMode';
 import type { OtlpExportTraceServiceRequest } from './shared/otlp';
 import type { TrajectoryDetailRecord } from './trajectoryClient';
 import {
@@ -38,8 +39,13 @@ export type TrajectoryArchiveRecord = Omit<TrajectoryDetailRecord, 'ingest_seq' 
   observed_time_unix_nano: string;
   trace_id: string;
   span_id: string;
+  /** Canonical mode the record ran in; null when the store never learned it. */
+  agent_mode?: string | null;
   raw_json_base64: string;
 };
+
+/** Base mode of the session an archive was exported from. */
+export type TrajectoryArchiveMode = 'agent' | 'team';
 
 export interface TrajectoryArchive {
   format: typeof TRAJECTORY_ARCHIVE_FORMAT;
@@ -271,6 +277,44 @@ export function shouldCatchUpTrajectory(
   next: WebConnectionState,
 ): boolean {
   return next === 'ready' && (previous === 'reconnecting' || previous === 'closed');
+}
+
+/**
+ * Mode of the session an archive was exported from.
+ *
+ * Read from the `agent_mode` its records carry: `team` once any record ran in
+ * a Team mode.
+ *
+ * @param archive The parsed archive.
+ * @returns The exporting session's mode, or `null` when no record states one.
+ */
+export function trajectoryArchiveMode(archive: TrajectoryArchive): TrajectoryArchiveMode | null {
+  let agentRecordSeen = false;
+  for (const record of archive.records) {
+    if (typeof record.agent_mode !== 'string' || record.agent_mode.length === 0) continue;
+    if (isTeamAgentMode(record.agent_mode)) return 'team';
+    agentRecordSeen = true;
+  }
+  return agentRecordSeen ? 'agent' : null;
+}
+
+/**
+ * Whether a replay renders as a Team.
+ *
+ * An archive keeps the mode it was exported in: a single-Agent file opened in
+ * a Team session still shows one Agent, and a Team file opened in a
+ * single-Agent session still shows its lanes. Only an archive whose records
+ * state no mode follows the session hosting the replay.
+ *
+ * @param archiveMode The mode the archive's records state.
+ * @param sessionTeamMode Whether the hosting session runs as a Team.
+ * @returns True when the replay renders as a Team.
+ */
+export function trajectoryReplayTeamMode(
+  archiveMode: TrajectoryArchiveMode | null,
+  sessionTeamMode: boolean,
+): boolean {
+  return archiveMode === null ? sessionTeamMode : archiveMode === 'team';
 }
 
 export function exitTrajectoryReplay(archive: TrajectoryArchive | null): TrajectoryReplayExit {

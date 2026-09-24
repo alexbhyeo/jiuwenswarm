@@ -149,7 +149,9 @@ import {
   isTrajectoryArchiveFormatError,
   parseTrajectoryArchive,
   shouldCatchUpTrajectory,
+  trajectoryArchiveMode,
   trajectoryArchiveView,
+  trajectoryReplayTeamMode,
 } from '../node_modules/.cache/trajectory-window/trajectoryArchive.mjs';
 import {
   formatTokenCount,
@@ -349,6 +351,26 @@ test('archive parser reports files that are not trajectory archives as format er
   for (const text of invalidFiles) {
     assert.throws(() => parseTrajectoryArchive(text), isTrajectoryArchiveFormatError);
   }
+});
+
+test('archive replay keeps the mode its records were exported in', () => {
+  const read = records => trajectoryArchiveMode(parseTrajectoryArchive(JSON.stringify(backendArchive(records))));
+  const leader = backendArchiveRecord();
+  const member = backendArchiveRecord({ spanId: hexId(2, 16) });
+  const withMode = (record, agentMode) => ({ ...record, agent_mode: agentMode });
+
+  assert.equal(read([withMode(leader, 'agent.code.normal')]), 'agent');
+  assert.equal(read([withMode(leader, 'team'), withMode(member, 'team')]), 'team');
+  assert.equal(read([withMode(leader, 'team.work.plan')]), 'team');
+  assert.equal(read([withMode(leader, 'agent.work.normal'), withMode(member, 'team')]), 'team');
+  assert.equal(read([withMode(leader, null)]), null);
+  assert.equal(read([]), null);
+
+  // A stated mode wins over the hosting session; only an unstated one follows it.
+  assert.equal(trajectoryReplayTeamMode('agent', true), false);
+  assert.equal(trajectoryReplayTeamMode('team', false), true);
+  assert.equal(trajectoryReplayTeamMode(null, true), true);
+  assert.equal(trajectoryReplayTeamMode(null, false), false);
 });
 
 test('an addressed archive rebuilds its references from its own dictionaries', () => {
