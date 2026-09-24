@@ -50,6 +50,7 @@ import {
 } from './trajectorySequences';
 import {
   exitTrajectoryReplay,
+  isTrajectoryArchiveFormatError,
   parseTrajectoryArchive,
   shouldCatchUpTrajectory,
   trajectoryArchiveView,
@@ -272,6 +273,9 @@ export const TrajectoryPanel = memo(function TrajectoryPanel({
     exitReplay: '退出复现',
     replay: (sourceSession: string) => `只读复现 · ${sourceSession}`,
     archiveTooLarge: '轨迹归档超过 128 MB，无法在浏览器中导入。',
+    archiveInvalid: (detail: string) => (
+      `无法导入：所选文件不是有效的轨迹归档（.archive.json）。详情：${detail}`
+    ),
     exportBrowserStarted: '轨迹归档下载已开始；请在浏览器下载列表确认文件。',
     exportBrowserSaved: '轨迹归档已保存到本地。',
     exportDesktopSaved: '轨迹归档已保存到本地。',
@@ -330,6 +334,10 @@ export const TrajectoryPanel = memo(function TrajectoryPanel({
     exitReplay: 'Exit replay',
     replay: (sourceSession: string) => `Read-only replay · ${sourceSession}`,
     archiveTooLarge: 'The trajectory archive exceeds the 128 MB browser import limit.',
+    archiveInvalid: (detail: string) => (
+      'Cannot import: the selected file is not a valid trajectory archive '
+      + `(.archive.json). Details: ${detail}`
+    ),
     exportBrowserStarted: 'Trajectory archive download started; confirm it in the browser downloads list.',
     exportBrowserSaved: 'Trajectory archive saved locally.',
     exportDesktopSaved: 'Trajectory archive saved locally.',
@@ -1098,8 +1106,11 @@ export const TrajectoryPanel = memo(function TrajectoryPanel({
     if (file === undefined) return;
     setArchiveError(null);
     setArchiveNotice(null);
+    if (file.size > MAX_ARCHIVE_BYTES) {
+      setArchiveError(copy.archiveTooLarge);
+      return;
+    }
     try {
-      if (file.size > MAX_ARCHIVE_BYTES) throw new Error(copy.archiveTooLarge);
       const text = await file.text();
       const archive = parseTrajectoryArchive(text);
       replayArchiveTextRef.current = text;
@@ -1109,9 +1120,13 @@ export const TrajectoryPanel = memo(function TrajectoryPanel({
       setFetchedRaw(null);
       setRawError(null);
     } catch (importError) {
-      setArchiveError(errorMessage(importError, chinese));
+      if (isTrajectoryArchiveFormatError(importError)) {
+        setArchiveError(copy.archiveInvalid(importError.message));
+      } else {
+        setArchiveError(errorMessage(importError, chinese));
+      }
     }
-  }, [chinese, copy.archiveTooLarge]);
+  }, [chinese, copy]);
 
   const exitReplay = useCallback(() => {
     const transition = exitTrajectoryReplay(replayArchive);

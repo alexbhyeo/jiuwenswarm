@@ -68,6 +68,22 @@ export interface TrajectoryReplayExit {
   catchUpLiveRevision: boolean;
 }
 
+/**
+ * The imported file is not a trajectory archive this reader can replay: not
+ * JSON, an unsupported header, a malformed record or a duplicated one. Its
+ * message names the first defect found.
+ */
+export class TrajectoryArchiveFormatError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TrajectoryArchiveFormatError';
+  }
+}
+
+export function isTrajectoryArchiveFormatError(error: unknown): error is TrajectoryArchiveFormatError {
+  return error instanceof TrajectoryArchiveFormatError;
+}
+
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -112,11 +128,11 @@ function parseRecord(value: unknown): TrajectoryArchiveRecord {
     || !validBase64(value.raw_json_base64)
     || typeof value.raw_valid !== 'boolean'
     || (value.otlp !== null && !validOtlp(value.otlp))) {
-    throw new Error('Trajectory archive contains an invalid record');
+    throw new TrajectoryArchiveFormatError('Trajectory archive contains an invalid record');
   }
   const record = value as unknown as TrajectoryArchiveRecord;
   if (record.otlp !== null && recordIdentity(record.otlp) !== record.record_id) {
-    throw new Error('Trajectory archive record identity does not match its OTLP span');
+    throw new TrajectoryArchiveFormatError('Trajectory archive record identity does not match its OTLP span');
   }
   return record;
 }
@@ -126,13 +142,13 @@ export function parseTrajectoryArchive(text: string): TrajectoryArchive {
   try {
     value = JSON.parse(text);
   } catch {
-    throw new Error('Trajectory archive is not valid JSON');
+    throw new TrajectoryArchiveFormatError('Trajectory archive is not valid JSON');
   }
   if (object(value)
     && value.format === TRAJECTORY_ARCHIVE_FORMAT
     && typeof value.archive_version === 'number'
     && value.archive_version !== TRAJECTORY_ARCHIVE_VERSION) {
-    throw new Error(
+    throw new TrajectoryArchiveFormatError(
       `Trajectory archive version ${value.archive_version} is no longer supported; `
       + 'export the session again to replay it',
     );
@@ -153,11 +169,11 @@ export function parseTrajectoryArchive(text: string): TrajectoryArchive {
     || !Number.isFinite(Date.parse(value.exported_at))
     || !Array.isArray(value.records)
     || value.records.length > MAX_TRAJECTORY_ARCHIVE_RECORDS) {
-    throw new Error('Trajectory archive format or version is not supported');
+    throw new TrajectoryArchiveFormatError('Trajectory archive format or version is not supported');
   }
   const records = value.records.map(parseRecord);
   if (new Set(records.map(record => record.record_id)).size !== records.length) {
-    throw new Error('Trajectory archive contains duplicate record identities');
+    throw new TrajectoryArchiveFormatError('Trajectory archive contains duplicate record identities');
   }
   const cache = createSequenceCache();
   absorbSequencePage(cache, {

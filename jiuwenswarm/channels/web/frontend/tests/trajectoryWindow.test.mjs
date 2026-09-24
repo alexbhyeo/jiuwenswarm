@@ -146,6 +146,7 @@ import {
 } from '../node_modules/.cache/trajectory-window/trajectoryClient.mjs';
 import {
   exitTrajectoryReplay,
+  isTrajectoryArchiveFormatError,
   parseTrajectoryArchive,
   shouldCatchUpTrajectory,
   trajectoryArchiveView,
@@ -331,6 +332,23 @@ test('archive parser refuses version 1 and archives that are not content-address
     /version 1 is no longer supported/,
   );
   assert.throws(() => parseTrajectoryArchive(JSON.stringify(inline)), /not supported/);
+});
+
+test('archive parser reports files that are not trajectory archives as format errors', () => {
+  const record = backendArchiveRecord();
+  const invalidFiles = [
+    '{"broken": \n',
+    'plain text notes\nsecond line\n',
+    '',
+    JSON.stringify({ hello: 'world' }),
+    JSON.stringify({ ...backendArchive([record]), archive_version: 1 }),
+    JSON.stringify(backendArchive([{ ...record, change_seq: 42 }])),
+    JSON.stringify(backendArchive([record, record])),
+  ];
+
+  for (const text of invalidFiles) {
+    assert.throws(() => parseTrajectoryArchive(text), isTrajectoryArchiveFormatError);
+  }
 });
 
 test('an addressed archive rebuilds its references from its own dictionaries', () => {
