@@ -88,6 +88,11 @@ import {
   groupTrajectorySubjects,
   MAIN_TRAJECTORY_SUBJECT_ID,
 } from './trajectorySubjects';
+import {
+  countTurns,
+  unrecordedTurnRanges,
+  type TrajectoryTurnRange,
+} from './trajectoryTurnGaps';
 import { TeamTrajectoryWorkspace } from './TeamTrajectoryWorkspace';
 import css from './TrajectoryPanel.module.css';
 import './client/theme.css';
@@ -156,6 +161,12 @@ function detailRecordLabel(record: TrajectoryDetailRecord): string {
     ? ''
     : ` · ${record.raw_size_bytes.toLocaleString()} B`;
   return `Raw ${shortIdentity}${size}`;
+}
+
+function formatTurnRanges(ranges: readonly TrajectoryTurnRange[], separator: string): string {
+  return ranges
+    .map(range => (range.first === range.last ? `${range.first}` : `${range.first}–${range.last}`))
+    .join(separator);
 }
 
 function errorMessage(error: unknown, chinese: boolean): string {
@@ -301,6 +312,10 @@ export const TrajectoryPanel = memo(function TrajectoryPanel({
     summary: (traces: number, spans: number) => `${traces} 条 trace · ${spans} 个 OTel Span`,
     invalid: '· 存在无法投影的原始记录',
     diagnostic: (code: string) => `轨迹数据不完整（${code}），已保留最近一次有效视图。`,
+    unrecordedTurns: (ranges: readonly TrajectoryTurnRange[]) => (
+      `第 ${formatTurnRanges(ranges, '、')} 轮对话没有轨迹记录（共 ${countTurns(ranges)} 轮），`
+      + '通常是因为当时轨迹开关尚未开启。'
+    ),
     raw: (count: number) => `原始 OTel 记录 (${count})`,
     rawLabel: '选择原始 OTel 记录',
     rawLoad: '按需加载原始记录',
@@ -368,6 +383,12 @@ export const TrajectoryPanel = memo(function TrajectoryPanel({
     summary: (traces: number, spans: number) => `${traces} traces · ${spans} OTel spans`,
     invalid: '· Some raw records could not be projected',
     diagnostic: (code: string) => `Trajectory data is incomplete (${code}); the last valid view was retained.`,
+    unrecordedTurns: (ranges: readonly TrajectoryTurnRange[]) => {
+      const total = countTurns(ranges);
+      return `${total === 1 ? 'Turn' : 'Turns'} ${formatTurnRanges(ranges, ', ')} `
+        + `${total === 1 ? 'has' : 'have'} no trajectory records, `
+        + 'usually because the trajectory switch was off at the time.';
+    },
     raw: (count: number) => `Raw OTel records (${count})`,
     rawLabel: 'Select a raw OTel record',
     rawLoad: 'Load raw record on demand',
@@ -974,6 +995,14 @@ export const TrajectoryPanel = memo(function TrajectoryPanel({
   const selectedSubjectSnapshot = selectedSubjectGroup === undefined
     ? undefined
     : subjectSnapshots.get(selectedSubjectGroup.subject.id);
+  // Only the main Agent's numbers follow the session's turn counter; other
+  // subjects and Team lanes number turns their own way, so a gap there says
+  // nothing about recording. The window holds every record of the session,
+  // so no turn is missing for any other reason.
+  const mainTurnSnapshot = teamMode ? undefined : subjectSnapshots.get(MAIN_TRAJECTORY_SUBJECT_ID);
+  const unrecordedTurns = useMemo(() => (mainTurnSnapshot === undefined
+    ? []
+    : unrecordedTurnRanges(mainTurnSnapshot.turns.map(turn => turn.turn), 0)), [mainTurnSnapshot]);
 
   const selectSubject = useCallback((subjectId: string | null) => {
     if (subjectId === null) {
@@ -1439,6 +1468,11 @@ export const TrajectoryPanel = memo(function TrajectoryPanel({
             {copy.diagnostic(diagnostic.code)}{diagnostic.count > 1 ? ` × ${diagnostic.count}` : ''}
           </p>
         ))}
+        {selectedSubjectGroup?.subject.id === MAIN_TRAJECTORY_SUBJECT_ID && unrecordedTurns.length > 0 ? (
+          <p className={css.rawNotice} role="status" data-testid="trajectory-unrecorded-turns">
+            {copy.unrecordedTurns(unrecordedTurns)}
+          </p>
+        ) : null}
         {error !== null && replayArchive === null && displayedRecords.length === 0 ? (
           <p className={`${css.rawNotice} ${css.errorText}`}>{error}</p>
         ) : null}
