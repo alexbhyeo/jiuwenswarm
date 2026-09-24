@@ -37,7 +37,7 @@ from typing import Any
 import httpx
 from openjiuwen.core.foundation.tool import tool
 
-from jiuwenswarm.agents.harness.common.tools import minimax_gen, modelark_gen
+from jiuwenswarm.agents.harness.common.tools import gen_toolkits
 from jiuwenswarm.agents.harness.common.tools.ssl_config import get_requests_verify
 from jiuwenswarm.common.utils import get_agent_workspace_dir
 
@@ -131,13 +131,11 @@ async def generate_visual(
     if not prompt:
         return "[ERROR]: prompt is required."
 
-    # MiniMax's image API is not OpenAI-compatible (own /v1/image_generation
-    # endpoint and response shape), so it has its own backend.
-    if minimax_gen.is_minimax("VISUAL_GEN_PROTOCOL", api_base):
-        return await minimax_gen.generate_image(api_key, api_base, model, prompt, aspect_ratio, save_dir)
-    # Same for BytePlus ModelArk / Volcengine Ark (Seedream): own /images/generations API.
-    if modelark_gen.is_modelark("VISUAL_GEN_PROTOCOL", api_base):
-        return await modelark_gen.generate_image(api_key, api_base, model, prompt, aspect_ratio, save_dir)
+    # MiniMax (own /v1/image_generation) and BytePlus ModelArk (Seedream, own
+    # /images/generations) are not OpenAI-compatible, so they have their own backends.
+    backend = gen_toolkits.detect_backend("VISUAL_GEN_PROTOCOL", api_base)
+    if backend:
+        return await gen_toolkits.generate_image(backend, api_key, api_base, model, prompt, aspect_ratio, save_dir)
 
     # Not every provider/model honors aspect_ratio/resolution as separate
     # request-body fields, so the hint is also folded into the prompt text
