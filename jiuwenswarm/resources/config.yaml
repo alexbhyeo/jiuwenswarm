@@ -270,7 +270,7 @@ models:
         #   client_provider=Anthropic 时此字段被忽略。
         #   若用 ${MODEL_PROVIDER}=DeepSeek/SiliconFlow/DashScope/OpenRouter 等旧别名，
         #   core 内部会归一，但方言更稳妥的做法是这里显式填 endpoint_profile。
-        endpoint_profile: ${ENDPOINT_PROFILE:-openai}
+        endpoint_profile: ${ENDPOINT_PROFILE:-deepseek}
         # HTTP 请求超时（秒）。需严格 > stream_first_chunk_timeout，确保先触发应用层流超时（可被 ModelAnomalyDetectionRail 重试）
         timeout: 360
         # 流式：等待首个分片的最大时间（秒）。放宽以兼容 reasoning/思考模型思考期的静默
@@ -335,23 +335,23 @@ models:
       model_client_config:
         api_base: ${IMAGE_GEN_API_BASE}
         api_key: ${IMAGE_GEN_API_KEY}
-        model_name: ${IMAGE_GEN_MODEL_NAME}
+        # Maintain the MiniMax model name here, independently of shell variables.
+        model_name: image-01
         client_provider: ${IMAGE_GEN_PROVIDER}
-        # 多模态生成(生图)走 DashScope SDK 必须带 endpoint_profile=dashscope，
-        # 否则 OpenAIModelClient 拒绝该操作。client_provider 仍为 OpenAI。
-        endpoint_profile: ${IMAGE_GEN_ENDPOINT_PROFILE:-dashscope}
+        endpoint_profile: ${IMAGE_GEN_ENDPOINT_PROFILE:-minimax}
         verify_ssl: true
         timeout: 1800
       model_config_obj:
         temperature: 0.95
-  # Text-to-video. Uses dedicated VIDEO_GEN_* credentials (not IMAGE_GEN_*).
+  # Text-to-video. VIDEO_GEN_API_KEY maps to DESIGN_MINIMAX_KEY in .env.
   video_gen:
       model_client_config:
         api_base: ${VIDEO_GEN_API_BASE}
         api_key: ${VIDEO_GEN_API_KEY}
-        model_name: ${VIDEO_GEN_MODEL_NAME}
+        # Maintain the MiniMax model name here, independently of shell variables.
+        model_name: MiniMax-H3-Max
         client_provider: ${VIDEO_GEN_PROVIDER}
-        endpoint_profile: ${VIDEO_GEN_ENDPOINT_PROFILE:-dashscope}
+        endpoint_profile: ${VIDEO_GEN_ENDPOINT_PROFILE:-minimax}
         verify_ssl: true
         timeout: 1800
       model_config_obj:
