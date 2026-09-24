@@ -200,6 +200,9 @@ class CronController:
         停用」是不变量。若按操作者过滤,其他属主的任务会保持 enabled,项目
         恢复后直接回到触发状态,违背「恢复后默认停止」。任务记录原样保留,
         恢复项目后默认保持停用,由用户手动重新启用。
+
+        返回的 stopped_cron_jobs 是项目下任务总数(含移除前已停用的),
+        并非本次实际停用的数量。
         """
         # Keep admission closed until the AgentServer commits hidden=True.
         self._scheduler.close_project_admission(project_id)
@@ -269,6 +272,13 @@ class CronController:
         else:
             mode = None
         model_name = validate_cron_model(params.get("model_name"))
+        model_selection = params.get("model_selection")
+        if model_selection is not None:
+            from jiuwenswarm.common.model_selection import ModelSelection
+            from jiuwenswarm.server.runtime.model_routing_registry import ModelSelectionResolver
+            selection = ModelSelection.model_validate(model_selection)
+            ModelSelectionResolver().resolve(selection)
+            model_selection = selection.model_dump()
         # mcp：会话级 MCP 选择，随 job 落库；调度执行时注入 chat.send 的
         # ``mcp`` 字段走 AgentServer 的 reconcile_session_mcp。只做类型
         # 规范化（strip/去空/去重），不校验存在性（断连后 job 应降级运行）。
@@ -357,6 +367,7 @@ class CronController:
             timeout_seconds=timeout_seconds,
             project_id=resolved_project_id,
             model_name=model_name,
+            model_selection=model_selection,
             mcp=mcp,
             app_id=app_id,
             work_mode=work_mode,

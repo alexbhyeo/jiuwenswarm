@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useAdaptiveTooltip } from '../../hooks/useAdaptiveTooltip';
 import { useChatStore, type ChatRuntime } from '../../stores/chatStore';
 import { webClient } from '../../services/webClient';
-import { getArchiveErrorCode, archivedTaskClient, findBatchSessionResult } from '../../features/workspace/archivedTaskClient';
+import { getArchiveErrorCode, getArchiveErrorFinishing, archivedTaskClient, findBatchSessionResult } from '../../features/workspace/archivedTaskClient';
 import { requestSettingsModule } from '../../features/settings/settingsNavigation';
 import { DeleteDialog } from '../dialogs/Dialogs';
 import { ProjectArchiveDialog, resolveProjectArchiveSessionCount } from './ProjectArchiveDialog';
@@ -1176,7 +1176,12 @@ export function ConversationSidebar({
   // 归档错误码只用于分支判断，用户看到的是可翻译文案
   function archiveErrorKey(error: unknown): string {
     const code = getArchiveErrorCode(error);
-    if (code === 'SESSION_BUSY') return 'multiSession.project.errors.archiveSessionBusy';
+    if (code === 'SESSION_BUSY') {
+      // swarm flow 已结束、回合收尾中：会话会自行结束，引导稍后重试
+      return getArchiveErrorFinishing(error)
+        ? 'multiSession.project.errors.archiveSessionFinishing'
+        : 'multiSession.project.errors.archiveSessionBusy';
+    }
     if (code === 'FORBIDDEN') return 'multiSession.project.errors.archiveForbidden';
     if (code === 'NOT_FOUND') return 'multiSession.project.errors.archiveNotFound';
     return 'multiSession.project.errors.archiveFailed';
@@ -1292,9 +1297,12 @@ export function ConversationSidebar({
     try {
       const projectId = deleteProjectTarget.project_id;
       if (projectAction === 'delete') {
-        await removeProject(projectId);
+        const removed = await removeProject(projectId);
+        // 项目下没有定时任务时只提示“项目已移除”；字段缺失（旧网关）沿用原文案。
         toast.open({
-          content: t('multiSession.project.projectRemovedSummary'),
+          content: removed.stopped_cron_jobs === 0
+            ? t('multiSession.project.projectRemoved')
+            : t('multiSession.project.projectRemovedSummary'),
           variant: 'success',
           actions: [{
             label: t('multiSession.project.archiveUndo'),
@@ -1336,9 +1344,12 @@ export function ConversationSidebar({
           });
         }
         if (failedItems.length > 0) {
-          const runningItems = failedItems.filter((item) => item.code === 'SESSION_BUSY');
-          const failureContent = runningItems.length === failedItems.length
-            ? t('multiSession.project.archiveBatchFailedRunning', { count: runningItems.length })
+          const busyItems = failedItems.filter((item) => item.code === 'SESSION_BUSY');
+          const finishingItems = busyItems.filter((item) => item.finishing === true);
+          const failureContent = finishingItems.length === failedItems.length
+            ? t('multiSession.project.archiveBatchFailedFinishing', { count: finishingItems.length })
+            : busyItems.length === failedItems.length
+            ? t('multiSession.project.archiveBatchFailedRunning', { count: busyItems.length })
             : t('multiSession.project.archiveBatchFailed', { count: failedItems.length });
           openArchiveFailureToast(failureContent);
         }
