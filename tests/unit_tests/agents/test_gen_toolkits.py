@@ -59,6 +59,20 @@ def _no_sleep(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(gt.asyncio, "sleep", instant)
 
 
+# Thin adapters that keep the call sites below flat: (backend, api_key, api_base, model, ...).
+def _image(backend, api_key, api_base, model, prompt, aspect_ratio, save_dir):
+    return gt.generate_image(gt.GenerationTarget(backend, api_key, api_base, model), prompt, aspect_ratio, save_dir)
+
+
+def _submit(backend, api_key, api_base, model, prompt, ratio, resolution, seconds, audio, first_frame, save_dir):
+    request = gt.VideoRequest(prompt, ratio, resolution, seconds, audio, first_frame)
+    return gt.submit_video(gt.GenerationTarget(backend, api_key, api_base, model), request, save_dir)
+
+
+def _check(backend, api_key, api_base, task_id, save_dir):
+    return gt.check_video(gt.GenerationTarget(backend, api_key, api_base, ""), task_id, save_dir)
+
+
 def _body(request: httpx.Request) -> dict[str, Any]:
     return json.loads(request.content.decode())
 
@@ -94,8 +108,8 @@ def test_detect_backend(monkeypatch, protocol, base, expected):
 
 @pytest.mark.asyncio
 async def test_unknown_backend_is_an_error():
-    assert "unknown generation backend" in await gt.generate_image("nope", "k", "b", "m", "p", "1:1", None)
-    assert "unknown generation backend" in await gt.check_video("nope", "k", "b", "id", None)
+    assert "unknown generation backend" in await _image("nope", "k", "b", "m", "p", "1:1", None)
+    assert "unknown generation backend" in await _check("nope", "k", "b", "id", None)
 
 
 # --------------------------------------------------------------------------- #
@@ -111,7 +125,7 @@ def _mm_ok_image() -> httpx.Response:
 @pytest.mark.asyncio
 async def test_minimax_image_success(monkeypatch, tmp_path):
     seen = _patch_client(monkeypatch, lambda r: _mm_ok_image())
-    result = await gt.generate_image("minimax", "sk-x", _MM_GLOBAL, "image-01", "a fox", "16:9", str(tmp_path))
+    result = await _image("minimax", "sk-x", _MM_GLOBAL, "image-01", "a fox", "16:9", str(tmp_path))
     saved = _saved_path(result)
     assert saved.parent == tmp_path and saved.read_bytes() == _PNG
     assert str(seen[0].url) == "https://api.minimax.io/v1/image_generation"
@@ -125,12 +139,12 @@ async def test_minimax_region_failover_and_bad_key(monkeypatch, tmp_path):
         return httpx.Response(200, json=_MM_BAD_KEY) if request.url.host == "api.minimaxi.com" else _mm_ok_image()
 
     seen = _patch_client(monkeypatch, china_rejects)
-    result = await gt.generate_image("minimax", "k", _MM_CHINA, "image-01", "p", "1:1", str(tmp_path))
+    result = await _image("minimax", "k", _MM_CHINA, "image-01", "p", "1:1", str(tmp_path))
     assert result.startswith("Image generated successfully!")
     assert [r.url.host for r in seen] == ["api.minimaxi.com", "api.minimax.io"]
 
     seen = _patch_client(monkeypatch, lambda r: httpx.Response(200, json=_MM_BAD_KEY))
-    result = await gt.generate_image("minimax", "k", _MM_GLOBAL, "image-01", "p", "1:1", str(tmp_path))
+    result = await _image("minimax", "k", _MM_GLOBAL, "image-01", "p", "1:1", str(tmp_path))
     assert result.startswith("[ERROR]: MiniMax rejected the API key") and len(seen) == 2
 
 
@@ -158,7 +172,7 @@ def _mm_video_handler(statuses: list[str], *, error: Any = None) -> Handler:
 @pytest.mark.asyncio
 async def test_minimax_video_submit_poll_download(monkeypatch, tmp_path):
     seen = _patch_client(monkeypatch, _mm_video_handler(["queued", "running", "succeeded"]))
-    result = await gt.submit_video(
+    result = await _submit(
         "minimax", "k", _MM_GLOBAL, "MiniMax-H3", "fox", "9:16", "1080p", 99, True, "data:image/png;base64,AAA", str(tmp_path)
     )
     assert result.startswith("Video generated successfully!")
@@ -172,20 +186,20 @@ async def test_minimax_video_submit_poll_download(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_minimax_video_pending_and_failed(monkeypatch, tmp_path):
     _patch_client(monkeypatch, _mm_video_handler(["running"]))
-    pending = await gt.submit_video("minimax", "k", _MM_GLOBAL, "m", "p", "16:9", "720p", 5, False, None, str(tmp_path))
+    pending = await _submit("minimax", "k", _MM_GLOBAL, "m", "p", "16:9", "720p", 5, False, None, str(tmp_path))
     assert "Video job T1 submitted and still running" in pending and "job_id=T1" in pending
 
     _patch_client(monkeypatch, _mm_video_handler(["failed"], error={"code": "E9", "message": "content policy"}))
-    failed = await gt.submit_video("minimax", "k", _MM_GLOBAL, "m", "p", "16:9", "720p", 5, False, None, str(tmp_path))
+    failed = await _submit("minimax", "k", _MM_GLOBAL, "m", "p", "16:9", "720p", 5, False, None, str(tmp_path))
     assert failed == "[ERROR]: video job T1 ended with status failed: E9 content policy"
 
 
 @pytest.mark.asyncio
 async def test_minimax_check_video(monkeypatch, tmp_path):
     _patch_client(monkeypatch, _mm_video_handler(["running"]))
-    assert await gt.check_video("minimax", "k", _MM_GLOBAL, "T1", str(tmp_path)) == "Video job T1 is still running."
+    assert await _check("minimax", "k", _MM_GLOBAL, "T1", str(tmp_path)) == "Video job T1 is still running."
     _patch_client(monkeypatch, _mm_video_handler(["succeeded"]))
-    result = await gt.check_video("minimax", "k", _MM_GLOBAL, "T1", str(tmp_path))
+    result = await _check("minimax", "k", _MM_GLOBAL, "T1", str(tmp_path))
     assert result.startswith("Video generated successfully!") and (tmp_path / "video_T1.mp4").exists()
 
 
@@ -197,7 +211,7 @@ async def test_minimax_check_video(monkeypatch, tmp_path):
 async def test_modelark_image_success_always_requests_2k(monkeypatch, tmp_path):
     data = [{"b64_json": base64.b64encode(_PNG).decode()}]
     seen = _patch_client(monkeypatch, lambda r: httpx.Response(200, json={"data": data}))
-    result = await gt.generate_image("modelark", "ak", _ARK_INTL, "seedream-5-0-260128", "a fox", "16:9", str(tmp_path))
+    result = await _image("modelark", "ak", _ARK_INTL, "seedream-5-0-260128", "a fox", "16:9", str(tmp_path))
     assert _saved_path(result).read_bytes() == _PNG
     assert str(seen[0].url) == f"{_ARK_INTL}/images/generations"
     body = _body(seen[0])
@@ -208,7 +222,7 @@ async def test_modelark_image_success_always_requests_2k(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_modelark_model_not_activated_gives_account_hint_without_retry(monkeypatch, tmp_path):
     seen = _patch_client(monkeypatch, lambda r: _ark_error("ModelNotOpen", "not activated"))
-    result = await gt.generate_image("modelark", "k", _ARK_INTL, "dola-seedream-5-0-pro-260628", "p", "1:1", str(tmp_path))
+    result = await _image("modelark", "k", _ARK_INTL, "dola-seedream-5-0-pro-260628", "p", "1:1", str(tmp_path))
     assert result.startswith("[ERROR]: ModelArk image generation failed: ModelNotOpen")
     assert "Activate this model" in result and "report it to the user" in result
     assert len(seen) == 1
@@ -224,11 +238,11 @@ async def test_modelark_region_failover_and_bad_key(monkeypatch, tmp_path):
         return _ark_error("AuthenticationError", "bad key", 401)
 
     seen = _patch_client(monkeypatch, only_intl_works)
-    result = await gt.generate_image("modelark", "k", _ARK_CN, "m", "p", "1:1", str(tmp_path))
+    result = await _image("modelark", "k", _ARK_CN, "m", "p", "1:1", str(tmp_path))
     assert result.startswith("Image generated successfully!") and len(seen) == 2
 
     seen = _patch_client(monkeypatch, lambda r: _ark_error("AuthenticationError", "bad", 401))
-    result = await gt.generate_image("modelark", "k", _ARK_INTL, "m", "p", "1:1", str(tmp_path))
+    result = await _image("modelark", "k", _ARK_INTL, "m", "p", "1:1", str(tmp_path))
     assert result.startswith("[ERROR]: ModelArk request failed on every region host tried") and len(seen) == 3
 
 
@@ -256,7 +270,7 @@ def _ark_video_handler(statuses: list[str], *, error: Any = None) -> Handler:
 @pytest.mark.asyncio
 async def test_modelark_video_submit_poll_download(monkeypatch, tmp_path):
     seen = _patch_client(monkeypatch, _ark_video_handler(["queued", "running", "succeeded"]))
-    result = await gt.submit_video(
+    result = await _submit(
         "modelark", "ak", _ARK_INTL, "dreamina-seedance-2-5-260628", "fox", "16:9", "1080p", 5, True,
         "data:image/png;base64,AAA", str(tmp_path),
     )
@@ -272,7 +286,7 @@ async def test_modelark_video_submit_poll_download(monkeypatch, tmp_path):
 async def test_modelark_video_usage_limit_gets_account_hint(monkeypatch, tmp_path):
     error = {"code": "SetLimitExceeded", "message": "usage limit reached"}
     _patch_client(monkeypatch, _ark_video_handler(["failed"], error=error))
-    result = await gt.submit_video("modelark", "k", _ARK_INTL, "m", "p", "16:9", "720p", 5, False, None, str(tmp_path))
+    result = await _submit("modelark", "k", _ARK_INTL, "m", "p", "16:9", "720p", 5, False, None, str(tmp_path))
     assert "ended with status failed: SetLimitExceeded" in result
     assert "Safe Experience Mode" in result and "report it to the user" in result
 
@@ -280,9 +294,9 @@ async def test_modelark_video_usage_limit_gets_account_hint(monkeypatch, tmp_pat
 @pytest.mark.asyncio
 async def test_modelark_video_pending_tells_agent_not_to_shell_sleep(monkeypatch, tmp_path):
     _patch_client(monkeypatch, _ark_video_handler(["running"]))
-    pending = await gt.submit_video("modelark", "k", _ARK_INTL, "m", "p", "16:9", "720p", 5, False, None, str(tmp_path))
+    pending = await _submit("modelark", "k", _ARK_INTL, "m", "p", "16:9", "720p", 5, False, None, str(tmp_path))
     assert "Video job cgt-1 submitted and still running" in pending and "do not use shell sleep" in pending
-    check = await gt.check_video("modelark", "k", _ARK_INTL, "cgt-1", str(tmp_path))
+    check = await _check("modelark", "k", _ARK_INTL, "cgt-1", str(tmp_path))
     assert "still running" in check and "do not use shell sleep" in check
     # a 5 s Seedance clip takes ~2.5 min to render; the in-call wait must outlast that
     assert gt._MODELARK_MAX_POLL_SECONDS >= 240
