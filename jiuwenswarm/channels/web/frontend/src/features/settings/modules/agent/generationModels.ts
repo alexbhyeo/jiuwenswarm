@@ -13,12 +13,12 @@
 //   图片和文字的模型）。
 // - ModelArk（BytePlus / 火山引擎 Ark）：协议固定为 modelark，走 Ark 自己的接口
 //   （Seedream → /images/generations；Seedance → /contents/generations/tasks），后端由
-//   modelark_gen.py 处理。模型 ID 取自 Ark 的 /api/v3/models（域名分区域：国际
+//   gen_toolkits.py 处理。模型 ID 取自 Ark 的 /api/v3/models（域名分区域：国际
 //   ark.ap-southeast.bytepluses.com / 国内 ark.cn-beijing.volces.com），模型需要在
 //   Ark 控制台里先开通，否则调用会返回 ModelNotOpen。
 // - MiniMax：协议固定为 minimax，走 MiniMax 自己的原生接口
 //   （image-01 → /v1/image_generation；MiniMax-H3 → /v2/video_generation），后端由
-//   minimax_gen.py 处理。MiniMax 的密钥分区域（国际 api.minimax.io / 国内
+//   gen_toolkits.py 处理。MiniMax 的密钥分区域（国际 api.minimax.io / 国内
 //   api.minimaxi.com），所以这个厂商的 API 地址需要用户能改。
 
 export type GenerationSlot = 'video_gen' | 'visual_gen';

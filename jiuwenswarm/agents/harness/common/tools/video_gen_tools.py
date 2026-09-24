@@ -34,7 +34,7 @@ from typing import Any
 import httpx
 from openjiuwen.core.foundation.tool import tool
 
-from jiuwenswarm.agents.harness.common.tools import minimax_gen, modelark_gen
+from jiuwenswarm.agents.harness.common.tools import gen_toolkits
 from jiuwenswarm.agents.harness.common.tools.ssl_config import get_requests_verify
 from jiuwenswarm.common.utils import get_agent_workspace_dir
 
@@ -253,16 +253,12 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
         if err:
             return err
 
-    # MiniMax's video API (v2 task API, `content` array) is not OpenRouter's
-    # /videos API, so it has its own backend.
-    if minimax_gen.is_minimax("VIDEO_GEN_PROTOCOL", api_base):
-        return await minimax_gen.submit_video(
-            api_key, api_base, model, prompt, aspect_ratio, resolution, duration_seconds, frame_data_uri, save_dir
-        )
-    # Same for BytePlus ModelArk / Volcengine Ark (Seedance): own contents/generations/tasks API.
-    if modelark_gen.is_modelark("VIDEO_GEN_PROTOCOL", api_base):
-        return await modelark_gen.submit_video(
-            api_key, api_base, model, prompt, aspect_ratio, resolution, duration_seconds,
+    # MiniMax (v2 task API) and BytePlus ModelArk (Seedance, contents/generations/tasks)
+    # are not OpenRouter's /videos API, so they have their own backends.
+    backend = gen_toolkits.detect_backend("VIDEO_GEN_PROTOCOL", api_base)
+    if backend:
+        return await gen_toolkits.submit_video(
+            backend, api_key, api_base, model, prompt, aspect_ratio, resolution, duration_seconds,
             generate_audio, frame_data_uri, save_dir,
         )
 
@@ -351,10 +347,9 @@ async def check_video_status(job_id: str, save_dir: str | None = None) -> str:
     if not job_id:
         return "[ERROR]: job_id is required."
 
-    if minimax_gen.is_minimax("VIDEO_GEN_PROTOCOL", api_base):
-        return await minimax_gen.check_video(api_key, api_base, job_id, save_dir)
-    if modelark_gen.is_modelark("VIDEO_GEN_PROTOCOL", api_base):
-        return await modelark_gen.check_video(api_key, api_base, job_id, save_dir)
+    backend = gen_toolkits.detect_backend("VIDEO_GEN_PROTOCOL", api_base)
+    if backend:
+        return await gen_toolkits.check_video(backend, api_key, api_base, job_id, save_dir)
 
     headers = {"Authorization": f"Bearer {api_key}"}
     try:
