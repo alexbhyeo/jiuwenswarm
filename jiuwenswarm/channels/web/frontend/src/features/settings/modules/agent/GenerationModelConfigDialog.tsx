@@ -41,6 +41,8 @@ const EMPTY_VENDOR_CATALOG: VendorPresetMap = {
   custom_api: [],
 };
 
+const OPENAI_PROTOCOL = 'openai';
+
 type SaveConfig = (updates: Record<string, string>, operation: string) => Promise<unknown>;
 
 type GenerationDraft = {
@@ -191,6 +193,8 @@ export function GenerationModelConfigDialog({
     const match = findStoredPreset(catalog, readConfig(config, slot, 'provider'), current.api_base);
     if (!match) return;
     const next = { ...current, vendor_selection: vendorSelectionKey(match.plan, match.vendor_key) };
+    // 没有专属目录的厂商只支持 OpenAI 协议，旧配置里残留的其他协议值一并纠正。
+    if (!generationVendor(match.vendor_key, match.api_base)) next.protocol = OPENAI_PROTOCOL;
     if (form.hasUnsavedChanges()) form.setValues({ vendor_selection: next.vendor_selection });
     else form.reset(next);
   }, [catalog, config, form, slot]);
@@ -212,21 +216,26 @@ export function GenerationModelConfigDialog({
       form.setFieldValue('vendor_selection', selection);
       return;
     }
-    const defaults = defaultGeneration(slot, generationVendor(nextPreset.vendor_key, nextPreset.api_base));
+    const nextVendor = generationVendor(nextPreset.vendor_key, nextPreset.api_base);
+    const defaults = defaultGeneration(slot, nextVendor);
     form.setValues({
       vendor_selection: selection,
       api_base: nextPreset.api_base,
       api_key: '',
-      protocol: defaults.protocol,
+      protocol: nextVendor ? defaults.protocol : OPENAI_PROTOCOL,
       model_name: defaults.model,
     });
     form.clearValidate(['vendor_selection', 'api_base', 'api_key', 'model_name', 'protocol']);
   };
 
-  const protocolOptions = withCurrentOption(catalogProtocols(slot, vendor, catalogAll), values.protocol).map((value) => ({
-    value,
-    label: value,
-  }));
+  // MiniMax / OpenRouter / 火山引擎 / 自定义 按各自目录给出协议；其余厂商只有 OpenAI 一种协议。
+  const openAIOnly = !custom && Boolean(values.vendor_selection) && vendor === undefined;
+  const protocolOptions = openAIOnly
+    ? [{ value: OPENAI_PROTOCOL, label: t('settingsPanel.models.protocols.openai') }]
+    : withCurrentOption(catalogProtocols(slot, vendor, catalogAll), values.protocol).map((value) => ({
+        value,
+        label: value,
+      }));
   const modelOptions = catalogApplies
     ? generationModelOptions(slot, vendor, catalogAll, values.protocol, values.model_name)
     : [];
