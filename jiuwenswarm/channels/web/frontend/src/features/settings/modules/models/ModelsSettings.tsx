@@ -14,7 +14,7 @@ import { SettingsConfirmDialog, SettingsSection } from '../../components';
 import { useSettingsServices } from '../../services/SettingsServicesProvider';
 import { ModelDialog } from './ModelDialog';
 import { getVendorLabel } from './ModelProviderSelect';
-import { displayModelProtocol, parseVendorCatalog } from './modelAdapters';
+import { displayModelProtocol, filterGenerationOnlyPresets, parseVendorCatalog } from './modelAdapters';
 import { useSessionStore } from '../../../../stores/sessionStore';
 import {
   getEditableModels,
@@ -139,7 +139,7 @@ export function ModelsSettings() {
     try {
       const payload = await request<{ vendors?: unknown }>('vendors.list');
       if (currentRequestId !== catalogRequestId.current) return;
-      setCatalog(parseVendorCatalog(payload.vendors));
+      setCatalog(filterGenerationOnlyPresets(parseVendorCatalog(payload.vendors)));
     } catch (error) {
       if (currentRequestId === catalogRequestId.current) {
         setCatalogError(

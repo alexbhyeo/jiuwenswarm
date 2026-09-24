@@ -163,8 +163,12 @@ export function buildMediaModelConfigUpdates(
   enableOnSave: boolean,
 ): Record<string, string> {
   const preset = findVendorPreset(catalog, draft.vendor_selection);
+  // Self-deployed vendors (api_base_editable) have no fixed URL: keep the
+  // user-edited draft value instead of overwriting it with the preset hint.
+  const apiBase =
+    preset && !preset.api_base_editable ? mediaApiBaseForPreset(preset, modality) : draft.api_base;
   return {
-    [`${modality}_api_base`]: (preset ? mediaApiBaseForPreset(preset, modality) : draft.api_base).trim(),
+    [`${modality}_api_base`]: apiBase.trim(),
     [`${modality}_api_key`]: draft.api_key.trim(),
     [`${modality}_model`]: draft.model_name.trim(),
     [`${modality}_provider`]: ((preset?.client_provider ?? draft.provider.trim()) || 'OpenAI').trim(),

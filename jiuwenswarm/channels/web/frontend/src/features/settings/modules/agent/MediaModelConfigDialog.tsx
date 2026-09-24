@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { VendorFetchModelsResult, VendorPreset, VendorPresetMap } from '../../../../types';
-import { Button } from '../../../../components/ui';
+import { Button, Input } from '../../../../components/ui';
 import { Form, FormDialog, useForm, useFormState, type FormItem } from '../../../../components/form';
 import { SettingsConfirmDialog } from '../../components';
 import { useSettingsFormDialogClose } from '../../services/useSettingsFormDialogClose';
@@ -51,6 +51,9 @@ function getPresetStatusKey(
   modality: MediaCapabilityModality,
 ): string | undefined {
   if (!preset) return undefined;
+  // Self-deployed vendors (e.g. vLLM-Omni): the model name may stay empty and
+  // is resolved from the server's /models at generation time.
+  if (preset.model_name_optional) return 'settingsPanel.models.modelNameOptionalServedHint';
   if (usesDedicatedMediaModels(preset, modality)) {
     const presetStatusKey = isGenerationModality(modality)
       ? modality === 'image_gen'
@@ -83,6 +86,10 @@ function validateMediaModelDraft(
   const apiBase = value.api_base.trim();
   const apiKey = value.api_key.trim();
   const modelName = value.model_name.trim();
+  const preset =
+    value.vendor_selection && value.vendor_selection !== CUSTOM_VENDOR_SELECTION
+      ? findVendorPreset(catalog, value.vendor_selection)
+      : undefined;
 
   if (!value.vendor_selection) {
     errors.vendor_selection = t('settingsPanel.models.validation.vendorSelectionRequired');
@@ -97,11 +104,15 @@ function validateMediaModelDraft(
   else if (apiBase.length > 512) errors.api_base = t('config.modelList.apiBaseTooLong');
   else if (!/^https?:\/\//i.test(apiBase)) errors.api_base = t('config.modelList.apiBaseUrlInvalid');
 
-  if (!apiKey) errors.api_key = t('config.modelList.apiKeyRequired');
-  else if (apiKey.length > 2048) errors.api_key = t('settingsPanel.models.apiKeyTooLong');
+  // Self-deployed vendors (e.g. vLLM-Omni) may run without auth.
+  if (!apiKey) {
+    if (!preset?.api_key_optional) errors.api_key = t('config.modelList.apiKeyRequired');
+  } else if (apiKey.length > 2048) errors.api_key = t('settingsPanel.models.apiKeyTooLong');
 
-  if (!modelName) errors.model_name = t('config.modelList.modelNameRequired');
-  else if (modelName.length > 100) errors.model_name = t('config.modelList.modelNameTooLong');
+  // Self-deployed vendors resolve the served model via /models when unset.
+  if (!modelName) {
+    if (!preset?.model_name_optional) errors.model_name = t('config.modelList.modelNameRequired');
+  } else if (modelName.length > 100) errors.model_name = t('config.modelList.modelNameTooLong');
 
   return errors;
 }
@@ -204,6 +215,10 @@ export function MediaModelConfigDialog({
     const current = form.getValues();
     const currentPreset = findVendorPreset(modalityCatalog, current.vendor_selection);
     if (!currentPreset) return;
+    // Optional-model vendors (e.g. vLLM-Omni) use a free-form input, never a dropdown.
+    if (currentPreset.model_name_optional && current.model_input_mode !== 'manual') {
+      form.setFieldValue('model_input_mode', 'manual');
+    }
     const presetOptions = normalizeModelOptions(mediaModelOptionsForPreset(currentPreset, modality));
     const nextOptions =
       current.model_name.trim() && !presetOptions.includes(current.model_name.trim())
@@ -249,8 +264,12 @@ export function MediaModelConfigDialog({
       vendor_selection: selection,
       api_base: mediaApiBaseForPreset(nextPreset, modality),
       api_key: '',
-      model_name: selectProviderDefaultModel(mediaDefaultModelForPreset(nextPreset, modality), nextOptions),
-      model_input_mode: 'options',
+      // Optional-model vendors (e.g. vLLM-Omni) default to empty: the served
+      // model is resolved from GET {api_base}/models at generation time.
+      model_name: nextPreset.model_name_optional
+        ? ''
+        : selectProviderDefaultModel(mediaDefaultModelForPreset(nextPreset, modality), nextOptions),
+      model_input_mode: nextPreset.model_name_optional ? 'manual' : 'options',
       provider: nextPreset.client_provider,
       endpoint_profile: nextPreset.endpoint_profile ?? '',
       vendor_key: nextPreset.vendor_key,
@@ -365,7 +384,9 @@ export function MediaModelConfigDialog({
     },
   ];
 
-  if (custom) {
+  // Self-deployed vendors (api_base_editable, e.g. vLLM-Omni) have no fixed
+  // URL: show the api_base input even though a preset is selected.
+  if (custom || preset?.api_base_editable) {
     formItems.push({
       name: 'api_base',
       label: t('settingsPanel.fields.api_base.title'),
@@ -378,14 +399,36 @@ export function MediaModelConfigDialog({
   formItems.push({
     name: 'api_key',
     label: t('settingsPanel.models.apiKeyLabel'),
-    component: 'input',
-    type: 'password',
-    required: true,
-    passwordVisibilityLabels: {
-      show: t('settingsPanel.common.showValue'),
-      hide: t('settingsPanel.common.hideValue'),
-    },
-    placeholder: t('settingsPanel.fields.api_key.placeholder'),
+    component: 'custom',
+    required: !preset?.api_key_optional,
+    render: ({ id, value, error, disabled: fieldDisabled, onChange, onBlur }) => (
+      <div className="settings-media-api-key-field" data-testid="settings-media-api-key-field">
+        <Input
+          id={id}
+          type="password"
+          value={String(value ?? '')}
+          placeholder={t('settingsPanel.fields.api_key.placeholder')}
+          passwordVisibilityLabels={{
+            show: t('settingsPanel.common.showValue'),
+            hide: t('settingsPanel.common.hideValue'),
+          }}
+          disabled={fieldDisabled}
+          invalid={Boolean(error)}
+          data-testid="settings-media-api-key-input"
+          onBlur={onBlur}
+          onChange={onChange}
+        />
+        {preset?.api_key_optional ? (
+          <p
+            className="settings-model-name-field__status"
+            role="status"
+            data-testid="settings-media-api-key-optional-hint"
+          >
+            {t('settingsPanel.models.apiKeyOptionalHint')}
+          </p>
+        ) : null}
+      </div>
+    ),
     onChange: (_apiKey, nextValues) => {
       invalidateFetchState();
       fetchedModelLists.current.clear();
@@ -400,7 +443,7 @@ export function MediaModelConfigDialog({
     name: 'model_name',
     label: t('settingsPanel.models.model'),
     component: 'custom',
-    required: true,
+    required: !preset?.model_name_optional,
     render: ({ id, value, error, disabled: fieldDisabled, onChange, onBlur }) => (
       <ModelNameField
         id={id}

@@ -104,6 +104,14 @@ class VendorPreset:
     image_gen_default_model: str | None = None
     image_gen_model_options: tuple[str, ...] | None = None
     image_gen_api_base: str | None = None
+    # 仅用于生成类(图片/视频)模态的厂商(如本地部署 vLLM-Omni),不出现在聊天模型选择里。
+    generation_only: bool = False
+    # 自部署厂商没有固定 URL:设置页把 api_base 展示为可编辑字段,由用户填写。
+    api_base_editable: bool = False
+    # 本地部署可不要求 API key。
+    api_key_optional: bool = False
+    # 模型名可选:留空时后端以 GET {api_base}/models 拿到的实际服役模型为准。
+    model_name_optional: bool = False
 
 
 # core 的 ProviderType.Anthropic 枚举值。当用户在前端选 "Anthropic 格式" 时,
@@ -169,6 +177,17 @@ VOLCENGINE_IMAGE_GEN_MODELS: tuple[str, ...] = (
     "doubao-seedream-5-0-pro-260628",
     "doubao-seedream-4-5-251128",
     "doubao-seedream-4-0-250828",
+)
+
+# vLLM-Omni self-deployed generation.
+# There is no fixed URL — the default below is only a hint and the user edits it in Settings.
+# The model name is optional, the backend discovers the served model via ``GET {api_base}/models`` before each generation request.
+# But it still needs to declare stub model lists for it to show in the model selection dropdown.
+VLLM_OMNI_DEFAULT_API_BASE = "http://127.0.0.1:8091/v1"
+VLLM_OMNI_VIDEO_GEN_MODELS: tuple[str, ...] = ("MiniMaxAI/MiniMax-H3",)
+VLLM_OMNI_IMAGE_GEN_MODELS: tuple[str, ...] = (
+    "Qwen/Qwen-Image-2512",
+    "black-forest-labs/FLUX.2-dev",
 )
 
 
@@ -594,6 +613,28 @@ _PRESETS: list[VendorPreset] = [
         models_needs_key=True,
         anthropic_base="https://api.xiaomimimo.com/anthropic",
     ),
+    # 本地/自部署 vLLM-Omni 推理服务(视频 MiniMax-H3 等 + 图像 Qwen-Image 等)。
+    # 无聊天模型,只在图片/视频生成设置中出现;api_base 由用户填写,key/model 可留空。
+    VendorPreset(
+        vendor_key="vllm-omni",
+        display_name="vLLM-Omni",
+        plan=PlanKind.CUSTOM_API,
+        client_provider="OpenAI",
+        api_base=VLLM_OMNI_DEFAULT_API_BASE,
+        endpoint_profile="vllm-omni",
+        default_model="",
+        model_options=(),
+        icon_key="vllm-omni",
+        # 生成请求前由后端直接查询 {api_base}/models,不走 vendors.fetch_models。
+        models_endpoint=None,
+        models_needs_key=False,
+        generation_only=True,
+        api_base_editable=True,
+        api_key_optional=True,
+        model_name_optional=True,
+        video_gen_model_options=VLLM_OMNI_VIDEO_GEN_MODELS,
+        image_gen_model_options=VLLM_OMNI_IMAGE_GEN_MODELS,
+    ),
 ]
 
 
@@ -712,6 +753,10 @@ def to_frontend_payload() -> dict[str, Any]:
                 "image_gen_default_model": p.image_gen_default_model,
                 "image_gen_model_options": list(p.image_gen_model_options or ()),
                 "image_gen_api_base": p.image_gen_api_base,
+                "generation_only": p.generation_only,
+                "api_base_editable": p.api_base_editable,
+                "api_key_optional": p.api_key_optional,
+                "model_name_optional": p.model_name_optional,
             }
             for p in _BY_PLAN[plan]
         ]

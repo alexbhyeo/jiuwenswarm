@@ -143,6 +143,14 @@ export interface VendorPreset {
   image_gen_default_model?: string | null;
   image_gen_model_options?: string[];
   image_gen_api_base?: string | null;
+  /** 仅用于生成类(图片/视频)模态的厂商(如本地部署 vLLM-Omni),不出现在聊天模型选择中。 */
+  generation_only?: boolean;
+  /** 自部署厂商没有固定 URL:api_base 在设置页中可编辑,由用户填写。 */
+  api_base_editable?: boolean;
+  /** 本地部署可不要求 API key。 */
+  api_key_optional?: boolean;
+  /** 模型名可选:留空时后端以 GET {api_base}/models 拿到的实际服役模型为准。 */
+  model_name_optional?: boolean;
 }
 
 export type VendorPresetMap = Record<ModelPlan, VendorPreset[]> & {

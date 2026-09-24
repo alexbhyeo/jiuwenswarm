@@ -38,6 +38,7 @@ import {
   mediaModelOptionsForPreset,
   shouldFetchRemoteMediaModels,
 } from '../node_modules/.cache/settings-refactor/modules/agent/mediaModelConfig.js';
+import { filterGenerationOnlyPresets } from '../node_modules/.cache/settings-refactor/modules/models/modelAdapters.js';
 
 const root = new URL('../', import.meta.url);
 const source = (path) => readFileSync(new URL(path, root), 'utf8');
@@ -1292,10 +1293,39 @@ test('media capability configuration and hot-apply state use exact fields', () =
   ]);
   assert.equal(isMediaCapabilityConfigured(values, 'vision'), true);
   assert.equal(isMediaCapabilityConfigured({ ...values, vision_provider: '  ' }, 'vision'), false);
+  // Self-deployed vendors may leave key/model empty; api_base + provider are enough.
+  assert.equal(
+    isMediaCapabilityConfigured(
+      {
+        video_gen_api_base: 'http://127.0.0.1:8091/v1',
+        video_gen_api_key: '',
+        video_gen_model: '',
+        video_gen_provider: 'OpenAI',
+        video_gen_vendor_key: 'vllm-omni',
+      },
+      'video_gen',
+    ),
+    true,
+  );
+  assert.equal(
+    isMediaCapabilityConfigured(
+      {
+        video_gen_api_base: '',
+        video_gen_api_key: '',
+        video_gen_model: '',
+        video_gen_provider: 'OpenAI',
+      },
+      'video_gen',
+    ),
+    false,
+  );
   assert.equal(wasConfigAppliedWithoutRestart({ applied_without_restart: true }), true);
   assert.equal(wasConfigAppliedWithoutRestart({ applied_without_restart: false }), false);
   assert.equal(wasConfigAppliedWithoutRestart({}), false);
   assert.doesNotMatch(agentSettings, /settingsActionIcons\.delete/);
+  assert.match(agentSettings, /defaultModelDisplay/);
+  assert.match(agentSettings, /mediaCapabilityConfiguredModel/);
+  assert.match(agentSettings, /getVendorLabel/);
 });
 
 test('search dialogs keep the shared required-field contract', () => {
@@ -1472,6 +1502,89 @@ test('video generation reuses dedicated vendor presets instead of the chat model
     ).custom_api.map((preset) => preset.vendor_key),
     ['alibaba'],
   );
+});
+
+test('generation-only vLLM-Omni preset is chat-hidden, media-visible, and keeps the user api_base', () => {
+  const vllmOmni = {
+    vendor_key: 'vllm-omni',
+    display_name: 'vLLM-Omni',
+    plan: 'custom_api',
+    client_provider: 'OpenAI',
+    api_base: 'http://127.0.0.1:8091/v1',
+    endpoint_profile: 'vllm-omni',
+    default_model: '',
+    model_options: [],
+    icon_key: 'vllm-omni',
+    models_endpoint: null,
+    models_needs_key: false,
+    generation_only: true,
+    api_base_editable: true,
+    api_key_optional: true,
+    model_name_optional: true,
+    video_gen_model_options: ['MiniMaxAI/MiniMax-H3'],
+    image_gen_model_options: ['Qwen/Qwen-Image-2512', 'black-forest-labs/FLUX.2-dev'],
+  };
+  const alibaba = {
+    vendor_key: 'alibaba',
+    display_name: 'Alibaba',
+    plan: 'custom_api',
+    client_provider: 'OpenAI',
+    api_base: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    endpoint_profile: 'dashscope',
+    default_model: 'qwen3.8-max',
+    model_options: ['qwen3.8-max'],
+    icon_key: 'qwen',
+    models_endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/models',
+    models_needs_key: true,
+    video_gen_model_options: ['wan2.6-t2v'],
+    image_gen_model_options: ['wanx-v1'],
+  };
+  const catalog = {
+    reasoning: null,
+    token_plan: [],
+    coding_plan: [],
+    custom_api: [alibaba, vllmOmni],
+  };
+
+  // Chat model selection must not list the generation-only vendor.
+  assert.deepEqual(
+    filterGenerationOnlyPresets(catalog).custom_api.map((preset) => preset.vendor_key),
+    ['alibaba'],
+  );
+  // The media dialog still offers it (it publishes dedicated generation models).
+  assert.deepEqual(
+    filterVendorCatalogForModality(catalog, 'video_gen').custom_api.map((preset) => preset.vendor_key),
+    ['alibaba', 'vllm-omni'],
+  );
+  assert.deepEqual(
+    filterVendorCatalogForModality(catalog, 'image_gen').custom_api.map((preset) => preset.vendor_key),
+    ['alibaba', 'vllm-omni'],
+  );
+
+  // Saving keeps the user-edited api_base (self-deployed URL) instead of the
+  // preset hint, and persists empty key/model untouched.
+  const updates = buildMediaModelConfigUpdates(
+    {
+      vendor_selection: 'custom_api:vllm-omni',
+      protocol: 'openai',
+      api_base: 'http://192.168.1.10:8091/v1',
+      api_key: '',
+      model_name: '',
+      model_input_mode: 'manual',
+      provider: 'OpenAI',
+      endpoint_profile: 'vllm-omni',
+      vendor_key: 'vllm-omni',
+      plan: 'custom_api',
+    },
+    { reasoning: null, token_plan: [], coding_plan: [], custom_api: [vllmOmni] },
+    'video_gen',
+    true,
+  );
+  assert.equal(updates.video_gen_api_base, 'http://192.168.1.10:8091/v1');
+  assert.equal(updates.video_gen_api_key, '');
+  assert.equal(updates.video_gen_model, '');
+  assert.equal(updates.video_gen_vendor_key, 'vllm-omni');
+  assert.equal(updates.video_gen_endpoint_profile, 'vllm-omni');
 });
 
 test('legacy multimodal configuration remains custom while provider selections persist exact catalog identity', () => {

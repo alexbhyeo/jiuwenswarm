@@ -11,12 +11,15 @@ import { useSettingsServices } from '../../services/SettingsServicesProvider';
 import { useSettingsSource } from '../../services/SettingsSourceProvider';
 import {
   isMediaCapabilityConfigured,
+  mediaCapabilityConfiguredModel,
   mediaCapabilityEnabledField,
   mediaCapabilityPersistenceFields,
+  mediaCapabilityVendorKey,
   wasConfigAppliedWithoutRestart,
   type MediaCapabilityModality,
 } from './mediaCapabilities';
 import { MediaModelConfigDialog } from './MediaModelConfigDialog';
+import { getVendorLabel } from '../models/ModelProviderSelect';
 import './AgentSettings.css';
 
 const keyFields = ['jina_api_key', 'bocha_api_key', 'perplexity_api_key', 'serper_api_key'] as const;
@@ -219,6 +222,16 @@ export function AgentMediaSettings({ disabled }: SettingsCustomItemProps) {
         const capabilityFields = [...mediaCapabilityPersistenceFields(modality), enabledField];
         const busy = capabilityFields.some((field) => savingKeys.has(field));
         const name = t(`settingsPanel.agent.${modality}`);
+        const configuredModel = mediaCapabilityConfiguredModel(values, modality);
+        const vendorKey = mediaCapabilityVendorKey(values, modality);
+        const modelDisplay = configuredModel
+          ? configuredModel
+          : t('settingsPanel.agent.defaultModelDisplay', {
+              provider: vendorKey
+                ? getVendorLabel(vendorKey, t)
+                : String(values[`${modality}_provider`] ?? '').trim() ||
+                  t('settingsPanel.models.customVendor'),
+            });
         return (
           <SettingRow
             key={modality}
@@ -228,7 +241,7 @@ export function AgentMediaSettings({ disabled }: SettingsCustomItemProps) {
             subSettings={
               configured ? (
                 <div className="settings-agent-media__model-card">
-                  <strong className="settings-agent-media__model-name">{String(values[`${modality}_model`])}</strong>
+                  <strong className="settings-agent-media__model-name">{modelDisplay}</strong>
                   <div className="settings-agent-media__actions">
                     <Button
                       variant="quiet"

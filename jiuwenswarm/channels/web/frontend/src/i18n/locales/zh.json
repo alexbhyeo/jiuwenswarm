@@ -333,6 +333,7 @@
         "minimax": "MiniMax",
         "mimo": "小米 MiMo",
         "openrouter": "OpenRouter",
+        "vllm-omni": "vLLM-Omni（本地部署）",
         "volcengine": "火山引擎",
         "zhipu": "智谱 GLM",
         "unrecognized": "未识别提供商（{{vendor}}）"
@@ -381,6 +382,8 @@
       "apiKeyTooLong": "API Key 过长，请控制在 2048 字符以内",
       "videoGenPresetModels": "正在展示该厂商的视频生成预设模型，不会使用对话模型列表",
       "imageGenPresetModels": "正在展示该厂商的图片生成预设模型，不会使用对话模型列表",
+      "modelNameOptionalServedHint": "可留空：将自动使用该 API 地址当前部署的模型",
+      "apiKeyOptionalHint": "可留空：接口不需要密钥时可省略",
       "validation": {
         "modelProviderRequired": "模型提供商为必填项",
         "vendorSelectionRequired": "请选择模型提供商；历史配置缺少套餐信息时需要重新选择提供商套餐",
@@ -415,6 +418,7 @@
       "video_genConfigTitle": "配置视频生成模型",
       "toggleCapability": "切换{{name}}能力",
       "saveAndEnable": "保存并启用",
+      "defaultModelDisplay": "{{provider}} - 默认模型",
       "savedRestartRequired": "配置已保存，重启后生效。",
       "team": "智能体团队"
     },

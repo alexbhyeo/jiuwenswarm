@@ -333,6 +333,7 @@
         "minimax": "MiniMax",
         "mimo": "Xiaomi MiMo",
         "openrouter": "OpenRouter",
+        "vllm-omni": "vLLM-Omni (self-deployed)",
         "volcengine": "Volcengine",
         "zhipu": "Zhipu GLM",
         "unrecognized": "Unrecognized provider ({{vendor}})"
@@ -381,6 +382,8 @@
       "apiKeyTooLong": "API key is too long. Use 2048 characters or fewer",
       "videoGenPresetModels": "Showing this provider's video-generation presets; the chat model list is not used",
       "imageGenPresetModels": "Showing this provider's image-generation presets; the chat model list is not used",
+      "modelNameOptionalServedHint": "Optional. Leave empty to use the model currently served by the API URL",
+      "apiKeyOptionalHint": "Optional. Leave empty if the API does not require authentication",
       "validation": {
         "modelProviderRequired": "Model provider is required",
         "vendorSelectionRequired": "Select a model provider. Re-select the provider plan for a historical configuration that has no plan data",
@@ -415,6 +418,7 @@
       "video_genConfigTitle": "Configure video generation model",
       "toggleCapability": "Toggle {{name}} capability",
       "saveAndEnable": "Save and enable",
+      "defaultModelDisplay": "{{provider}} - default model",
       "savedRestartRequired": "Saved; takes effect after restart.",
       "team": "Agent team"
     },

@@ -135,6 +135,17 @@ export function findVendorPreset(catalog: VendorPresetMap, selection: string): V
   );
 }
 
+/** Chat model selection must not list generation-only vendors (e.g. self-deployed vLLM-Omni). */
+export function filterGenerationOnlyPresets(catalog: VendorPresetMap): VendorPresetMap {
+  const filterPlan = (presets: VendorPreset[]) => presets.filter((preset) => !preset.generation_only);
+  return {
+    reasoning: catalog.reasoning,
+    token_plan: filterPlan(catalog.token_plan),
+    coding_plan: filterPlan(catalog.coding_plan),
+    custom_api: filterPlan(catalog.custom_api),
+  };
+}
+
 /** Normalize the draft after capabilities load or the model changes; never persist it here. */
 export function reconcileModelReasoning(draft: ModelDraft, catalog: VendorPresetMap): ModelDraft {
   const capability = resolveModelReasoning(

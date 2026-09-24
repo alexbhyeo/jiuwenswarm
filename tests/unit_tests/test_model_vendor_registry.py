@@ -93,6 +93,23 @@ def test_frontend_payload_exposes_minimax_and_volcengine_video_gen_presets() -> 
     assert volcengine["image_gen_api_base"] == "https://ark.cn-beijing.volces.com/api/v3"
 
 
+def test_frontend_payload_exposes_vllm_omni_generation_only_preset() -> None:
+    payload = to_frontend_payload()
+    vllm_omni = next(item for item in payload["custom_api"] if item["vendor_key"] == "vllm-omni")
+
+    assert vllm_omni["endpoint_profile"] == "vllm-omni"
+    assert vllm_omni["icon_key"] == "vllm-omni"
+    assert vllm_omni["generation_only"] is True
+    assert vllm_omni["api_base_editable"] is True
+    assert vllm_omni["api_key_optional"] is True
+    assert vllm_omni["model_name_optional"] is True
+    assert vllm_omni["default_model"] == ""
+    assert vllm_omni["model_options"] == []
+    # Don't assert video_gen_model_options or image_gen_model_options because they are stubs and not actually used.
+    # Generation-only presets never appear in the chat-model token plan.
+    assert all(item["vendor_key"] != "vllm-omni" for item in payload["token_plan"])
+
+
 def test_modelarts_presets_use_current_v2_model_ids() -> None:
     token_plan = get_preset("maas", PlanKind.TOKEN_PLAN)
     custom_api = get_preset("maas", PlanKind.CUSTOM_API)
