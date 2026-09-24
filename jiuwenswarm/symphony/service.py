@@ -47,7 +47,7 @@ CapabilityPackager = core_symphony.flow.CapabilityPackager
 LLMPackageReviewAgent = core_symphony.LLMPackageReviewAgent
 PackageReviewGate = core_symphony.flow.PackageReviewGate
 SymphonyFlowEngine = core_symphony.flow.SymphonyFlowEngine
-SymphonyFlowConfig = core_symphony.orchestration.config.SymphonyFlowConfig
+CoreSymphonyFlowConfig = core_symphony.orchestration.SymphonyFlowConfig
 SkillPackAdapter = core_symphony.flow.SkillPackAdapter
 VERDICT_APPROVED = core_symphony.flow.VERDICT_APPROVED
 
@@ -107,9 +107,6 @@ def _candidate_question(
             "",
             "**包含的技能及执行顺序**",
             structure,
-            "",
-            "**使用记录**",
-            f"执行 {candidate.execution_count} 次，成功 {candidate.success_count} 次",
         )
     )
     return {
@@ -666,9 +663,10 @@ class SwarmSymphonyService:
             flow_cfg = config.evolution.flow
             flow_engine = SymphonyFlowEngine(
                 flow_dir,
-                config=SymphonyFlowConfig(
-                    min_successes=flow_cfg.min_successes,
-                    min_pack_success_rate=flow_cfg.min_pack_success_rate,
+                config=CoreSymphonyFlowConfig(
+                    min_successes_candidate=flow_cfg.min_successes,
+                    min_successes_verified=flow_cfg.min_successes,
+                    min_pack_success_rate_verified=flow_cfg.min_pack_success_rate,
                 ),
                 llm_client=model,
                 gate=PackageReviewGate(LLMPackageReviewAgent(model)),

@@ -22,7 +22,6 @@ DEFAULT_BUILD_MIN_EDGE_CONFIDENCE = 0.5
 
 DEFAULT_SYMPHONY_ENABLED = False
 DEFAULT_EVOLUTION_ENABLED = False
-
 DEFAULT_FLOW_MIN_SUCCESSES = 3
 DEFAULT_FLOW_MIN_PACK_SUCCESS_RATE = 0.8
 
@@ -69,12 +68,7 @@ class SymphonyBuildConfig:
 
 @dataclass(frozen=True)
 class SymphonyFlowDistillConfig:
-    """Core Flow 蒸馏参数（对称 openjiuwen SymphonyFlowConfig 的子集）。
-
-    enabled 为沉淀总开关（Core Graph-Evolution Rail / Flow 引擎启停）；
-    分组签名 = 轨迹全部成功边，确定性不漂移；判级只看 pack 级统计
-    （min_successes + min_pack_success_rate），达标即 verified。
-    """
+    """Core Graph-Evolution Rail 和 Flow 引擎的启停及沉淀阈值。"""
 
     enabled: bool = DEFAULT_EVOLUTION_ENABLED
     min_successes: int = DEFAULT_FLOW_MIN_SUCCESSES
@@ -128,10 +122,13 @@ def symphony_config_from_dict(raw: dict[str, Any] | None) -> SymphonyConfig:
     build = _mapping(data.get("build"))
     evolution = _mapping(data.get("evolution"))
     flow_cfg = _mapping(evolution.get("flow"))
+    flow_enabled = flow_cfg.get("enabled")
+    if flow_enabled is None:
+        flow_enabled = evolution.get("enabled")
     orchestration = _mapping(data.get("orchestration"))
 
     return SymphonyConfig(
-        enabled=_bool(data.get("enabled"), DEFAULT_SYMPHONY_ENABLED),
+        enabled=resolve_symphony_enabled(data.get("enabled")),
         paths=SymphonyPathsConfig(
             skills_root=_resolve_path(
                 paths.get("skills_root"),
@@ -186,10 +183,7 @@ def symphony_config_from_dict(raw: dict[str, Any] | None) -> SymphonyConfig:
         evolution=SymphonyEvolutionConfig(
             flow=SymphonyFlowDistillConfig(
                 # enabled 移到 flow 下；旧配置（enabled 在 evolution 层）向后兼容
-                enabled=_bool(
-                    flow_cfg.get("enabled", evolution.get("enabled")),
-                    DEFAULT_EVOLUTION_ENABLED,
-                ),
+                enabled=resolve_symphony_evolution_enabled(flow_enabled),
                 min_successes=_positive_int(
                     flow_cfg.get("min_successes"),
                     DEFAULT_FLOW_MIN_SUCCESSES,
@@ -279,6 +273,18 @@ def _bool(value: Any, default: bool) -> bool:
     if text in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def resolve_symphony_enabled(value: Any) -> bool:
+    """Resolve an explicit switch or inherit the code default for ``null``."""
+
+    return _bool(value, DEFAULT_SYMPHONY_ENABLED)
+
+
+def resolve_symphony_evolution_enabled(value: Any) -> bool:
+    """Resolve an explicit evolution switch or inherit the code default."""
+
+    return _bool(value, DEFAULT_EVOLUTION_ENABLED)
 
 
 def _orchestration_mode(value: Any, default: str) -> str:
