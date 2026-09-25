@@ -46,6 +46,12 @@ import { FileIcon } from '../FileIcon';
 import { getEvolutionPillLabel } from './evolution-status';
 import { webRequest } from '../../services/webClient';
 import {
+  selectSessionAssets,
+  useSessionAssetsStore,
+  withAssetReferenceNote,
+} from '../../features/sessionAssets/sessionAssets';
+import { useSessionArtifacts } from '../ArtifactsPanel';
+import {
   parseSlashLine,
   findSlashCommand,
   type SlashCommand,
@@ -948,10 +954,55 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       }));
   }, [teamMembers]);
 
+  // 任务素材：和团队成员一起出现在 @ 候选里（名称就是引用名）。
+  const sessionAssets = useSessionAssetsStore(selectSessionAssets(activeSessionId));
+  const sessionAssetsRef = useRef(sessionAssets);
+  sessionAssetsRef.current = sessionAssets;
+  const assetSuggestionItems = useMemo(
+    () => sessionAssets.map((asset) => ({ id: asset.name, label: asset.name, status: asset.kind })),
+    [sessionAssets],
+  );
+  const mentionCandidates = useMemo(
+    () => [...mentionableMembers, ...assetSuggestionItems],
+    [assetSuggestionItems, mentionableMembers],
+  );
+
+  // 任务素材同步：进入会话时拉取；上传完成的附件、agent 产出的文件按路径登记（后端按路径去重，
+  // 没有文件的路径会被忽略，所以用 attemptedAssetPaths 避免对同一路径反复请求）。
+  const sessionArtifacts = useSessionArtifacts();
+  const attemptedAssetPaths = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    attemptedAssetPaths.current = new Set();
+    if (!canPersistAttachments || !activeSessionId) return;
+    void useSessionAssetsStore
+      .getState()
+      .refresh(activeSessionId)
+      .catch((error) => console.error('Failed to load session assets:', error));
+  }, [activeSessionId, canPersistAttachments]);
+  useEffect(() => {
+    if (!canPersistAttachments || !activeSessionId) return;
+    const pending: Array<{ path: string; source: 'upload' | 'generated' }> = [];
+    const consider = (path: string | undefined, source: 'upload' | 'generated') => {
+      const value = path?.trim();
+      if (!value || attemptedAssetPaths.current.has(value)) return;
+      attemptedAssetPaths.current.add(value);
+      pending.push({ path: value, source });
+    };
+    attachments.forEach((attachment) => {
+      if (attachment.status === 'ready') consider(pickString(attachment.persistedMediaItem?.path), 'upload');
+    });
+    sessionArtifacts.forEach((artifact) => consider(artifact.path, 'generated'));
+    if (pending.length === 0) return;
+    void useSessionAssetsStore
+      .getState()
+      .register(activeSessionId, pending)
+      .catch((error) => console.error('Failed to register session assets:', error));
+  }, [activeSessionId, attachments, canPersistAttachments, sessionArtifacts]);
+
   const composerSuggestionItems = useMemo(() => {
     const items = getComposerSuggestionItems(
       composerSuggestion,
-      mentionableMembers,
+      mentionCandidates,
       getWebSlashCommandsForMode(slashCommands, mode),
       slashSkills,
       isTeamMode,
@@ -961,7 +1012,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
         ? { ...item, disabled: true, disabledReason: t('plan.toolbarUnavailableGoal') }
         : item,
     );
-  }, [composerSuggestion, hasUnfinishedGoal, isTeamMode, mentionableMembers, mode, slashCommands, slashSkills, t]);
+  }, [composerSuggestion, hasUnfinishedGoal, isTeamMode, mentionCandidates, mode, slashCommands, slashSkills, t]);
 
   const selectableComposerSuggestionIndices = useMemo(
     () =>
@@ -1891,7 +1942,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
         attachment.status === 'ready' &&
         (Boolean(pickString(attachment.persistedMediaItem?.path)) || Boolean(attachment.base64Data)),
     );
-    const trimmed = buildSubmitContent(trimmedBase, readyDrafts);
+    const trimmed = withAssetReferenceNote(buildSubmitContent(trimmedBase, readyDrafts), sessionAssetsRef.current);
     const hasReadyMedia = readyMediaItems.length > 0;
     // Block only when there is neither text nor a ready attachment to send.
     if ((!trimmedBase && !hasReadyMedia) || hasUploadingAttachments || hasAttachmentErrors) return;
@@ -2043,12 +2094,12 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       return;
     }
     // slash 指令不依赖团队成员，即便没有可 @ 的成员也照常弹出
-    if (trigger.kind !== 'slash' && mentionableMembers.length === 0) {
+    if (trigger.kind !== 'slash' && mentionCandidates.length === 0) {
       setComposerSuggestion(null);
       return;
     }
     setComposerSuggestion(trigger);
-  }, [getCurrentComposerTrigger, mentionableMembers.length]);
+  }, [getCurrentComposerTrigger, mentionCandidates.length]);
 
   const setRangeStartByTextOffset = useCallback((range: Range, root: HTMLElement, offset: number) => {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);

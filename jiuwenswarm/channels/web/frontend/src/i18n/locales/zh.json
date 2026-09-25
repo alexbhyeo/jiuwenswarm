@@ -719,6 +719,14 @@
       }
     }
   },
+  "sessionAssets": {
+    "title": "素材",
+    "empty": "上传文件或生成内容后，会出现在这里；可以重命名，并在输入框里用 @名称 引用。",
+    "rename": "重命名",
+    "save": "保存",
+    "cancel": "取消",
+    "referHint": "输入框里输入 @ 引用"
+  },
   "artifacts": {
     "title": "所有产物",
     "tab": "产物",

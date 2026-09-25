@@ -50,6 +50,7 @@ from jiuwenswarm.server.runtime.agent_adapter.statusline_setup_agent import (
 from jiuwenswarm.server.runtime.session.session_manager import SessionManager
 from jiuwenswarm.server.runtime.skill.skill_manager import SkillManager, SkillRpcError
 from jiuwenswarm.server.runtime.director.director_manager import DirectorManager
+from jiuwenswarm.server.runtime.session_assets import get_session_asset_manager
 from jiuwenswarm.server.runtime.skill.archive_store import ARCHIVE_DIRNAME
 from jiuwenswarm.server.utils.utils import is_team_params
 from jiuwenswarm.common.config import get_config
@@ -964,6 +965,12 @@ _DIRECTOR_ROUTES: dict[ReqMethod, str] = {
     ReqMethod.DIRECTOR_LAB_CANVAS_SAVE: "handle_director_lab_canvas_save",
 }
 
+_SESSION_ASSET_ROUTES: dict[ReqMethod, str] = {
+    ReqMethod.SESSION_ASSETS_LIST: "handle_session_assets_list",
+    ReqMethod.SESSION_ASSETS_REGISTER: "handle_session_assets_register",
+    ReqMethod.SESSION_ASSETS_RENAME: "handle_session_assets_rename",
+}
+
 # Handlers that persist a Skill visibility document; every one of them must
 # trigger a rail refresh so a grant or a revocation takes effect on the next
 # turn. The read-only ``get`` deliberately stays out.
@@ -1154,6 +1161,7 @@ class JiuWenSwarm:
         self._sdk_name: str | None = None
         self._skill_manager = SkillManager(workspace_dir=str(get_agent_workspace_dir()))
         self._director_manager = DirectorManager()
+        self._session_asset_manager = get_session_asset_manager()
         self._session_manager = SessionManager()
         self._heartbeat_service: Any | None = None
         self._permissions_changed_notifier: Callable[[], None] | None = None
@@ -2156,6 +2164,37 @@ class JiuWenSwarm:
             metadata=request.metadata,
         )
 
+    async def _handle_session_asset_request(self, request: AgentRequest) -> AgentResponse | None:
+        """Handle task-asset requests (session.assets.*); None means not one of them."""
+        if request.req_method not in _SESSION_ASSET_ROUTES:
+            return None
+        handler = getattr(self._session_asset_manager, _SESSION_ASSET_ROUTES[request.req_method])
+        params = dict(request.params) if isinstance(request.params, dict) else {}
+        params.setdefault("session_id", request.session_id or "")
+        try:
+            payload = await handler(params)
+        except Exception as exc:
+            code = getattr(exc, "code", None)
+            if not isinstance(code, str):
+                logger.error("[JiuWenSwarm] session.assets request failed: method=%s error=%s", request.req_method, exc)
+            err_payload: dict = {"error": str(exc), "message": str(exc)}
+            if isinstance(code, str) and code.strip():
+                err_payload["code"] = code.strip()
+            return AgentResponse(
+                request_id=request.request_id,
+                channel_id=request.channel_id,
+                ok=False,
+                payload=err_payload,
+                metadata=request.metadata,
+            )
+        return AgentResponse(
+            request_id=request.request_id,
+            channel_id=request.channel_id,
+            ok=True,
+            payload=payload,
+            metadata=request.metadata,
+        )
+
     async def _handle_director_request(self, request: AgentRequest) -> AgentResponse | None:
         """处理导演模式（Director Mode）相关请求，返回 None 表示不是该类请求.
 
@@ -2955,6 +2994,10 @@ class JiuWenSwarm:
         director_response = await self._handle_director_request(request)
         if director_response is not None:
             return director_response
+
+        session_asset_response = await self._handle_session_asset_request(request)
+        if session_asset_response is not None:
+            return session_asset_response
 
         plugins_response = await self._handle_plugins_request(request)
         if plugins_response is not None:
