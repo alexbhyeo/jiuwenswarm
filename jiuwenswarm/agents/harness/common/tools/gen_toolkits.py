@@ -139,6 +139,7 @@ class VideoRequest:
     generate_audio: bool = False
     first_frame_data_uri: str | None = None
 
+
 def _host_of(api_base: str) -> str:
     return re.sub(r"^https?://", "", api_base.strip(), flags=re.IGNORECASE).split("/", 1)[0].split(":", 1)[0]
 
@@ -318,10 +319,15 @@ async def _minimax_generate_image(
                 try:
                     payload = resp.json()
                 except ValueError:
-                    return f"[ERROR]: MiniMax image generation returned a non-JSON response: {resp.status_code} {resp.text[:300]}"
+                    return (
+                        "[ERROR]: MiniMax image generation returned a non-JSON response: "
+                        f"{resp.status_code} {resp.text[:300]}"
+                    )
                 if _minimax_is_auth_failure(resp.status_code, payload):
                     if index + 1 < len(roots):
-                        logger.warning("[generate_visual] MiniMax rejected the key on %s, trying %s", root, roots[index + 1])
+                        logger.warning(
+                            "[generate_visual] MiniMax rejected the key on %s, trying %s", root, roots[index + 1]
+                        )
                         continue
                     return _minimax_auth_failure_message(roots, _minimax_base_error(payload) or str(resp.status_code))
                 break
@@ -383,15 +389,21 @@ async def _minimax_submit_video(target: GenerationTarget, request: VideoRequest,
                 try:
                     payload = submit.json()
                 except ValueError:
-                    return f"[ERROR]: MiniMax video submit returned a non-JSON response: {submit.status_code} {submit.text[:300]}"
+                    return (
+                        "[ERROR]: MiniMax video submit returned a non-JSON response: "
+                        f"{submit.status_code} {submit.text[:300]}"
+                    )
                 if _minimax_is_auth_failure(submit.status_code, payload):
                     if index + 1 < len(roots):
-                        logger.warning("[generate_video] MiniMax rejected the key on %s, trying %s", root, roots[index + 1])
+                        logger.warning(
+                            "[generate_video] MiniMax rejected the key on %s, trying %s", root, roots[index + 1]
+                        )
                         continue
                     return _minimax_auth_failure_message(roots, _minimax_base_error(payload) or str(submit.status_code))
                 break
             if submit.status_code not in (200, 201, 202) or _minimax_base_error(payload):
-                return f"[ERROR]: MiniMax video generation submit failed: {_minimax_base_error(payload) or submit.status_code}"
+                detail = _minimax_base_error(payload) or submit.status_code
+                return f"[ERROR]: MiniMax video generation submit failed: {detail}"
             task_id = str(payload.get("task_id") or ((payload.get("task") or {}).get("id")) or "")
             if not task_id:
                 return f"[ERROR]: MiniMax video submit returned no task id: {str(payload)[:300]}"
@@ -423,7 +435,8 @@ async def _minimax_query(
     if _minimax_is_auth_failure(resp.status_code, payload):
         return "auth_failed", {}, _minimax_base_error(payload) or str(resp.status_code)
     if resp.status_code != 200 or _minimax_base_error(payload):
-        return "", {}, f"[ERROR]: polling MiniMax video job {task_id} failed: {_minimax_base_error(payload) or resp.status_code}"
+        detail = _minimax_base_error(payload) or resp.status_code
+        return "", {}, f"[ERROR]: polling MiniMax video job {task_id} failed: {detail}"
     task = payload.get("task") or {}
     return str(task.get("status") or "").lower(), task, None
 
@@ -433,7 +446,10 @@ async def _minimax_finish(
 ) -> str:
     if status != "succeeded":
         error = task.get("error") or {}
-        detail = f"{error.get('code', '')} {error.get('message', '')}".strip() if isinstance(error, dict) else str(error)
+        if isinstance(error, dict):
+            detail = f"{error.get('code', '')} {error.get('message', '')}".strip()
+        else:
+            detail = str(error)
         return f"[ERROR]: video job {task_id} ended with status {status}: {detail or 'no error detail provided'}"
     url = ((task.get("content") or {}).get("url")) or ""
     return await _download_video(client, task_id, url, save_dir, "the remote source URL is time-limited")
@@ -536,7 +552,9 @@ async def _modelark_post(
         try:
             payload = resp.json()
         except ValueError:
-            return base, resp, None, f"[ERROR]: ModelArk returned a non-JSON response: {resp.status_code} {resp.text[:300]}"
+            return base, resp, None, (
+                f"[ERROR]: ModelArk returned a non-JSON response: {resp.status_code} {resp.text[:300]}"
+            )
         if _modelark_is_auth_failure(resp.status_code, payload):
             if index + 1 < len(bases):
                 logger.warning("ModelArk rejected the key on %s, trying %s", base, bases[index + 1])
@@ -582,7 +600,10 @@ async def _modelark_generate_image(
                 elif item.get("url"):
                     download = await client.get(item["url"], follow_redirects=True, timeout=120)
                     if download.status_code != 200:
-                        return f"[ERROR]: ModelArk image was generated but downloading it failed: {download.status_code}"
+                        return (
+                            "[ERROR]: ModelArk image was generated but downloading it failed: "
+                            f"{download.status_code}"
+                        )
                     data = download.content
                 else:
                     continue
@@ -661,7 +682,8 @@ async def _modelark_query(
     if _modelark_is_auth_failure(resp.status_code, payload):
         return "auth_failed", {}, _modelark_error_detail(payload) or str(resp.status_code)
     if resp.status_code != 200:
-        return "", {}, f"[ERROR]: polling ModelArk video job {task_id} failed: {_modelark_error_detail(payload) or resp.status_code}"
+        detail = _modelark_error_detail(payload) or resp.status_code
+        return "", {}, f"[ERROR]: polling ModelArk video job {task_id} failed: {detail}"
     return str(payload.get("status") or "").lower(), payload, None
 
 
