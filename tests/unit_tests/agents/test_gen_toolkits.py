@@ -173,7 +173,8 @@ def _mm_video_handler(statuses: list[str], *, error: Any = None) -> Handler:
 async def test_minimax_video_submit_poll_download(monkeypatch, tmp_path):
     seen = _patch_client(monkeypatch, _mm_video_handler(["queued", "running", "succeeded"]))
     result = await _submit(
-        "minimax", "k", _MM_GLOBAL, "MiniMax-H3", "fox", "9:16", "1080p", 99, True, "data:image/png;base64,AAA", str(tmp_path)
+        "minimax", "k", _MM_GLOBAL, "MiniMax-H3", "fox", "9:16", "1080p", 99, True,
+        "data:image/png;base64,AAA", str(tmp_path),
     )
     assert result.startswith("Video generated successfully!")
     assert (tmp_path / "video_T1.mp4").read_bytes() == _MP4
