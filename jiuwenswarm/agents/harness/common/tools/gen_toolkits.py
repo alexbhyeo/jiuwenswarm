@@ -343,11 +343,11 @@ async def _minimax_generate_image(
     for index, encoded in enumerate(images):
         try:
             data = base64.b64decode(encoded)
-            target = _save_path(save_dir, "generated_images", _image_filename(index, data))
-            target.write_bytes(data)
+            dest = _save_path(save_dir, "generated_images", _image_filename(index, data))
+            dest.write_bytes(data)
         except (OSError, ValueError) as exc:
             return f"[ERROR]: failed to save MiniMax image: {exc!r}"
-        saved.append(str(target))
+        saved.append(str(dest))
     return "Image generated successfully!\nSaved to: " + ", ".join(saved)
 
 
@@ -607,9 +607,9 @@ async def _modelark_generate_image(
                     data = download.content
                 else:
                     continue
-                target = _save_path(save_dir, "generated_images", _image_filename(index, data))
-                target.write_bytes(data)
-                saved.append(str(target))
+                dest = _save_path(save_dir, "generated_images", _image_filename(index, data))
+                dest.write_bytes(data)
+                saved.append(str(dest))
     except httpx.HTTPError as exc:
         return f"[ERROR]: ModelArk image generation request failed: {exc!r}"
     except (OSError, ValueError) as exc:
