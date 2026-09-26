@@ -72,8 +72,12 @@ export function validateAssetName(input: string): { name: string } | { error: 'i
   return { name };
 }
 
+/** 路径归一化：忽略大小写和斜杠方向（Windows 路径），可以直接当 Map/Set 的 key 用。 */
+export function normalizePath(value: string): string {
+  return value.split(String.fromCharCode(92)).join('/').toLowerCase();
+}
+
 /** 路径比较：忽略大小写和斜杠方向（Windows 路径）。 */
 export function samePath(a: string, b: string): boolean {
-  const norm = (value: string) => value.split(String.fromCharCode(92)).join('/').toLowerCase();
-  return norm(a) === norm(b);
+  return normalizePath(a) === normalizePath(b);
 }

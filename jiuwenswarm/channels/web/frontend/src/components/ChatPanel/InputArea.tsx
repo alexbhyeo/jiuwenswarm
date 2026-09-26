@@ -48,6 +48,7 @@ import { webRequest } from '../../services/webClient';
 import { selectSessionAssets, useSessionAssetsStore } from '../../features/sessionAssets/sessionAssets';
 import {
   assetKindFromMime,
+  normalizePath,
   samePath,
   stemFilename,
   validateAssetName,
@@ -215,6 +216,9 @@ type ComposerSuggestionItem = {
   takesArgs?: boolean;
   disabled?: boolean;
   disabledReason?: string;
+  /** 素材候选项的真实缩略图（本地 blob URL）；没有时列表退回按文件类型显示通用图标，
+   *  不再借团队成员那套"按 id 生成"的头像（那套头像和上传的文件内容毫无关系）。 */
+  previewUrl?: string;
 };
 
 function getComposerSuggestionItems(
@@ -964,9 +968,27 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
   const sessionAssets = useSessionAssetsStore(selectSessionAssets(activeSessionId));
   const sessionAssetsRef = useRef(sessionAssets);
   sessionAssetsRef.current = sessionAssets;
+  // 已经登记到后端的素材只有文件系统绝对路径，浏览器没法直接当图片 src 加载；如果这个素材
+  // 恰好还挂在本地的附件卡片上（刚上传完，最常见的情况），就借它现成的本地预览图，而不是干脆
+  // 不显示缩略图——不能不假思索地借团队成员那套"按 id 生成"的头像，那和文件内容毫无关系。
+  const previewUrlByPath = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const attachment of attachments) {
+      const path = pickString(attachment.persistedMediaItem?.path);
+      if (path && attachment.previewUrl) map.set(normalizePath(path), attachment.previewUrl);
+    }
+    return map;
+  }, [attachments]);
   const assetSuggestionItems = useMemo(
-    () => sessionAssets.map((asset) => ({ id: asset.name, label: asset.name, status: asset.kind, itemKind: 'asset' as const })),
-    [sessionAssets],
+    () =>
+      sessionAssets.map((asset) => ({
+        id: asset.name,
+        label: asset.name,
+        status: asset.kind,
+        itemKind: 'asset' as const,
+        previewUrl: previewUrlByPath.get(normalizePath(asset.path)),
+      })),
+    [previewUrlByPath, sessionAssets],
   );
   const pendingAssetSuggestionItems = useMemo(() => {
     const known = new Set(sessionAssets.map((asset) => asset.name.toLowerCase()));
@@ -978,7 +1000,15 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
         const key = name.toLowerCase();
         if (known.has(key) || seen.has(key)) return [];
         seen.add(key);
-        return [{ id: name, label: name, status: assetKindFromMime(attachment.mimeType), itemKind: 'asset' as const }];
+        return [
+          {
+            id: name,
+            label: name,
+            status: assetKindFromMime(attachment.mimeType),
+            itemKind: 'asset' as const,
+            previewUrl: attachment.previewUrl,
+          },
+        ];
       });
   }, [attachments, sessionAssets]);
   const mentionCandidates = useMemo(
@@ -4795,6 +4825,20 @@ function ComposerSuggestionMenu({
                         {item.description ? (
                           <span className="chat-composer-suggestion__meta">{item.description}</span>
                         ) : null}
+                      </span>
+                    </>
+                  ) : item.itemKind === 'asset' ? (
+                    <>
+                      <span className="chat-composer-suggestion__avatar" aria-hidden="true">
+                        {item.previewUrl ? (
+                          <img src={item.previewUrl} alt="" className="chat-composer-suggestion__asset-thumb" />
+                        ) : (
+                          <FileIcon fileName={item.label} size={18} />
+                        )}
+                      </span>
+                      <span className="chat-composer-suggestion__text">
+                        <span className="chat-composer-suggestion__label">{item.label}</span>
+                        <span className="chat-composer-suggestion__meta">{`${tokenPrefix}${item.id}`}</span>
                       </span>
                     </>
                   ) : (

@@ -1069,6 +1069,13 @@
   height: 26px;
 }
 
+.chat-composer-suggestion__asset-thumb {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
 .chat-composer-suggestion__text {
   display: flex;
   min-width: 0;
