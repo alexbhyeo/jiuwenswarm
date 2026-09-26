@@ -493,6 +493,9 @@ function attachmentToMediaItem(attachment: AttachmentDraft): MediaItem {
     mimeType,
     mime_type: mimeType,
     filename,
+    // 卡片上重命名过的话，历史消息里的这张卡片也要显示新名字，而不是落盘时用的存储文件名
+    // （大图走 HTTP bridge 落盘后，文件名是服务端生成的随机 id，和用户看到的完全对不上）。
+    ...(attachment.assetName ? { displayName: attachment.assetName } : {}),
     ...(path ? { path } : { base64Data: attachment.base64Data }),
     sizeBytes,
     size_bytes: sizeBytes,
