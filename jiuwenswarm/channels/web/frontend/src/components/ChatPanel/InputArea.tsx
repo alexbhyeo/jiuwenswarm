@@ -45,12 +45,13 @@ import ChatModelSelector from './ChatModelSelector';
 import { FileIcon } from '../FileIcon';
 import { getEvolutionPillLabel } from './evolution-status';
 import { webRequest } from '../../services/webClient';
+import { selectSessionAssets, useSessionAssetsStore } from '../../features/sessionAssets/sessionAssets';
 import {
-  selectSessionAssets,
-  useSessionAssetsStore,
-  withAssetReferenceNote,
-} from '../../features/sessionAssets/sessionAssets';
-import { samePath, validateAssetName } from '../../features/sessionAssets/assetReferences';
+  assetKindFromMime,
+  samePath,
+  stemFilename,
+  validateAssetName,
+} from '../../features/sessionAssets/assetReferences';
 import { useSessionArtifacts } from '../ArtifactsPanel';
 import {
   parseSlashLine,
@@ -957,7 +958,9 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       }));
   }, [teamMembers]);
 
-  // 任务素材：和团队成员一起出现在 @ 候选里（名称就是引用名）。
+  // 任务素材：和团队成员一起出现在 @ 候选里（名称就是引用名）。已经登记到后端的（sessionAssets）
+  // 之外，这条消息里刚选好、还没来得及走完"落盘 -> 注册"往返的附件（欢迎页第一条消息尤其如此，
+  // 那时候还没有 session_id，注册无从谈起）也按同样的默认命名规则加进候选，不用等注册完才能 @。
   const sessionAssets = useSessionAssetsStore(selectSessionAssets(activeSessionId));
   const sessionAssetsRef = useRef(sessionAssets);
   sessionAssetsRef.current = sessionAssets;
@@ -965,9 +968,22 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     () => sessionAssets.map((asset) => ({ id: asset.name, label: asset.name, status: asset.kind, itemKind: 'asset' as const })),
     [sessionAssets],
   );
+  const pendingAssetSuggestionItems = useMemo(() => {
+    const known = new Set(sessionAssets.map((asset) => asset.name.toLowerCase()));
+    const seen = new Set<string>();
+    return attachments
+      .filter((attachment) => attachment.status === 'ready')
+      .flatMap((attachment) => {
+        const name = attachment.assetName ?? stemFilename(attachment.filename);
+        const key = name.toLowerCase();
+        if (known.has(key) || seen.has(key)) return [];
+        seen.add(key);
+        return [{ id: name, label: name, status: assetKindFromMime(attachment.mimeType), itemKind: 'asset' as const }];
+      });
+  }, [attachments, sessionAssets]);
   const mentionCandidates = useMemo(
-    () => [...mentionableMembers, ...assetSuggestionItems],
-    [assetSuggestionItems, mentionableMembers],
+    () => [...mentionableMembers, ...assetSuggestionItems, ...pendingAssetSuggestionItems],
+    [assetSuggestionItems, mentionableMembers, pendingAssetSuggestionItems],
   );
 
   // 任务素材同步：进入会话时拉取；上传完成的附件、agent 产出的文件按路径登记（后端按路径去重，
@@ -1976,7 +1992,10 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
         attachment.status === 'ready' &&
         (Boolean(pickString(attachment.persistedMediaItem?.path)) || Boolean(attachment.base64Data)),
     );
-    const trimmed = withAssetReferenceNote(buildSubmitContent(trimmedBase, readyDrafts), sessionAssetsRef.current);
+    // @名称 -> 文件路径的引用笔记不在这里加：这条消息可能还在往后端落盘（欢迎页第一条消息甚至
+    // 连 session 都还没建），此刻能查到的已登记素材是不完整的。真正的笔记在 useWebSocket.sendMessage
+    // 里、落盘拿到路径之后统一补，同时也覆盖本会话之前已经登记过的素材。
+    const trimmed = buildSubmitContent(trimmedBase, readyDrafts);
     const hasReadyMedia = readyMediaItems.length > 0;
     // Block only when there is neither text nor a ready attachment to send.
     if ((!trimmedBase && !hasReadyMedia) || hasUploadingAttachments || hasAttachmentErrors) return;

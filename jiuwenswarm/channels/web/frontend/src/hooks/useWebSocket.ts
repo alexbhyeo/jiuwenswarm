@@ -4,7 +4,13 @@
  * 管理 WebSocket 连接和消息处理
  */
 
-import { useSessionAssetsStore } from '../features/sessionAssets/sessionAssets';
+import {
+  assetKindFromMime,
+  stemFilename,
+  useSessionAssetsStore,
+  withAssetReferenceNote,
+  type NamedAsset,
+} from '../features/sessionAssets/sessionAssets';
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -1644,10 +1650,13 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
       // pruneEnabledExtensions）兜底重新核对一遍"我的插件/我的MCP里已连接的"，避免把早就失效的
       // 名字发给后端；被摘掉的项同步从 sessionStore 里移除，让"+"扩展面板的开关同步变回关闭。
       const extensionPayload = buildExtensionSendPayload(sessionId);
+      const userMessageId = `user-${Date.now()}`;
+      const displayedContent =
+        stripUploadDocumentBlocks(content) || content.replace(/\n*【上传文档[\s\S]*$/, '').trim() || content;
       useChatStore.getState().addMessage(sessionId, {
-        id: `user-${Date.now()}`,
+        id: userMessageId,
         role: 'user',
-        content: stripUploadDocumentBlocks(content) || content.replace(/\n*【上传文档[\s\S]*$/, '').trim() || content,
+        content: displayedContent,
         mediaItems,
         timestamp: new Date().toISOString(),
         ...(selectedSkillsForRequest.length > 0 ? { skills: selectedSkillsForRequest } : {}),
@@ -1720,6 +1729,33 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
             }
             outgoingMediaItems = mergedItems.length ? slimPersistedMediaRecords(mergedItems) : undefined;
             outgoingFiles = Object.keys(mergedFiles).length ? mergedFiles : undefined;
+          }
+        }
+        // @名称 -> 文件路径的引用笔记在这里统一加（不在 InputArea 提交时加）：候选既包括这个
+        // 会话之前已经登记过的素材，也包括这条消息里刚落盘、还没跑完注册往返的文件——用
+        // pendingNames 里用户自己起的名字，没改过就用文件名去掉扩展名（和后端默认命名规则一致）。
+        // 这样欢迎页发的第一条消息（这时候 session 刚建，素材注册还没来得及跑）也能正确 @ 到
+        // 这条消息自己带的附件。
+        {
+          const beforeReferenceNote = outgoingContent;
+          const pendingNames = useSessionAssetsStore.getState().pendingNames;
+          const freshAssets: NamedAsset[] = (outgoingMediaItems ?? []).flatMap((item) => {
+            const path = typeof item.path === 'string' ? item.path.trim() : '';
+            const filename = typeof item.filename === 'string' ? item.filename : '';
+            if (!path) return [];
+            const mimeType = typeof item.mime_type === 'string' ? item.mime_type : '';
+            return [{ name: pendingNames[filename] || stemFilename(filename) || filename, path, kind: assetKindFromMime(mimeType) }];
+          });
+          const knownAssets = useSessionAssetsStore.getState().bySession[sessionId] ?? [];
+          const byName = new Map<string, NamedAsset>();
+          for (const asset of knownAssets) byName.set(asset.name.toLowerCase(), asset);
+          for (const asset of freshAssets) byName.set(asset.name.toLowerCase(), asset); // 本次上传的名字优先
+          outgoingContent = withAssetReferenceNote(outgoingContent, [...byName.values()]);
+          // 笔记只在这时候才算出来（要等文件落盘拿到真实路径），气泡已经先乐观显示了——把同一段
+          // 笔记原样补到已经显示的气泡上，用户看到的和真正发给 agent 的保持一致。
+          if (outgoingContent !== beforeReferenceNote) {
+            const suffix = outgoingContent.slice(beforeReferenceNote.length);
+            useChatStore.getState().updateMessage(sessionId, userMessageId, { content: displayedContent + suffix });
           }
         }
         // 上传的文件落盘后登记为任务素材（欢迎页发出的第一条消息也走这里；后端按路径去重）。
