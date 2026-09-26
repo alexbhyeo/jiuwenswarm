@@ -746,6 +746,8 @@
     "rename": "Rename",
     "save": "Save",
     "cancel": "Cancel",
+    "invalidName": "The name must not be empty, at most 60 characters, and cannot contain @ or line breaks",
+    "pickTitle": "Choose an asset",
     "referHint": "Type @ in the chat box to reference"
   },
   "artifacts": {

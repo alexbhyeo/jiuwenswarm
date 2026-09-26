@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { findReferencedAssets, withAssetReferenceNote } from '../node_modules/.cache/session-assets/assetReferences.mjs';
+import {
+  findReferencedAssets,
+  samePath,
+  validateAssetName,
+  withAssetReferenceNote,
+} from '../node_modules/.cache/session-assets/assetReferences.mjs';
 
-const asset = (name, path = `C:\files\${name}.png`, kind = 'image') => ({
+const asset = (name, path = `C:\\files\\${name}.png`, kind = 'image') => ({
   asset_id: `id-${name}`, name, kind, path, source: 'upload', created_at: 0,
 });
 
@@ -25,6 +30,18 @@ test('no @ or no assets leaves the text untouched', () => {
 });
 
 test('appends a path note for each referenced asset once', () => {
-  const text = withAssetReferenceNote('use @fox and @fox again', [asset('fox', 'C:\a\fox.png')]);
-  assert.equal(text, 'use @fox and @fox again\n\n[引用素材]\n@fox = C:\a\fox.png (image)');
+  const text = withAssetReferenceNote('use @fox and @fox again', [asset('fox', 'C:\\a\\fox.png')]);
+  assert.equal(text, 'use @fox and @fox again\n\n[引用素材]\n@fox = C:\\a\\fox.png (image)');
+});
+
+test('validates asset names like the backend', () => {
+  assert.deepEqual(validateAssetName('  Oat   Serum '), { name: 'Oat Serum' });
+  for (const bad of ['', '   ', 'a@b', 'x'.repeat(61), 'two\nlines']) {
+    assert.deepEqual(validateAssetName(bad), { error: 'invalid' });
+  }
+});
+
+test('compares Windows paths ignoring case and slash direction', () => {
+  assert.equal(samePath('C:\\A\\b.png', 'c:/a/B.PNG'), true);
+  assert.equal(samePath('C:\\A\\b.png', 'C:\\A\\c.png'), false);
 });

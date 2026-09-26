@@ -4,6 +4,7 @@
  * 管理 WebSocket 连接和消息处理
  */
 
+import { useSessionAssetsStore } from '../features/sessionAssets/sessionAssets';
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -1720,6 +1721,13 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
             outgoingMediaItems = mergedItems.length ? slimPersistedMediaRecords(mergedItems) : undefined;
             outgoingFiles = Object.keys(mergedFiles).length ? mergedFiles : undefined;
           }
+        }
+        // 上传的文件落盘后登记为任务素材（欢迎页发出的第一条消息也走这里；后端按路径去重）。
+        if (outgoingMediaItems?.length) {
+          void useSessionAssetsStore
+            .getState()
+            .registerUploads(sessionId, outgoingMediaItems)
+            .catch((error) => console.error('Failed to register session assets:', error));
         }
         // Goal 处于 active 时，普通输入按文档 §5.1 作为补充约束插入当前 Goal，而不是覆盖它
         const activeGoal = useGoalStore.getState().getRuntime(sessionId)?.goal;

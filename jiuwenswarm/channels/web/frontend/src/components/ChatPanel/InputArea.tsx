@@ -20,7 +20,7 @@
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { AtSign, ChevronRight, CircleX, Loader2, Lock, Mic, Plus, Settings, Square, Workflow, X } from 'lucide-react';
+import { AtSign, ChevronRight, CircleX, Loader2, Lock, Mic, Pencil, Plus, Settings, Square, Workflow, X } from 'lucide-react';
 
 // import { stopAllTts } from '../../utils';
 import {
@@ -50,6 +50,7 @@ import {
   useSessionAssetsStore,
   withAssetReferenceNote,
 } from '../../features/sessionAssets/sessionAssets';
+import { samePath, validateAssetName } from '../../features/sessionAssets/assetReferences';
 import { useSessionArtifacts } from '../ArtifactsPanel';
 import {
   parseSlashLine,
@@ -209,7 +210,7 @@ type ComposerSuggestionItem = {
   label: string;
   status?: string;
   description?: string;
-  itemKind?: 'command' | 'skill';
+  itemKind?: 'command' | 'skill' | 'asset';
   takesArgs?: boolean;
   disabled?: boolean;
   disabledReason?: string;
@@ -443,6 +444,8 @@ interface AttachmentDraft {
   file?: File;
   /** Absolute local path from desktop native picker (WebView2 has no File.path). */
   localPath?: string;
+  /** 用户在卡片上给这个文件起的素材名（之后可用 @名称 引用）；没改过就用文件名。 */
+  assetName?: string;
 }
 
 interface AttachmentAlert {
@@ -959,7 +962,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
   const sessionAssetsRef = useRef(sessionAssets);
   sessionAssetsRef.current = sessionAssets;
   const assetSuggestionItems = useMemo(
-    () => sessionAssets.map((asset) => ({ id: asset.name, label: asset.name, status: asset.kind })),
+    () => sessionAssets.map((asset) => ({ id: asset.name, label: asset.name, status: asset.kind, itemKind: 'asset' as const })),
     [sessionAssets],
   );
   const mentionCandidates = useMemo(
@@ -981,15 +984,17 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
   }, [activeSessionId, canPersistAttachments]);
   useEffect(() => {
     if (!canPersistAttachments || !activeSessionId) return;
-    const pending: Array<{ path: string; source: 'upload' | 'generated' }> = [];
-    const consider = (path: string | undefined, source: 'upload' | 'generated') => {
+    const pending: Array<{ path: string; source: 'upload' | 'generated'; name?: string }> = [];
+    const consider = (path: string | undefined, source: 'upload' | 'generated', name?: string) => {
       const value = path?.trim();
       if (!value || attemptedAssetPaths.current.has(value)) return;
       attemptedAssetPaths.current.add(value);
-      pending.push({ path: value, source });
+      pending.push({ path: value, source, ...(name ? { name } : {}) });
     };
     attachments.forEach((attachment) => {
-      if (attachment.status === 'ready') consider(pickString(attachment.persistedMediaItem?.path), 'upload');
+      if (attachment.status === 'ready') {
+        consider(pickString(attachment.persistedMediaItem?.path), 'upload', attachment.assetName);
+      }
     });
     sessionArtifacts.forEach((artifact) => consider(artifact.path, 'generated'));
     if (pending.length === 0) return;
@@ -1231,6 +1236,35 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     setAttachments((prev) => prev.filter((item) => item.id !== id));
     setAttachmentMenuId((current) => (current === id ? null : current));
   }, []);
+
+  // 附件卡片上重命名：记在草稿上（登记素材时用），也记到按文件名的待用名字里（欢迎页第一条消息
+  // 发出时才建会话、落盘）；文件已经登记过的话，直接改后端里的素材名。
+  const [renamingAttachmentId, setRenamingAttachmentId] = useState<string | null>(null);
+  const [attachmentRenameDraft, setAttachmentRenameDraft] = useState('');
+  const commitAttachmentRename = useCallback(
+    async (attachment: AttachmentDraft) => {
+      setRenamingAttachmentId(null);
+      const checked = validateAssetName(attachmentRenameDraft);
+      if ('error' in checked) {
+        pushAttachmentAlert(t('sessionAssets.invalidName'));
+        return;
+      }
+      const previous = attachment.assetName ?? attachment.filename;
+      if (checked.name === previous) return;
+      updateAttachment(attachment.id, { assetName: checked.name });
+      useSessionAssetsStore.getState().setPendingName(attachment.filename, checked.name);
+      const path = pickString(attachment.persistedMediaItem?.path);
+      const registered = path ? sessionAssetsRef.current.find((asset) => samePath(asset.path, path)) : undefined;
+      if (!registered || !activeSessionId) return;
+      try {
+        await useSessionAssetsStore.getState().rename(activeSessionId, registered.asset_id, checked.name);
+      } catch (error) {
+        updateAttachment(attachment.id, { assetName: attachment.assetName });
+        pushAttachmentAlert(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [activeSessionId, attachmentRenameDraft, pushAttachmentAlert, t, updateAttachment],
+  );
 
   const clearAttachments = useCallback(() => {
     setAttachments([]);
@@ -2124,7 +2158,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       kind: ComposerSuggestionKind,
       value: string,
       label: string,
-      slashItemKind?: 'command' | 'skill',
+      slashItemKind?: 'command' | 'skill' | 'asset',
       slashTakesArgs?: boolean,
     ) => {
       const el = inputRef.current;
@@ -3001,13 +3035,54 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                         )}
                       </div>
                       <div className="chat-input-attachment-main" data-testid="chat-panel-input-attachment-main">
-                        <div
-                          className="chat-input-attachment-name"
-                          title={attachment.filename}
-                          data-testid="chat-panel-input-attachment-name"
-                        >
-                          {attachment.filename}
-                        </div>
+                        {renamingAttachmentId === attachment.id ? (
+                          <input
+                            autoFocus
+                            className="chat-input-attachment-name-input"
+                            value={attachmentRenameDraft}
+                            maxLength={60}
+                            aria-label={t('sessionAssets.rename')}
+                            data-testid="chat-panel-input-attachment-rename-input"
+                            onChange={(event) => setAttachmentRenameDraft(event.target.value)}
+                            onKeyDown={(event) => {
+                              event.stopPropagation();
+                              if (event.key === 'Enter') void commitAttachmentRename(attachment);
+                              if (event.key === 'Escape') setRenamingAttachmentId(null);
+                            }}
+                            onBlur={() => void commitAttachmentRename(attachment)}
+                          />
+                        ) : (
+                          <div
+                            className="chat-input-attachment-name"
+                            data-testid="chat-panel-input-attachment-name"
+                            onDoubleClick={() => {
+                              setAttachmentRenameDraft(attachment.assetName ?? attachment.filename);
+                              setRenamingAttachmentId(attachment.id);
+                            }}
+                          >
+                            {/* 文件名单独放一个可截断的 span：名字和"编辑"按钮各占各的，名字再长
+                                也不会把按钮挤到 overflow:hidden 的裁切区之外而看不见。 */}
+                            <span className="chat-input-attachment-name-text" title={attachment.assetName ?? attachment.filename}>
+                              {attachment.assetName ?? attachment.filename}
+                            </span>
+                            {attachment.status === 'ready' ? (
+                              <button
+                                type="button"
+                                className="chat-input-attachment-rename"
+                                title={t('sessionAssets.rename')}
+                                aria-label={t('sessionAssets.rename')}
+                                data-testid="chat-panel-input-attachment-rename"
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => {
+                                  setAttachmentRenameDraft(attachment.assetName ?? attachment.filename);
+                                  setRenamingAttachmentId(attachment.id);
+                                }}
+                              >
+                                <Pencil size={12} strokeWidth={2} />
+                              </button>
+                            ) : null}
+                          </div>
+                        )}
                         <div className="chat-input-attachment-meta" data-testid="chat-panel-input-attachment-meta">
                           {attachment.status === 'uploading' ? (
                             <>
@@ -4558,7 +4633,7 @@ function ComposerSuggestionMenu({
     kind: ComposerSuggestionKind,
     value: string,
     label: string,
-    slashItemKind?: 'command' | 'skill',
+    slashItemKind?: 'command' | 'skill' | 'asset',
     slashTakesArgs?: boolean,
   ) => void;
   loading: boolean;
@@ -4627,7 +4702,7 @@ function ComposerSuggestionMenu({
       {!isSlash && (
         <div className="chat-composer-suggestion__header" data-testid="chat-panel-composer-suggestion-header">
           <AtSign size={14} />
-          <span>{t('chat.selectTeamMembers')}</span>
+          <span>{items.length > 0 && items.every((item) => item.itemKind === 'asset') ? t('sessionAssets.pickTitle') : t('chat.selectTeamMembers')}</span>
         </div>
       )}
       <div

@@ -37,3 +37,18 @@ export function withAssetReferenceNote(text: string, assets: readonly SessionAss
   const lines = referenced.map((asset) => `@${asset.name} = ${asset.path} (${asset.kind})`);
   return `${text}\n\n[引用素材]\n${lines.join('\n')}`;
 }
+
+export const ASSET_NAME_MAX = 60;
+
+/** 和后端 validate_asset_name 一致：去首尾空白并折叠内部空白；不能为空、不超长、不含 @ 或换行。 */
+export function validateAssetName(input: string): { name: string } | { error: 'invalid' } {
+  const name = input.split(/\s+/).filter(Boolean).join(' ');
+  if (!name || name.length > ASSET_NAME_MAX || /[@\r\n\t]/.test(input)) return { error: 'invalid' };
+  return { name };
+}
+
+/** 路径比较：忽略大小写和斜杠方向（Windows 路径）。 */
+export function samePath(a: string, b: string): boolean {
+  const norm = (value: string) => value.split(String.fromCharCode(92)).join('/').toLowerCase();
+  return norm(a) === norm(b);
+}

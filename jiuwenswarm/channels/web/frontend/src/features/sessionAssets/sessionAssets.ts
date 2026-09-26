@@ -25,6 +25,11 @@ type AssetsResponse = { assets?: SessionAsset[] };
 
 interface SessionAssetsState {
   bySession: Record<string, SessionAsset[]>;
+  /** 用户在附件卡片上改的名字（按原文件名），会话建好、文件落盘登记时再用上。 */
+  pendingNames: Record<string, string>;
+  setPendingName: (filename: string, name: string) => void;
+  /** 登记已经落盘的上传（media.persist 之后的 media_items），带上用户起的名字。 */
+  registerUploads: (sessionId: string, items: ReadonlyArray<Record<string, unknown>>) => Promise<void>;
   refresh: (sessionId: string) => Promise<void>;
   register: (sessionId: string, items: SessionAssetInput[]) => Promise<void>;
   rename: (sessionId: string, assetId: string, name: string) => Promise<void>;
@@ -41,6 +46,20 @@ export const useSessionAssetsStore = create<SessionAssetsState>((set) => {
     set((state) => ({ bySession: { ...state.bySession, [sessionId]: response.assets ?? [] } }));
   return {
     bySession: {},
+    pendingNames: {},
+    setPendingName: (filename, name) =>
+      set((state) => ({ pendingNames: { ...state.pendingNames, [filename]: name } })),
+    registerUploads: async (sessionId, items) => {
+      const names = useSessionAssetsStore.getState().pendingNames;
+      const inputs: SessionAssetInput[] = [];
+      for (const item of items) {
+        const path = typeof item.path === 'string' ? item.path.trim() : '';
+        if (!path) continue;
+        const filename = typeof item.filename === 'string' ? item.filename : '';
+        inputs.push({ path, source: 'upload', ...(names[filename] ? { name: names[filename] } : {}) });
+      }
+      await useSessionAssetsStore.getState().register(sessionId, inputs);
+    },
     refresh: async (sessionId) => {
       apply(sessionId, await webRequest<AssetsResponse>('session.assets.list', { session_id: sessionId }));
     },
