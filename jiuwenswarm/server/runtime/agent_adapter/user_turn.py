@@ -18,8 +18,9 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from jiuwenswarm.agents.harness.common.rails.permissions.root_context import (
     HOST_USER_ORIGIN_INTERNAL,
@@ -37,6 +38,19 @@ TEAM_USER_TURN_KEY = "_user_turn"
 
 # Channels whose turns are system-driven rather than typed by a person.
 _SYSTEM_CHANNELS = frozenset({"cron", "heartbeat"})
+
+
+def _render_timestamp(now: datetime, tz_name: str) -> str:
+    """Render ``now`` as a single timestamp carrying its own timezone.
+
+    Format: ``2026-09-18 10:21:00 (UTC+08:00, Asia/Shanghai)``. The offset and
+    the IANA zone name travel inside the timestamp so the model reads one time
+    value instead of translating two separate envelope fields into "北京时间
+    (Asia/Shanghai)" style double statements.
+    """
+    offset = now.strftime("%z")
+    offset_formatted = f"UTC{offset[:3]}:{offset[3:]}" if offset else "UTC"
+    return f"{now.strftime('%Y-%m-%d %H:%M:%S')} ({offset_formatted}, {tz_name})"
 
 
 @dataclass(frozen=True)
@@ -118,11 +132,11 @@ class UserTurn:
         """Assemble the JSON envelope body for ``content``."""
         is_system = prompt_channel in _SYSTEM_CHANNELS
         is_agent_session = prompt_channel == "agent_session"
-        now = datetime.now(timezone(timedelta(hours=8)))
+        tz_name, tz = self._resolve_timezone()
+        now = datetime.now(tz)
         envelope: dict[str, Any] = {
             "source": "system" if is_system else prompt_channel,
-            "timezone": "Asia/Shanghai",
-            "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp": _render_timestamp(now, tz_name),
             "preferred_response_language": self.language,
             "content": content,
             "type": (
@@ -168,6 +182,30 @@ class UserTurn:
         if isinstance(self.metadata.get(SESSION_MESSAGE_INTERNAL_KEY), dict):
             return "agent_session"
         return self.channel
+
+    def _resolve_timezone(self) -> tuple[str, ZoneInfo]:
+        """Return the envelope timezone as ``(name, tzinfo)``.
+
+        Defaults to ``Asia/Shanghai``; a caller-declared timezone in metadata
+        (top-level ``timezone`` or ``cron.timezone`` — the cron scheduler stamps
+        the job's timezone there) wins, so scheduled tasks like "print the
+        current time" render in the job's configured timezone.
+        """
+        candidates: list[Any] = []
+        if self.metadata:
+            candidates.append(self.metadata.get("timezone"))
+            cron = self.metadata.get("cron")
+            if isinstance(cron, dict):
+                candidates.append(cron.get("timezone"))
+        for candidate in candidates:
+            name = str(candidate or "").strip()
+            if not name:
+                continue
+            try:
+                return name, ZoneInfo(name)
+            except (KeyError, ValueError):
+                logger.warning("[UserTurn] invalid metadata timezone %r, falling back", name)
+        return "Asia/Shanghai", ZoneInfo("Asia/Shanghai")
 
     def _resolve_skills(self, content: Any) -> list[str]:
         """Resolve skill names from the explicit list or the message text.

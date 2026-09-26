@@ -1,10 +1,15 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { Check, ChevronDown, CircleAlert, Code2, LoaderCircle, Workflow } from 'lucide-react';
+import { createPortal, flushSync } from 'react-dom';
+import { Archive, Check, ChevronDown, CircleAlert, Code2, Workflow } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useAdaptiveTooltip } from '../../hooks/useAdaptiveTooltip';
 import { useChatStore, type ChatRuntime } from '../../stores/chatStore';
 import { webClient } from '../../services/webClient';
+import { getArchiveErrorCode, getArchiveErrorFinishingCause, batchResultFinishingCause, archivedTaskClient, findBatchSessionResult } from '../../features/workspace/archivedTaskClient';
+import { requestSettingsModule } from '../../features/settings/settingsNavigation';
 import { DeleteDialog } from '../dialogs/Dialogs';
+import { ProjectArchiveDialog, resolveProjectArchiveSessionCount } from './ProjectArchiveDialog';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, toast } from '../../components/ui';
 import {
   PROJECT_SESSION_PAGE_SIZE,
   useWorkspaceStore,
@@ -27,6 +32,7 @@ import {
 } from './sidebarModel';
 import { ProjectCreateMenu } from './ProjectCreateMenu';
 import { projectCreateErrorKey } from './projectCreateErrors';
+import { projectRegistryClient } from '../../features/workspace/projectRegistryClient';
 import {
   isLikelyAbsolutePath,
   isProjectDirectoryPickerSupported,
@@ -44,6 +50,7 @@ import DeleteIcon from '../../assets/work-mode/delete.svg?react';
 import EditIcon from '../../assets/work-mode/edit.svg?react';
 import FolderFoldIcon from '../../assets/work-mode/folder-fold.svg?react';
 import FolderIcon from '../../assets/work-mode/folder.svg?react';
+import LoadingIcon from '../../assets/subagent/loading.svg?react';
 import MoreIcon from '../../assets/work-mode/more-rimless.svg?react';
 import NewTaskIcon from '../../assets/work-mode/new-task.svg?react';
 import PinIcon from '../../assets/work-mode/pin.svg?react';
@@ -79,6 +86,8 @@ export type NewConversationOptions = {
    * enterNewConversation / onUseExample。
    */
   metadata?: Record<string, unknown>;
+  /** 为 true 时用 replaceState 进入 /chat/new，避免浏览器后退回到已离开的会话 URL。 */
+  replaceHistory?: boolean;
 };
 
 function isDefaultProject(project: ProjectInfo): boolean {
@@ -89,7 +98,6 @@ interface ConversationSidebarProps {
   activeSessionId: string | null;
   onNew: (options?: NewConversationOptions) => void;
   onSelect: (session: Session) => void;
-  onDelete: (session: Session) => void;
   /** 跳转到"定时任务"主面板；该入口原来在最左侧图标栏，现移到工作小窗口的"新建任务"下方 */
   onOpenCron: () => void;
   /** 当前是否正停留在定时任务面板，用于给下面这个入口按钮加选中态 */
@@ -110,9 +118,10 @@ interface ConversationListItemProps {
   unread: boolean;
   now: number;
   onSelect: () => void;
-  onDelete: () => void;
   onPin: () => void;
   onRename: () => void;
+  onArchive: () => void;
+  onDelete?: () => void;
   menuItems: SidebarMenuItem[];
 }
 
@@ -157,7 +166,9 @@ function getSessionTitle(session: Session, fallback: string): string {
 const menuIconByAction: Record<SidebarMenuAction, React.ComponentType<React.SVGProps<SVGSVGElement>>> = {
   pin: PinIcon,
   rename: EditIcon,
+  archive: Archive,
   delete: DeleteIcon,
+  'archive-sessions': FolderIcon,
 };
 
 function getMenuIcon(item: SidebarMenuItem): React.ComponentType<React.SVGProps<SVGSVGElement>> {
@@ -165,36 +176,33 @@ function getMenuIcon(item: SidebarMenuItem): React.ComponentType<React.SVGProps<
   return menuIconByAction[item.action];
 }
 
-function SidebarMenu({
+/** 领域模型 SidebarMenuItem 到通用 DropdownMenuItem 的映射；会话行与项目行两处菜单共用 */
+function SidebarDropdownItems({
   items,
   onAction,
-  disabledActions = [],
 }: {
   items: SidebarMenuItem[];
   onAction: (action: SidebarMenuAction) => void;
-  disabledActions?: SidebarMenuAction[];
 }) {
   return (
-    <div className="conversation-list-item__menu" role="menu" data-testid="multi-session-conversation-menu">
+    <>
       {items.map((item) => {
         const MenuIcon = getMenuIcon(item);
         return (
-          <button
-          key={item.action}
-          type="button"
-          className={`conversation-list-item__menu-item${item.danger ? ' conversation-list-item__menu-item--danger' : ''}`}
-          disabled={disabledActions.includes(item.action)}
-          onClick={() => onAction(item.action)}
-          role="menuitem"
-          data-testid="multi-session-conversation-menu-item"
-          data-variant={item.action}
-        >
-          <MenuIcon aria-hidden />
-          <span>{item.label}</span>
-          </button>
+          <DropdownMenuItem
+            key={item.action}
+            icon={<MenuIcon aria-hidden />}
+            danger={item.danger}
+            disabled={item.disabled}
+            onSelect={() => onAction(item.action)}
+            data-testid="multi-session-conversation-menu-item"
+            data-variant={item.action}
+          >
+            {item.label}
+          </DropdownMenuItem>
         );
       })}
-    </div>
+    </>
   );
 }
 
@@ -216,21 +224,44 @@ function ConversationListItem({
   unread,
   now,
   onSelect,
-  onDelete,
   onPin,
   onRename,
+  onArchive,
+  onDelete,
   menuItems,
 }: ConversationListItemProps) {
   const { t, i18n } = useTranslation();
   const itemRef = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const { tooltip: itemTooltip, handlers: itemTooltipHandlers } = useAdaptiveTooltip();
+  const { tooltip: truncationTooltip, handlers: truncationTooltipHandlers } = useAdaptiveTooltip({
+    anchorRef: itemRef,
+    offsetY: 2,
+    align: 'left',
+  });
   const title = getSessionTitle(session, t('multiSession.untitled'));
+  const titleTooltipHandlers = {
+    onMouseEnter: (event: React.MouseEvent<HTMLSpanElement>) => {
+      const el = event.currentTarget;
+      el.setAttribute('data-tooltip', el.scrollWidth > el.clientWidth ? title : '');
+      truncationTooltipHandlers.onMouseEnter(event);
+    },
+    onMouseLeave: (event: React.MouseEvent<HTMLSpanElement>) => {
+      event.currentTarget.setAttribute('data-tooltip', '');
+      truncationTooltipHandlers.onMouseLeave();
+    },
+    onFocus: (event: React.FocusEvent<HTMLSpanElement>) => {
+      const el = event.currentTarget;
+      el.setAttribute('data-tooltip', el.scrollWidth > el.clientWidth ? title : '');
+      truncationTooltipHandlers.onFocus(event);
+    },
+    onBlur: (event: React.FocusEvent<HTMLSpanElement>) => {
+      event.currentTarget.setAttribute('data-tooltip', '');
+      truncationTooltipHandlers.onBlur();
+    },
+  };
   const errorMessage = runtime?.error || runtime?.executionError || null;
   const indicator = getSessionIndicator(runtime, unread, session.is_processing === true, Boolean(errorMessage));
-  const deleteDisabled =
-    runtime?.isProcessing === true ||
-    session.is_processing === true ||
-    Boolean(runtime?.pendingQuestions[0]);
 
   let status: React.ReactNode;
   if (indicator === 'waiting') {
@@ -242,7 +273,7 @@ function ConversationListItem({
   } else if (indicator === 'processing') {
     status = (
       <span title={getTaskStatusLabel(indicator, t)} data-testid="multi-session-conversation-list-item-status-processing">
-        <LoaderCircle className="conversation-list-item__loader" aria-hidden="true" />
+        <LoadingIcon className="conversation-list-item__loader" aria-hidden="true" />
       </span>
     );
   } else if (indicator === 'unread') {
@@ -261,49 +292,63 @@ function ConversationListItem({
     );
   }
 
-  useEffect(() => {
-    if (!menuOpen) return;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      if (!itemRef.current?.contains(event.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setMenuOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [menuOpen]);
-
   return (
-    <div ref={itemRef} className={`conversation-list-item${active ? ' is-active' : ''}${menuOpen ? ' is-menu-open' : ''}${nested ? ' conversation-list-item--nested' : ''}`} data-testid="multi-session-conversation-list-item" data-variant={session.session_id}>
-      <button type="button" className="conversation-list-item__main" onClick={onSelect} title={title} data-testid="multi-session-conversation-list-item-main">
-        <span className="conversation-list-item__title" data-testid="multi-session-conversation-list-item-title">{title}</span>
-        <span className="conversation-list-item__meta" data-testid="multi-session-conversation-list-item-status" data-variant={indicator}>{status}</span>
+    <div
+      ref={itemRef}
+      className={`conversation-list-item conversation-sidebar__row-el${active ? ' is-active' : ''}${menuOpen ? ' is-menu-open' : ''}${nested ? ' conversation-list-item--nested' : ''}`}
+      data-testid="multi-session-conversation-list-item"
+      data-variant={session.session_id}
+    >
+      <button type="button" className="conversation-list-item__main" onClick={onSelect} data-testid="multi-session-conversation-list-item-main">
+        <span className="conversation-list-item__title" data-testid="multi-session-conversation-list-item-title" data-tooltip="" {...titleTooltipHandlers}>
+          {title}
+        </span>
+        <span className="conversation-list-item__meta" data-testid="multi-session-conversation-list-item-status" data-variant={indicator}>
+          {status}
+        </span>
       </button>
-      <button
-        type="button"
-        className="conversation-list-item__actions"
-        onClick={(event) => {
-          event.stopPropagation();
-          setMenuOpen((open) => !open);
+      <DropdownMenu
+        open={menuOpen}
+        onOpenChange={(open) => {
+          if (open) itemTooltipHandlers.onMouseLeave();
+          setMenuOpen(open);
         }}
-        title={t('multiSession.moreActions')}
-        aria-label={t('multiSession.moreActions')}
-        aria-haspopup="menu"
-        aria-expanded={menuOpen}
-        data-testid="multi-session-conversation-list-item-more"
       >
-        <MoreIcon aria-hidden />
-      </button>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className="conversation-list-item__actions"
+            onClick={(event) => event.stopPropagation()}
+            aria-label={t('multiSession.moreActions')}
+            data-tooltip={t('multiSession.moreActions')}
+            data-testid="multi-session-conversation-list-item-more"
+            {...(menuOpen ? {} : itemTooltipHandlers)}
+          >
+            <MoreIcon aria-hidden />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent side="bottom" align="end" data-testid="multi-session-conversation-menu">
+          <SidebarDropdownItems
+            items={menuItems}
+            onAction={(action) => {
+              switch (action) {
+                case 'pin':
+                  onPin();
+                  break;
+                case 'rename':
+                  onRename();
+                  break;
+                case 'archive':
+                  onArchive();
+                  break;
+                case 'delete':
+                  onDelete?.();
+                  break;
+              }
+            }}
+          />
+        </DropdownMenuContent>
+      </DropdownMenu>
       <button
         type="button"
         className="conversation-list-item__pin-action"
@@ -311,34 +356,16 @@ function ConversationListItem({
           event.stopPropagation();
           onPin();
         }}
-        title={session.pinned ? t('multiSession.project.unpinConversation') : t('multiSession.project.pinConversation')}
         aria-label={session.pinned ? t('multiSession.project.unpinConversation') : t('multiSession.project.pinConversation')}
         data-tooltip={session.pinned ? t('multiSession.project.unpinConversation') : t('multiSession.project.pinConversation')}
         data-testid="multi-session-conversation-list-item-pin"
+        {...itemTooltipHandlers}
       >
         {session.pinned ? <UnpinIcon aria-hidden /> : <PinIcon aria-hidden />}
       </button>
-      {menuOpen ? (
-        <SidebarMenu
-          items={menuItems}
-          disabledActions={deleteDisabled ? ['delete'] : []}
-          onAction={(action) => {
-            setMenuOpen(false);
-            switch (action) {
-              case 'pin':
-                onPin();
-                break;
-              case 'rename':
-                onRename();
-                break;
-              case 'delete':
-                onDelete();
-                break;
-            }
-          }}
-        />
-        ) : null}
-      </div>
+      {itemTooltip}
+      {truncationTooltip}
+    </div>
   );
 }
 
@@ -348,12 +375,14 @@ function ProjectEntityRow({
   isExpanded,
   isPinned,
   hasUnreadCronResult = false,
-  hideActions = false,
+  defaultProject = false,
+  archiveSessionsDisabled,
   onToggle,
   onNew,
   onPin,
   onRename,
   onRemove,
+  onBatch,
   newLabel,
   projectId,
 }: {
@@ -362,40 +391,26 @@ function ProjectEntityRow({
   isExpanded: boolean;
   isPinned?: boolean;
   hasUnreadCronResult?: boolean;
-  hideActions?: boolean;
+  defaultProject?: boolean;
+  archiveSessionsDisabled: boolean;
   onToggle: () => void;
   onNew: () => void;
   onPin: () => void;
   onRename: () => void;
   onRemove: () => void;
+  onBatch: (action: 'archive') => void;
   newLabel?: string;
   projectId?: string;
 }) {
   const { t } = useTranslation();
-  const rowRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLButtonElement>(null);
   const tooltipId = useId();
   const [menuOpen, setMenuOpen] = useState(false);
+  const { tooltip: rowTooltip, handlers: rowTooltipHandlers } = useAdaptiveTooltip({ align: 'left' });
   const [tooltipPos, setTooltipPos] = useState<{ left: number; top: number } | null>(null);
   // 分别跟踪 hover 与 focus 状态：任一活跃即保持 tooltip，避免 mouseleave/blur 互相误清
   const hoverRef = useRef(false);
   const focusRef = useRef(false);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const close = (event: MouseEvent) => {
-      if (!rowRef.current?.contains(event.target as Node)) setMenuOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMenuOpen(false);
-    };
-    document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.removeEventListener('mousedown', close);
-      document.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [menuOpen]);
 
   const showTooltip = (source: 'hover' | 'focus') => {
     if (source === 'hover') hoverRef.current = true;
@@ -413,7 +428,11 @@ function ProjectEntityRow({
   };
 
   return (
-    <div ref={rowRef} className={`conversation-entity-row${menuOpen ? ' is-menu-open' : ''}`} data-testid="multi-session-project-row" data-variant={projectId}>
+    <div
+      className={`conversation-entity-row conversation-sidebar__row-el${menuOpen ? ' is-menu-open' : ''}`}
+      data-testid="multi-session-project-row"
+      data-variant={projectId}
+    >
       <button
         type="button"
         ref={mainRef}
@@ -442,17 +461,14 @@ function ProjectEntityRow({
           {isExpanded ? <FolderFoldIcon aria-hidden /> : <FolderIcon aria-hidden />}
         </span>
         <span className="conversation-entity-row__text">
-          <span className="conversation-entity-row__title" data-testid="multi-session-project-row-title">{title}</span>
+          <span className="conversation-entity-row__title" data-testid="multi-session-project-row-title">
+            {title}
+          </span>
         </span>
         {hasUnreadCronResult ? (
-          <span
-            className="conversation-list-item__status-dot"
-            aria-hidden="true"
-            data-testid="multi-session-project-row-cron-unread"
-          />
+          <span className="conversation-list-item__status-dot" aria-hidden="true" data-testid="multi-session-project-row-cron-unread" />
         ) : null}
         {isExpanded ? <CollapseIcon className="conversation-entity-row__chevron" aria-hidden /> : <ArrowRightIcon className="conversation-entity-row__chevron" aria-hidden />}
-        {isPinned ? <PinIcon className="conversation-entity-row__pin" aria-hidden /> : null}
       </button>
       <button
         type="button"
@@ -461,55 +477,65 @@ function ProjectEntityRow({
           event.stopPropagation();
           onNew();
         }}
-        title={newLabel || t('multiSession.project.newConversation')}
         aria-label={newLabel || t('multiSession.project.newConversation')}
         data-tooltip={newLabel || t('multiSession.project.newConversation')}
         data-testid="multi-session-project-row-new-conversation"
+        {...rowTooltipHandlers}
       >
         <PlusIcon aria-hidden />
       </button>
-      {hideActions ? null : (
-        <button
-          type="button"
-          className="conversation-list-item__actions"
-          onClick={(event) => {
-            event.stopPropagation();
-            setMenuOpen((open) => !open);
-          }}
-          title={t('multiSession.moreActions')}
-          aria-label={t('multiSession.moreActions')}
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          data-testid="multi-session-project-row-more"
-        >
-          <MoreIcon aria-hidden />
-        </button>
-      )}
-      {!hideActions && menuOpen ? (
-        <SidebarMenu
-          items={getProjectMenuItems(Boolean(isPinned), t)}
-          onAction={(action) => {
-            setMenuOpen(false);
-            switch (action) {
-              case 'pin':
-                onPin();
-                break;
-              case 'rename':
-                onRename();
-                break;
-              case 'delete':
-                onRemove();
-                break;
-            }
-          }}
-        />
-      ) : null}
+      <DropdownMenu
+        open={menuOpen}
+        onOpenChange={(open) => {
+          if (open) rowTooltipHandlers.onMouseLeave();
+          setMenuOpen(open);
+        }}
+      >
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className="conversation-list-item__actions"
+            onClick={(event) => event.stopPropagation()}
+            aria-label={t('multiSession.moreActions')}
+            data-tooltip={t('multiSession.moreActions')}
+            data-testid="multi-session-project-row-more"
+            {...(menuOpen ? {} : rowTooltipHandlers)}
+          >
+            <MoreIcon aria-hidden />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent side="bottom" align="end" data-testid="multi-session-conversation-menu">
+          <SidebarDropdownItems
+            items={getProjectMenuItems(Boolean(isPinned), t, {
+              isDefault: defaultProject,
+              archiveSessionsDisabled,
+            })}
+            onAction={(action) => {
+              switch (action) {
+                case 'pin':
+                  onPin();
+                  break;
+                case 'rename':
+                  onRename();
+                  break;
+                case 'delete':
+                  onRemove();
+                  break;
+                case 'archive-sessions':
+                  onBatch('archive');
+                  break;
+              }
+            }}
+          />
+        </DropdownMenuContent>
+      </DropdownMenu>
       {tooltipPos && path
         ? createPortal(
             <ProjectPathTooltip id={tooltipId} title={title} path={path} anchor={tooltipPos} mainRef={mainRef} />,
             document.body,
           )
         : null}
+      {rowTooltip}
     </div>
   );
 }
@@ -741,12 +767,14 @@ function ProjectCreateDialog({
 function ProjectDeleteDialog({
   project,
   error,
+  notice,
   deleting,
   onCancel,
   onDelete,
 }: {
   project: ProjectInfo;
   error?: string | null;
+  notice?: string | null;
   deleting: boolean;
   onCancel: () => void;
   onDelete: () => void;
@@ -755,11 +783,13 @@ function ProjectDeleteDialog({
   return (
     <DeleteDialog
       title={project.name}
-      dialogTitle={t('multiSession.project.deleteProject')}
-      descriptionKey="multiSession.project.deleteProjectDescription"
+      dialogTitle={t('multiSession.project.removeProject')}
+      confirmLabel={t('multiSession.project.removeProjectConfirm')}
+      descriptionKey="multiSession.project.removeProjectDescription"
       descriptionValues={{ projectName: project.name }}
       deleting={deleting}
       error={error ?? null}
+      notice={notice ?? null}
       onCancel={onCancel}
       onDelete={onDelete}
     />
@@ -770,11 +800,62 @@ type RenameTarget =
   | { kind: 'project'; id: string; value: string }
   | { kind: 'session'; id: string; value: string };
 
+function CronJobRow({
+  job,
+  cronExpanded,
+  isCronUnread,
+  onRowClick,
+}: {
+  job: SidebarCronJob;
+  cronExpanded: boolean;
+  isCronUnread: boolean;
+  onRowClick: () => void;
+}) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const { tooltip, handlers } = useAdaptiveTooltip({ anchorRef: rowRef, offsetY: 2, align: 'left' });
+  const nameTooltipHandlers = {
+    onMouseEnter: (event: React.MouseEvent<HTMLSpanElement>) => {
+      const el = event.currentTarget;
+      el.setAttribute('data-tooltip', el.scrollWidth > el.clientWidth ? job.name : '');
+      handlers.onMouseEnter(event);
+    },
+    onMouseLeave: (event: React.MouseEvent<HTMLSpanElement>) => {
+      event.currentTarget.setAttribute('data-tooltip', '');
+      handlers.onMouseLeave();
+    },
+    onFocus: (event: React.FocusEvent<HTMLSpanElement>) => {
+      const el = event.currentTarget;
+      el.setAttribute('data-tooltip', el.scrollWidth > el.clientWidth ? job.name : '');
+      handlers.onFocus(event);
+    },
+    onBlur: (event: React.FocusEvent<HTMLSpanElement>) => {
+      event.currentTarget.setAttribute('data-tooltip', '');
+      handlers.onBlur();
+    },
+  };
+  return (
+    <>
+      <div
+        ref={rowRef}
+        className={`conversation-sidebar__cron-row conversation-sidebar__row-el${cronExpanded ? ' is-expanded' : ''}`}
+        onClick={onRowClick}
+        data-testid="multi-session-cron-job-row"
+        data-variant={job.id}
+      >
+        <CronIcon className="conversation-sidebar__cron-row-icon" aria-hidden />
+        <span className="conversation-sidebar__cron-row-name" data-tooltip="" data-testid="multi-session-cron-job-row-name" {...nameTooltipHandlers}>{job.name}</span>
+        {isCronUnread && <span className="conversation-list-item__status-dot" aria-hidden="true" data-testid="multi-session-cron-job-row-unread" />}
+        {cronExpanded ? <CollapseIcon className="conversation-sidebar__cron-row-chevron" aria-hidden /> : <ArrowRightIcon className="conversation-sidebar__cron-row-chevron" aria-hidden />}
+      </div>
+      {tooltip}
+    </>
+  );
+}
+
 export function ConversationSidebar({
   activeSessionId,
   onNew,
   onSelect,
-  onDelete,
   onOpenCron,
   isCronActive,
   collapsed = false,
@@ -782,6 +863,8 @@ export function ConversationSidebar({
   onToggleCollapse,
 }: ConversationSidebarProps) {
   const { t } = useTranslation();
+  const { tooltip: conversationsTooltip, handlers: conversationsTooltipHandlers } = useAdaptiveTooltip();
+  const { tooltip: newProjectTooltip, handlers: newProjectTooltipHandlers } = useAdaptiveTooltip({ align: 'left' });
   const runtimes = useChatStore((state) => state.runtimes);
   const [relativeTimeNow, setRelativeTimeNow] = useState(Date.now);
   const [unreadSessions, setUnreadSessions] = useState(loadUnreadSessions);
@@ -792,14 +875,21 @@ export function ConversationSidebar({
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
   const [pinError, setPinError] = useState<string | null>(null);
+  // 既有「移除项目」流程状态：与归档并存，互不影响
   const [deleteProjectTarget, setDeleteProjectTarget] = useState<ProjectInfo | null>(null);
+  const [projectAction, setProjectAction] = useState<'delete' | 'archive'>('delete');
   const [deleteProjectBusy, setDeleteProjectBusy] = useState(false);
   const [deleteProjectError, setDeleteProjectError] = useState<string | null>(null);
+  // 归档时运行中会话被略过时的提示：展示后点确定仅关闭对话框，不再重试归档
+  const [deleteProjectNotice, setDeleteProjectNotice] = useState<string | null>(null);
+  /** 打开归档确认框时快照会话数，避免提交过程中标题随列表刷新变化 */
+  const [archiveDialogSessionCount, setArchiveDialogSessionCount] = useState<number | null>(null);
   const [projectAddMenuOpen, setProjectAddMenuOpen] = useState(false);
   const [workModeMenuOpen, setWorkModeMenuOpen] = useState(false);
   const addMenuRef = useRef<HTMLDivElement>(null);
   const workModeMenuRef = useRef<HTMLDivElement>(null);
   const previousProcessing = useRef<Record<string, boolean>>({});
+  const archiveInFlightRef = useRef(new Set<string>());
 
   useEffect(() => {
     if (!pathDialogError || pathDialogOpen) return;
@@ -821,6 +911,8 @@ export function ConversationSidebar({
     renameProject,
     pinProject,
     removeProject,
+    archiveSession,
+    removeSessionLocally,
     loadProjectSessions,
     showMoreSessions,
     collapseSessions,
@@ -1081,15 +1173,209 @@ export function ConversationSidebar({
     }
   }
 
+  // 归档错误码只用于分支判断，用户看到的是可翻译文案
+  function archiveErrorKey(error: unknown): string {
+    const code = getArchiveErrorCode(error);
+    if (code === 'SESSION_BUSY') {
+      // 会话会自行结束，引导稍后重试，而不是让用户先手动停止一个已经停过的
+      // 会话。成因不同文案不同：subagent 退出与 Team 回合收尾是两件事。
+      const cause = getArchiveErrorFinishingCause(error);
+      if (cause === 'subagent') {
+        return 'multiSession.project.errors.archiveSessionSubagentFinishing';
+      }
+      return cause === 'team'
+        ? 'multiSession.project.errors.archiveSessionFinishing'
+        : 'multiSession.project.errors.archiveSessionBusy';
+    }
+    if (code === 'FORBIDDEN') return 'multiSession.project.errors.archiveForbidden';
+    if (code === 'NOT_FOUND') return 'multiSession.project.errors.archiveNotFound';
+    return 'multiSession.project.errors.archiveFailed';
+  }
+
+  function openArchiveToastIcon() {
+    return <Archive aria-hidden size={16} strokeWidth={1.8} />;
+  }
+
+  // 移除/恢复项目失败时的可翻译文案；重名冲突、定时任务停止失败与会话运行中都给出可操作提示。
+  function projectActionErrorText(error: unknown): string {
+    const code = getArchiveErrorCode(error);
+    if (code === 'PROJECT_NAME_CONFLICT') {
+      return t('multiSession.project.errors.projectNameConflict');
+    }
+    if (code === 'CRON_STOP_FAILED') {
+      return t('multiSession.project.errors.cronStopFailed');
+    }
+    if (code === 'SESSION_BUSY') {
+      return t('multiSession.project.errors.removeSessionBusy');
+    }
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  function openArchiveSuccessToast(options: {
+    content: string;
+    onUndo: () => Promise<void>;
+    replaceExisting?: boolean;
+  }) {
+    // 单会话归档替换旧提示；批量归档可能与失败 toast 并存
+    if (options.replaceExisting !== false) {
+      toast.closeAll();
+    }
+    toast.open({
+      content: options.content,
+      icon: openArchiveToastIcon(),
+      duration: 5,
+      wide: true,
+      actions: [
+        {
+          label: t('multiSession.project.archiveView'),
+          onClick: () => requestSettingsModule('archivedTasks'),
+        },
+        {
+          label: t('multiSession.project.archiveUndo'),
+          onClick: () => {
+            void (async () => {
+              try {
+                await options.onUndo();
+              } catch (error) {
+                openArchiveFailureToast(t(archiveErrorKey(error)));
+              }
+            })();
+          },
+        },
+      ],
+    });
+  }
+
+  function openArchiveFailureToast(content: string) {
+    toast.open({
+      content,
+      variant: 'error',
+      duration: 5,
+      wide: true,
+    });
+  }
+
+  async function handleArchiveSession(session: Session) {
+    const opKey = `session:${session.session_id}`;
+    if (archiveInFlightRef.current.has(opKey)) return;
+    archiveInFlightRef.current.add(opKey);
+    try {
+      await archiveSession(session.session_id);
+      flushSync(() => {
+        removeSessionLocally(session.session_id);
+        openArchiveSuccessToast({
+          content: t('multiSession.project.conversationArchived'),
+          onUndo: async () => {
+            const response = await archivedTaskClient.unarchiveSession(session.session_id);
+            const entry = findBatchSessionResult(response, session.session_id);
+            if (!entry?.ok) {
+              const error = new Error(entry?.error || 'Failed to unarchive session');
+              Object.assign(error, {
+                code: entry?.code,
+                finishing: entry?.finishing,
+                subagent_finishing: entry?.subagent_finishing,
+              });
+              throw error;
+            }
+            await useWorkspaceStore.getState().refreshWorkspaceAndCron();
+          },
+        });
+        if (activeSessionId === session.session_id) {
+          onNew({ replaceHistory: true });
+        }
+      });
+    } catch (error) {
+      openArchiveFailureToast(t(archiveErrorKey(error)));
+      await useWorkspaceStore.getState().refreshWorkspaceData();
+    } finally {
+      archiveInFlightRef.current.delete(opKey);
+    }
+  }
+
   async function handleRemoveProject() {
-    if (!deleteProjectTarget || isDefaultProject(deleteProjectTarget)) return;
+    if (!deleteProjectTarget || (projectAction === 'delete' && isDefaultProject(deleteProjectTarget))) return;
+    // 运行中会话已按需求「略过」：确定键只关闭对话框，不重试归档操作
+    if (deleteProjectNotice) {
+      setDeleteProjectNotice(null);
+      setDeleteProjectError(null);
+      setDeleteProjectTarget(null);
+      return;
+    }
     setDeleteProjectBusy(true);
     setDeleteProjectError(null);
     try {
-      await removeProject(deleteProjectTarget.project_id);
+      const projectId = deleteProjectTarget.project_id;
+      if (projectAction === 'delete') {
+        const removed = await removeProject(projectId);
+        // 项目下没有定时任务时只提示“项目已移除”；字段缺失（旧网关）沿用原文案。
+        toast.open({
+          content: removed.stopped_cron_jobs === 0
+            ? t('multiSession.project.projectRemoved')
+            : t('multiSession.project.projectRemovedSummary'),
+          variant: 'success',
+          actions: [{
+            label: t('multiSession.project.archiveUndo'),
+            onClick: () => {
+              void useWorkspaceStore.getState().restoreProject(projectId).catch((error) => {
+                toast.open({ content: projectActionErrorText(error), variant: 'error' });
+              });
+            },
+          }],
+        });
+      } else {
+        const result = await projectRegistryClient.archiveSessions(projectId);
+        const succeededIds = result.results.filter((item) => item.ok).map((item) => item.session_id);
+        const failedItems = result.results.filter((item) => !item.ok);
+        const workspace = useWorkspaceStore.getState();
+        workspace.removeSessions(succeededIds);
+        await Promise.all([workspace.loadProjects(), workspace.loadProjectSessions(projectId), workspace.loadPinnedSessions()]);
+        setDeleteProjectTarget(null);
+        setArchiveDialogSessionCount(null);
+        if (activeSessionId && succeededIds.includes(activeSessionId)) {
+          onNew({ replaceHistory: true });
+        }
+        if (succeededIds.length > 0) {
+          openArchiveSuccessToast({
+            content: t('multiSession.project.sessionsArchived', { count: succeededIds.length }),
+            replaceExisting: failedItems.length === 0,
+            onUndo: async () => {
+              const response = await archivedTaskClient.unarchiveSessions(succeededIds);
+              const failed = response.results.filter((item) => !item.ok);
+              if (failed.length) {
+                const error = new Error(failed[0]?.error || 'Failed to unarchive sessions');
+                Object.assign(error, { code: failed[0]?.code });
+                throw error;
+              }
+              // 撤销归档若命中"项目已移除"的会话，会连带恢复项目，其定时任务
+              // 重新可见（默认停用），cron 列表要一起刷新。
+              await useWorkspaceStore.getState().refreshWorkspaceAndCron();
+            },
+          });
+        }
+        if (failedItems.length > 0) {
+          const busyItems = failedItems.filter((item) => item.code === 'SESSION_BUSY');
+          const finishingItems = busyItems.filter((item) => batchResultFinishingCause(item) !== null);
+          const subagentItems = busyItems.filter((item) => batchResultFinishingCause(item) === 'subagent');
+          const failureContent = subagentItems.length === failedItems.length
+            ? t('multiSession.project.archiveBatchFailedSubagentFinishing', { count: subagentItems.length })
+            : finishingItems.length === failedItems.length
+            ? t('multiSession.project.archiveBatchFailedFinishing', { count: finishingItems.length })
+            : busyItems.length === failedItems.length
+            ? t('multiSession.project.archiveBatchFailedRunning', { count: busyItems.length })
+            : t('multiSession.project.archiveBatchFailed', { count: failedItems.length });
+          openArchiveFailureToast(failureContent);
+        }
+        return;
+      }
       setDeleteProjectTarget(null);
     } catch (error) {
-      setDeleteProjectError(error instanceof Error ? error.message : String(error));
+      if (projectAction === 'archive') {
+        setDeleteProjectTarget(null);
+        setArchiveDialogSessionCount(null);
+        openArchiveFailureToast(t(archiveErrorKey(error)));
+        return;
+      }
+      setDeleteProjectError(projectActionErrorText(error));
     } finally {
       setDeleteProjectBusy(false);
     }
@@ -1098,6 +1384,7 @@ export function ConversationSidebar({
   function renderSession(session: Session, options: { nested?: boolean; projectMenu?: boolean } = {}) {
     const nested = options.nested === true;
     const projectMenu = options.projectMenu === true;
+    const cronSession = Boolean(session.cron_id) || session.session_id.startsWith('cron_');
     return (
       <ConversationListItem
         key={session.session_id}
@@ -1108,9 +1395,26 @@ export function ConversationSidebar({
         unread={unreadSessions.has(session.session_id)}
         now={relativeTimeNow}
         onSelect={() => onSelect(session)}
-        onDelete={() => onDelete(session)}
         onPin={() => void handlePinSession(session)}
-        menuItems={projectMenu
+        onArchive={() => void handleArchiveSession(session)}
+        onDelete={cronSession ? () => {
+          void (async () => {
+            try {
+              await archivedTaskClient.deleteSession(session.session_id);
+              removeSessionLocally(session.session_id);
+              await useWorkspaceStore.getState().refreshWorkspaceData();
+            } catch (error) {
+              const code = getArchiveErrorCode(error);
+              const message = code === 'SESSION_BUSY'
+                ? t('multiSession.project.errors.deleteSessionBusy')
+                : (error instanceof Error ? error.message : String(error));
+              toast.open({ content: message, variant: 'error' });
+            }
+          })();
+        } : undefined}
+        menuItems={cronSession
+          ? getConversationMenuItems(Boolean(session.pinned), t, { archivable: false, deletable: true })
+          : projectMenu
           ? getProjectSessionMenuItems(Boolean(session.pinned), t)
           : getConversationMenuItems(Boolean(session.pinned), t)}
         onRename={() => setRenameTarget({
@@ -1130,24 +1434,18 @@ export function ConversationSidebar({
     const isCronUnread = Boolean(unreadCronJobs[job.id]);
     return (
       <div key={`cron-wrapper-${job.id}`} className={`conversation-sidebar__session-wrapper${nested ? ' conversation-sidebar__session-wrapper--nested' : ''}`}>
-        <div
-          className={`conversation-sidebar__cron-row${cronExpanded ? ' is-expanded' : ''}`}
-          onClick={() => {
+        <CronJobRow
+          job={job}
+          cronExpanded={cronExpanded}
+          isCronUnread={isCronUnread}
+          onRowClick={() => {
             toggleCronGroup(cronGroupId);
             if (isCronUnread) clearCronJobUnread(job.id);
             if (!cronExpanded) {
               void loadCronSessions(projectId, job.id);
             }
           }}
-          title={job.name}
-          data-testid="multi-session-cron-job-row"
-          data-variant={job.id}
-        >
-          <CronIcon className="conversation-sidebar__cron-row-icon" aria-hidden />
-          <span className="conversation-sidebar__cron-row-name" data-testid="multi-session-cron-job-row-name">{job.name}</span>
-          {isCronUnread && <span className="conversation-list-item__status-dot" aria-hidden="true" data-testid="multi-session-cron-job-row-unread" />}
-          {cronExpanded ? <CollapseIcon className="conversation-sidebar__cron-row-chevron" aria-hidden /> : <ArrowRightIcon className="conversation-sidebar__cron-row-chevron" aria-hidden />}
-        </div>
+        />
         {cronExpanded ? (
           <div className="conversation-sidebar__cron-sessions" data-testid="multi-session-cron-job-sessions">
             {isCronSessionsLoading ? (
@@ -1166,9 +1464,24 @@ export function ConversationSidebar({
                     clearCronJobUnread(job.id);
                     onSelect(ts);
                   }}
-                  onDelete={() => onDelete(ts)}
                   onPin={() => void handlePinSession(ts)}
-                  menuItems={getConversationMenuItems(Boolean(ts.pinned), t)}
+                  onArchive={() => void handleArchiveSession(ts)}
+                  onDelete={() => {
+                    void (async () => {
+                      try {
+                        await archivedTaskClient.deleteSession(ts.session_id);
+                        removeSessionLocally(ts.session_id);
+                        await loadCronSessions(projectId, job.id);
+                      } catch (error) {
+                        const code = getArchiveErrorCode(error);
+                        const message = code === 'SESSION_BUSY'
+                          ? t('multiSession.project.errors.deleteSessionBusy')
+                          : (error instanceof Error ? error.message : String(error));
+                        toast.open({ content: message, variant: 'error' });
+                      }
+                    })();
+                  }}
+                  menuItems={getConversationMenuItems(Boolean(ts.pinned), t, { archivable: false, deletable: true })}
                   onRename={() => setRenameTarget({
                     kind: 'session',
                     id: ts.session_id,
@@ -1231,6 +1544,27 @@ export function ConversationSidebar({
     const hasUnreadCronResult = (jobsByProject.get(project.project_id) || []).some(
       (job) => Boolean(unreadCronJobs[job.id]),
     );
+    // 折叠项目可能尚未加载会话列表，不能只看 sessionsForProject.length；
+    // 用后端统计的会话总数兜底判断项目是否还有普通会话
+    const nonPinnedSessionCount =
+      projectSessionTotals[project.project_id] ?? project.session_count;
+
+    const hasPinnedOrdinarySession = pinnedSessions.some((session) => {
+      const belongsToProject =
+        session.project_id === project.project_id ||
+        getSessionProject(session)?.project_id === project.project_id;
+
+      const isCronSession =
+        Boolean(session.cron_id) ||
+        session.session_id.startsWith('cron_') ||
+        session.session_id.startsWith('heartbeat_');
+
+      return belongsToProject && !isCronSession;
+    });
+
+    const archiveSessionsDisabled =
+      nonPinnedSessionCount === 0 && !hasPinnedOrdinarySession;
+
     return (
       <div key={project.project_id} className="conversation-sidebar__group" data-testid="multi-session-project-group" data-variant={project.project_id}>
         <ProjectEntityRow
@@ -1239,7 +1573,8 @@ export function ConversationSidebar({
           isExpanded={expanded}
           isPinned={project.pinned}
           hasUnreadCronResult={hasUnreadCronResult}
-          hideActions={isDefaultProject(project)}
+          defaultProject={isDefaultProject(project)}
+          archiveSessionsDisabled={archiveSessionsDisabled}
           newLabel={getProjectNewLabel(project.name, t)}
           projectId={project.project_id}
           onToggle={() => toggleProjectExpanded(project.project_id)}
@@ -1258,7 +1593,18 @@ export function ConversationSidebar({
           }}
           onRemove={() => {
             if (isDefaultProject(project)) return;
+            setProjectAction('delete');
             setDeleteProjectError(null);
+            setDeleteProjectNotice(null);
+            setDeleteProjectTarget(project);
+          }}
+          onBatch={(action) => {
+            setProjectAction(action);
+            setDeleteProjectError(null);
+            setDeleteProjectNotice(null);
+            if (action === 'archive') {
+              setArchiveDialogSessionCount(resolveProjectArchiveSessionCount(project, projectSessionTotals, pinnedSessions));
+            }
             setDeleteProjectTarget(project);
           }}
         />
@@ -1401,11 +1747,12 @@ export function ConversationSidebar({
               onClick={() => {
                 setProjectAddMenuOpen((open) => !open);
               }}
-              title={t('multiSession.project.newProject')}
               aria-label={t('multiSession.project.newProject')}
               aria-haspopup="menu"
               aria-expanded={projectAddMenuOpen}
+              data-tooltip={t('multiSession.project.newProject')}
               data-testid="multi-session-new-project-button"
+              {...newProjectTooltipHandlers}
             >
               <PlusIcon aria-hidden />
             </button>
@@ -1444,10 +1791,10 @@ export function ConversationSidebar({
                 setPinError(null);
                 onNew();
               }}
-              title={t('multiSession.project.newConversation')}
               aria-label={t('multiSession.project.newConversation')}
               data-tooltip={t('multiSession.project.newConversation')}
               data-testid="multi-session-conversations-new-button"
+              {...conversationsTooltipHandlers}
             >
               <PlusIcon aria-hidden />
             </button>
@@ -1489,18 +1836,36 @@ export function ConversationSidebar({
           onSubmit={(value) => void handleRenameSubmit(value)}
         />
       ) : null}
-      {deleteProjectTarget ? (
+      {deleteProjectTarget && projectAction === 'archive' ? (
+        <ProjectArchiveDialog
+          open
+          sessionCount={archiveDialogSessionCount}
+          archiving={deleteProjectBusy}
+          onCancel={() => {
+            if (deleteProjectBusy) return;
+            setArchiveDialogSessionCount(null);
+            setDeleteProjectTarget(null);
+          }}
+          onConfirm={() => { void handleRemoveProject(); }}
+        />
+      ) : null}
+      {deleteProjectTarget && projectAction === 'delete' ? (
         <ProjectDeleteDialog
           project={deleteProjectTarget}
           deleting={deleteProjectBusy}
           error={deleteProjectError}
+          notice={deleteProjectNotice}
           onCancel={() => {
+            if (deleteProjectBusy) return;
             setDeleteProjectError(null);
+            setDeleteProjectNotice(null);
             setDeleteProjectTarget(null);
           }}
           onDelete={() => { void handleRemoveProject(); }}
         />
       ) : null}
+      {conversationsTooltip}
+      {newProjectTooltip}
     </aside>
     </>
   );

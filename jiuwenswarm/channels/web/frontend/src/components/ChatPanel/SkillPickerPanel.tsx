@@ -6,7 +6,7 @@ import { webRequest } from '../../services/webClient';
 import { getSkillAvatar } from '../../utils/skillAvatar';
 import { useAdaptiveTooltip } from '../../hooks/useAdaptiveTooltip';
 import { PickerPanel } from './PickerPanel';
-import SearchIcon from '../../assets/agent-management/agent-search.svg?react';
+import { PickerSearchInput } from './PickerSearchInput';
 
 /** 输入栏下拉所需的最小技能数据结构（与 SkillPanel 中的 SkillItem 保持一致） */
 type SkillItem = {
@@ -19,12 +19,12 @@ type SkillItem = {
  enabled?: boolean;
  installed?: boolean;
  tags?: string[];
-  /** 技能类型：skill | swarm_skill | multimodal_skill（后端 skills.list 返回） */
+  /** 技能类型：skill | skillpack | swarm_skill | multimodal_skill（后端 skills.list 返回） */
   skill_type?: SkillType;
 };
 
-/** 技能类型：skill | swarm_skill | multimodal_skill（后端 skills.list 返回） */
-type SkillType = 'skill' | 'swarm_skill' | 'multimodal_skill';
+/** 技能类型：skill | skillpack | swarm_skill | multimodal_skill（后端 skills.list 返回） */
+type SkillType = 'skill' | 'skillpack' | 'swarm_skill' | 'multimodal_skill';
 
 /** 已安装插件信息（用于判定技能是否已安装） */
 type InstalledPlugin = {
@@ -106,7 +106,9 @@ export function SkillPickerPanel({
         (s) =>
           isSkillInstalled(s) &&
           s.enabled !== false &&
-          (isTeamMode ? s.skill_type === 'swarm_skill' : !s.skill_type || s.skill_type === 'skill'),
+          // 单 agent：普通 skill + skillpack（技能包，可当普通技能选用）；
+          // 集群：swarm_skill。
+          (isTeamMode ? s.skill_type === 'swarm_skill' : !s.skill_type || s.skill_type === 'skill' || s.skill_type === 'skillpack'),
       ),
     [skills, isSkillInstalled, isTeamMode],
   );
@@ -190,18 +192,13 @@ export function SkillPickerPanel({
       rowHeight={LIST_ROW_HEIGHT}
       itemCount={filteredSkills.length}
       search={
-        <div className="chat-picker-panel__search" data-testid="chat-panel-skill-select-search">
-          <div className="chat-picker-panel__search-inner">
-            <SearchIcon aria-hidden="true" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={t('chat.skillsSearchPlaceholder')}
-              data-testid="chat-panel-skill-select-search-input"
-            />
-          </div>
-        </div>
+        <PickerSearchInput
+          value={searchQuery}
+          onChange={setSearchQuery}
+          placeholder={t('chat.skillsSearchPlaceholder')}
+          inputTestId="chat-panel-skill-select-search-input"
+          wrapperTestId="chat-panel-skill-select-search"
+        />
       }
       footer={{ label: t('chat.skillsManage'), onClick: handleOpenSkillsPage }}
     >

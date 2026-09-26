@@ -4,11 +4,12 @@
  * 单条消息显示，支持 TTS 朗读
  */
 
-import { useState, useCallback, useEffect, useRef, useMemo, memo } from 'react';
+import { useState, useCallback, useContext, useEffect, useRef, useMemo, memo } from 'react';
 import type { ReactNode } from 'react';
 import {
   Check,
   Copy,
+  GitFork,
   Info,
   Square,
   Target,
@@ -24,6 +25,7 @@ import {
   WebError,
 } from '../../types';
 import { StreamingContent } from './StreamingContent';
+import { FileDownloadMediaPreviewContext } from './FileDownloadMediaPreviewContext';
 import { useAdaptiveTooltip } from '../../hooks/useAdaptiveTooltip';
 import { ToolCallDisplay } from './ToolCallDisplay';
 import { MediaRenderer, stripUploadDocumentBlocks } from './MediaRenderer';
@@ -46,6 +48,7 @@ import { ProactiveRecommendationCard } from './ProactiveRecommendationCard';
 import { fileArtifactId } from '../ArtifactsPanel';
 import { openArtifactPanel } from '../../features/teamPanelState';
 import { openSingleAgentPanel } from '../../features/singleAgentPanelState';
+import { openFileInDesktopBrowser } from '../../features/desktopBrowserFile';
 import { executeDesktopSave, type DesktopSaveApiResult } from '../../utils/desktopSave';
 import { FileIcon } from '../FileIcon';
 import { webRequest } from '../../services/webClient';
@@ -53,6 +56,7 @@ import { useChatStore } from '../../stores/chatStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import type { AgentGroupIdentity } from '../../features/agentManagement';
 import { extractTokenFromDownloadUrl } from '../../utils/fileDownloadDedup';
+import { writeClipboard } from '../../utils/writeClipboard';
 import { isSkillPackageFile } from '../../utils/skillPackageFile';
 import {
   resolveTeamLeaderDisplayName,
@@ -199,7 +203,10 @@ function TeamLeaderPlainTextMessage({
         <FileDownloadList
           files={fileItems}
           className="chat-message-file-list"
-          onPreview={(index) => openArtifactPanelForActiveMode(fileArtifactId(fileItems[index]))}
+          onPreview={(index) => {
+            if (openFileInDesktopBrowser(fileItems[index])) return;
+            openArtifactPanelForActiveMode(fileArtifactId(fileItems[index]));
+          }}
         />
       )}
       <div className="team-member-message__plain" data-testid="chat-panel-team-leader-message-plain">
@@ -336,6 +343,7 @@ interface MessageItemProps {
   teamLeaderIdentityOverride?: TeamLeaderIdentity | null;
   /** Selected Expert Team identity for the top-level conversation surface. */
   teamGroupIdentityOverride?: AgentGroupIdentity | null;
+  onForkFromMessage?: (message: Message) => Promise<void>;
 }
 
 export const MessageItem = memo(function MessageItem({
@@ -347,6 +355,7 @@ export const MessageItem = memo(function MessageItem({
   enableAssistantAvatar = false,
   teamLeaderIdentityOverride,
   teamGroupIdentityOverride,
+  onForkFromMessage,
 }: MessageItemProps) {
   const { t } = useTranslation();
   const {
@@ -373,6 +382,7 @@ export const MessageItem = memo(function MessageItem({
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [isForking, setIsForking] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const { tooltip, handlers: tooltipHandlers } = useAdaptiveTooltip({ placement: 'top' });
   const activeSessionId = useChatStore((state) => state.activeSessionId);
@@ -459,21 +469,23 @@ export const MessageItem = memo(function MessageItem({
     const raw = role === 'user' ? stripUploadDocumentBlocks(stripSwarmflowAdvisory(content)) : content;
     if (!raw) return;
     const copyContent = a2uiContentToText(raw) || raw;
-    try {
-      await navigator.clipboard.writeText(copyContent);
-    } catch {
-      const textarea = document.createElement('textarea');
-      textarea.value = copyContent;
-      textarea.style.position = 'fixed';
-      textarea.style.opacity = '0';
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textarea);
-    }
+    const ok = await writeClipboard(copyContent);
+    if (!ok) return;
     setCopied(true);
     window.setTimeout(() => setCopied(false), 2000);
   }, [content, role]);
+
+  const handleForkFromMessage = useCallback(async () => {
+    if (!onForkFromMessage || isForking) return;
+    setIsForking(true);
+    try {
+      await onForkFromMessage(message);
+    } catch {
+      window.alert(t('chatUi.forkFromMessageFailed'));
+    } finally {
+      setIsForking(false);
+    }
+  }, [isForking, message, onForkFromMessage, t]);
 
   // 自动朗读新消息（仅助手消息，由父组件通过 autoSpeak 控制）
   useEffect(() => {
@@ -738,6 +750,12 @@ export const MessageItem = memo(function MessageItem({
   const hasBubbleContent = isUser
     ? hasDisplayText || isStreaming
     : Boolean(content) || Boolean(visibleMediaItems) || Boolean(visibleFileItems);
+  const showFork = Boolean(
+    onForkFromMessage &&
+      !isStreaming &&
+      (role === 'user' || role === 'assistant') &&
+      hasBubbleContent
+  );
 
   const withAssistantAvatar = !isUser && enableAssistantAvatar;
 
@@ -826,28 +844,13 @@ export const MessageItem = memo(function MessageItem({
                   <FileDownloadList
                     files={visibleFileItems}
                     className="chat-message-file-list"
-                    onPreview={(index) => openArtifactPanelForActiveMode(fileArtifactId(visibleFileItems[index]))}
+                    onPreview={(index) => {
+                      if (openFileInDesktopBrowser(visibleFileItems[index])) return;
+                      openArtifactPanelForActiveMode(fileArtifactId(visibleFileItems[index]));
+                    }}
                   />
                 )}
               </>
-            )}
-          </div>
-        )}
-
-        {/* Token usage summary */}
-        {!isUser && !isStreaming && message.usageSummary && message.usageSummary.total_tokens > 0 && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-text-muted mt-1 mb-0.5" data-testid="chat-panel-message-usage-summary">
-            <span>
-              {message.usageSummary.input_tokens.toLocaleString()} in /{' '}
-              {message.usageSummary.output_tokens.toLocaleString()} out /{' '}
-              {message.usageSummary.total_tokens.toLocaleString()} total
-            </span>
-            {message.usageSummary.total_cost != null && message.usageSummary.total_cost > 0 && (
-              <span>
-                ${message.usageSummary.input_cost?.toFixed(4)} in /{' '}
-                ${message.usageSummary.output_cost?.toFixed(4)} out /{' '}
-                ${message.usageSummary.total_cost.toFixed(4)} total
-              </span>
             )}
           </div>
         )}
@@ -889,8 +892,8 @@ export const MessageItem = memo(function MessageItem({
                   {...tooltipHandlers}
                   onClick={handleCopy}
                   className={clsx(
-                    'p-1.5 rounded-md',
-                    copied ? 'text-accent' : 'hover:text-accent hover:bg-secondary'
+                    'px-1 py-1.5 rounded-md',
+                    copied ? 'text-accent' : 'hover:bg-secondary'
                   )}
                 >
                   {copied ? (
@@ -912,10 +915,10 @@ export const MessageItem = memo(function MessageItem({
                   {...tooltipHandlers}
                   onClick={handleSpeak}
                   className={clsx(
-                    'p-1.5 rounded-md ',
+                    'px-1 py-1.5 rounded-md ',
                     isPlaying
                       ? 'text-accent bg-accent/10'
-                      : 'hover:text-accent hover:bg-secondary'
+                      : 'hover:bg-secondary'
                   )}
                 >
                   {isPlaying ? (
@@ -923,6 +926,27 @@ export const MessageItem = memo(function MessageItem({
                   ) : (
                     <Volume2 className="w-4 h-4" strokeWidth={1.5} />
                   )}
+                </button>
+                {tooltip}
+              </div>
+            )}
+
+            {showFork && (
+              <div className="relative" data-testid="chat-panel-message-fork">
+                <button
+                  type="button"
+                  data-testid="chat-panel-message-fork-btn"
+                  data-tooltip={t('chatUi.forkFromMessage')}
+                  aria-label={t('chatUi.forkFromMessage')}
+                  {...tooltipHandlers}
+                  onClick={() => void handleForkFromMessage()}
+                  disabled={isForking}
+                  className={clsx(
+                    'px-1 py-1.5 rounded-md hover:bg-secondary',
+                    isForking && 'cursor-wait opacity-50'
+                  )}
+                >
+                  <GitFork className="w-4 h-4" strokeWidth={1.5} />
                 </button>
                 {tooltip}
               </div>
@@ -998,6 +1022,7 @@ function FileDownloadList({
 }) {
   const { t } = useTranslation();
   const [expiredSet, setExpiredSet] = useState<Set<number>>(new Set());
+  const mediaPreviewEnabled = useContext(FileDownloadMediaPreviewContext);
   const [savingIndex, setSavingIndex] = useState<number | null>(null);
   const [savedIndex, setSavedIndex] = useState<Set<number>>(new Set());
   const [saveSuccessIndex, setSaveSuccessIndex] = useState<number | null>(null);
@@ -1114,8 +1139,8 @@ function FileDownloadList({
         const isSaved = savedIndex.has(index);
         const isImage = !isSkill && Boolean(file.mime_type && file.mime_type.startsWith('image/')) && Boolean(file.download_url);
         const isVideo = !isSkill && Boolean(file.mime_type && file.mime_type.startsWith('video/')) && Boolean(file.download_url);
-        const showImagePreview = isImage && !expired;
-        const showVideoPreview = isVideo && !expired;
+        const showImagePreview = mediaPreviewEnabled && isImage && !expired;
+        const showVideoPreview = mediaPreviewEnabled && isVideo && !expired;
         const showPreview = showImagePreview || showVideoPreview;
         return (
           <div

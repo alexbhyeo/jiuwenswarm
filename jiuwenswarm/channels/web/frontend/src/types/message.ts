@@ -9,6 +9,11 @@ import type { CrossSessionMessageMetadata } from '../utils/crossSessionMessage';
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
+export interface OutputOrder {
+  requestId: string;
+  sequence: number;
+}
+
 export interface MediaItem {
   type: 'image' | 'audio' | 'video' | 'document';
   mimeType: string;
@@ -46,6 +51,28 @@ export interface FileDownloadItem {
   is_skill_package?: boolean;
 }
 
+export type AutoReviewerStatus =
+  | 'in_progress'
+  | 'approved'
+  | 'deterministic_allow'
+  | 'manual'
+  | 'denied'
+  | 'blocked'
+  | 'fallback'
+  | 'host_revalidation_failed'
+  | 'timed_out'
+  | 'aborted';
+
+export interface AutoReviewerMetadata {
+  reviewer_status?: AutoReviewerStatus;
+  final_reviewer_status?: AutoReviewerStatus;
+  decision_source?: string;
+  risk_level?: string;
+  evidence_summary?: string;
+  manual_reason_summary?: string;
+  user_review_hint?: string;
+}
+
 export interface ContextCompressionRuntime {
   status: 'running' | 'completed' | 'unchanged' | 'failed';
   summary: string;
@@ -69,6 +96,15 @@ export interface Message {
   role: MessageRole;
   content: string;
   timestamp: string;
+  /** A displayed supplement belongs to the existing execution, not a new user turn. */
+  supplementalInput?: {
+    executionId: string;
+    requestId?: string;
+    streamMessageId?: string;
+    streamOffset: number;
+  };
+  outputPhaseId?: string;
+  outputOrder?: OutputOrder;
   /** Full answer delivered by a delegated agent, distinct from spoken replies. */
   presentation?: 'tool_result';
   /** User-facing conversation output that must remain outside collapsed work. */
@@ -80,6 +116,10 @@ export interface Message {
   completedAt?: string;
   /** 前端渲染身份，避免业务 id 重复或历史 prepend 导致 React key 抖动 */
   renderKey?: string;
+  /** 仅用于大历史渐进发布；实时消息没有该标记。 */
+  historyBatchSeq?: number;
+  /** Fork 后从直接父会话继承的历史消息；用于定位分支开始边界。 */
+  forkedFromSessionId?: string;
   audioBase64?: string;
   audioMime?: string;
   mediaItems?: MediaItem[];
@@ -89,6 +129,8 @@ export interface Message {
   toolResult?: ToolResult;
   // 是否正在流式输出
   isStreaming?: boolean;
+  /** 未收到工具/final 分段边界的集群输出；暂停只关闭光标，不移除此关联。 */
+  teamStream?: { requestId?: string };
   usageSummary?: UsageSummary;
   // Harness message flag for special styling
   isHarnessMessage?: boolean;
@@ -111,6 +153,12 @@ export interface Message {
    */
   isGoalObjectiveMessage?: boolean;
   isCommandOutput?: boolean;
+  /**
+   * 该用户消息被 before_chat_request 钩子改写（如敏感内容替换），由
+   * chat.message_updated 事件原地替换内容时置位（issue #2792）。气泡可据此
+   * 渲染「已按安全策略改写」之类的角标；刷新后从历史加载的消息无此标记。
+   */
+  hookRewritten?: boolean;
   /** 斜杠命令结果的结构化元数据；避免渲染层依赖 content 的换行分隔。 */
   commandName?: string;
   commandInput?: string;
@@ -126,14 +174,31 @@ export interface Message {
   crossSession?: CrossSessionMessageMetadata;
 }
 
+/** Selected queued message sent by the existing non-interrupting send button. */
+export interface ChatSendOptions {
+  queuedTaskId: string;
+}
+
+export interface MessageForkPoint {
+  messageId: string;
+  role: MessageRole;
+  content: string;
+  timestamp: string;
+}
+
 export interface ToolCall {
+  outputOrder?: OutputOrder;
   id: string;
   name: string;
   arguments: Record<string, unknown>;
-  description?: string;  // 操作描述，如 "创建 3 个任务"
-  formatted_args?: string;  // 格式化参数摘要
-  display_name?: string;  // 后端下发的可读展示名，前端优先直接展示
+  description?: string; // 操作描述，如 "创建 3 个任务"
+  formatted_args?: string; // 格式化参数摘要
+  /** 模型生成的自然语言目标，原样展示，不走 i18n */
+  call_goal?: string;
+  /** @deprecated 仅用于兼容旧事件，不参与标题渲染 */
+  display_name?: string;
   memberName?: string;
+  reviewer?: AutoReviewerMetadata;
 }
 
 export interface ToolResult {
@@ -151,11 +216,13 @@ export interface ToolResult {
   beamSearch?: BeamSearchProgress;
   /** 仅 symphony_compose_graph 的合法 planned_graph Mermaid 展示投影。 */
   mermaid?: string;
+  reviewer?: AutoReviewerMetadata;
 }
 
 export type ToolExecutionStatus = 'pending' | 'timeout' | 'completed' | 'error';
 
 export interface ToolExecution {
+  outputOrder?: OutputOrder;
   toolCallId: string;
   toolCall: ToolCall;
   result?: ToolResult;
@@ -168,6 +235,8 @@ export interface ToolExecution {
   requestId?: string;
   /** Web 单 Agent 工具调用所属的专家；Team 工具不设置。 */
   agentTemplateName?: string;
+  /** 仅用于大历史渐进发布；实时工具没有该标记。 */
+  historyBatchSeq?: number;
 }
 
 export interface Conversation {

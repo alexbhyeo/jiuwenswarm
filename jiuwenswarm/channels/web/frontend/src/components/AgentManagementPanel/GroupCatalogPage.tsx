@@ -25,16 +25,16 @@ type GroupCatalogPageProps = {
   totalPages: number;
   query: string;
   category: string;
+  installation?: 'all' | 'installed' | 'uninstalled';
   status: RequestStatus;
   error: string | null;
-  busyId: string | null;
+  busyIds: ReadonlySet<string>;
   onCategoryChange: (value: string) => void;
   onPageChange: (page: number) => void;
   onRetry: () => void;
   onOpen: (id: string) => void;
   onUse: (id: string) => void;
   onInstall: (id: string) => void;
-  onUninstall: (id: string) => void;
   onCreate: () => void;
 };
 
@@ -46,22 +46,22 @@ export function GroupCatalogPage({
   totalPages,
   query,
   category,
+  installation = 'all',
   status,
   error,
-  busyId,
+  busyIds,
   onCategoryChange,
   onPageChange,
   onRetry,
   onOpen,
   onUse,
   onInstall,
-  onUninstall,
   onCreate,
 }: GroupCatalogPageProps) {
   const { t } = useTranslation();
   const isMine = scope === 'mine';
   const isEmpty = status === 'success' && totalItems === 0;
-  const hasQuery = query.trim().length > 0 || Boolean(category);
+  const hasQuery = query.trim().length > 0 || Boolean(category) || installation !== 'all';
 
   return (
     <>
@@ -121,11 +121,10 @@ export function GroupCatalogPage({
                 <GroupCard
                   key={item.id}
                   item={item}
-                  busy={busyId === item.id}
+                  busy={busyIds.has(item.id)}
                   onOpen={onOpen}
                   onUse={onUse}
                   onInstall={onInstall}
-                  onUninstall={onUninstall}
                 />
               ))}
             </div>

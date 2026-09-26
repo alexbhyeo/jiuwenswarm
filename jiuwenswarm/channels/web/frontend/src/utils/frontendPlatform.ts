@@ -5,7 +5,6 @@ export type SidebarNavKey =
   | 'director'
   | 'skills'
   | 'agents'
-  | 'teams'
   | 'sessions'
   | 'cron'
   | 'personalContext'

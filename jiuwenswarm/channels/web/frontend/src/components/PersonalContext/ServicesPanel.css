@@ -445,11 +445,16 @@
   align-items: center;
   gap: 4px;
   overflow: hidden;
+  min-width: 150px;
   max-width: 168px;
   font-size: 12px;
   line-height: 18px;
   color: #808080;
   white-space: nowrap;
+}
+
+.pc-services__card-last-run--empty {
+  visibility: hidden;
 }
 
 .pc-services__card-last-run > span:last-child {
@@ -511,6 +516,7 @@
 }
 
 .pc-services__status-text--stateCompleted { color: #5CB300; }
+.pc-services__status-text--statePartial { color: var(--color-feedback-warning); }
 .pc-services__status-text--stateStopped { color: #C2C2C2; }
 .pc-services__status-text--stateFailed { color: #F23030; }
 .pc-services__status-text--stateCollecting { color: #5CB300; }

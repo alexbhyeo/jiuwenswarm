@@ -32,6 +32,8 @@ export type FilePreviewTreeProps = {
   selectedPath: string | null;
   onSelectFile: (path: string) => void;
   onRetry?: () => void;
+  /** 允许点击不可预览文件，以便内容区展示不支持提示 */
+  allowUnsupportedSelection?: boolean;
   labels: FilePreviewTreeLabels;
   testId?: string;
   ariaLabel?: string;
@@ -50,6 +52,31 @@ function findExpandedDirectories(nodes: FilePreviewTreeNode[]): Set<string> {
   return expanded;
 }
 
+/**
+ * 默认预览文件：按展示顺序取第一个目录（含嵌套子目录）下的第一个可预览文件；
+ * 没有任何目录时退回第一个可预览文件。visible=false 与 previewable=false 的节点跳过。
+ */
+export function findDefaultPreviewFile(nodes: FilePreviewTreeNode[]): FilePreviewTreeNode | null {
+  const firstFile = (items: FilePreviewTreeNode[]): FilePreviewTreeNode | null => {
+    for (const item of items) {
+      if (item.visible === false) continue;
+      if (item.kind === 'file') {
+        if (item.previewable !== false) return item;
+        continue;
+      }
+      const nested = firstFile(item.children || []);
+      if (nested) return nested;
+    }
+    return null;
+  };
+  for (const node of nodes) {
+    if (node.visible === false || node.kind !== 'directory') continue;
+    const found = firstFile(node.children || []);
+    if (found) return found;
+  }
+  return firstFile(nodes);
+}
+
 function TreeEntry({
   entry,
   depth,
@@ -59,6 +86,7 @@ function TreeEntry({
   onSelectFile,
   notPreviewableLabel,
   itemTestId,
+  allowUnsupportedSelection,
 }: {
   entry: FilePreviewTreeNode;
   depth: number;
@@ -68,6 +96,7 @@ function TreeEntry({
   onSelectFile: (path: string) => void;
   notPreviewableLabel: string;
   itemTestId: string;
+  allowUnsupportedSelection: boolean;
 }) {
   if (entry.visible === false) return null;
   const isDirectory = entry.kind === 'directory';
@@ -90,7 +119,7 @@ function TreeEntry({
         style={{ paddingLeft: `${depth * 24 + 8}px` }}
         data-testid={itemTestId}
         data-variant={entry.path}
-        disabled={unsupported}
+        disabled={unsupported && !allowUnsupportedSelection}
         onClick={() => (isDirectory ? onToggle(entry.path) : onSelectFile(entry.path))}
         aria-label={entry.label}
         title={entry.path}
@@ -112,7 +141,7 @@ function TreeEntry({
         <span className="file-preview-tree__entry-chevron" aria-hidden="true">
           {isDirectory ? isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} /> : null}
         </span>
-        {unsupported ? (
+        {unsupported && notPreviewableLabel ? (
           <span className="file-preview-tree__entry-badge" data-testid={`${itemTestId}-unsupported`}>
             {notPreviewableLabel}
           </span>
@@ -131,6 +160,7 @@ function TreeEntry({
               onSelectFile={onSelectFile}
               notPreviewableLabel={notPreviewableLabel}
               itemTestId={itemTestId}
+              allowUnsupportedSelection={allowUnsupportedSelection}
             />
           ))}
         </div>
@@ -148,6 +178,7 @@ export function FilePreviewTree({
   selectedPath,
   onSelectFile,
   onRetry,
+  allowUnsupportedSelection = false,
   labels,
   testId = 'file-preview-tree',
   ariaLabel,
@@ -211,6 +242,7 @@ export function FilePreviewTree({
               onSelectFile={onSelectFile}
               notPreviewableLabel={labels.notPreviewable}
               itemTestId={itemTestId}
+              allowUnsupportedSelection={allowUnsupportedSelection}
             />
           ))
         : null}

@@ -179,10 +179,12 @@ class _FakeHost:
         self,
         provider: str,
         credentials: dict[str, object] | None = None,
+        *,
+        reauthorize: bool = False,
     ) -> dict[str, object]:
         return self._record(
             "authorize_provider",
-            (provider, credentials),
+            (provider, credentials, reauthorize),
             {
                 "provider": provider,
                 "state": "authorized",
@@ -442,7 +444,20 @@ PERSONAL_CONTEXT_HOST_CALLS = [
         ReqMethod.PERSONAL_CONTEXT_FETCH_AUTHORIZE_PROVIDER,
         {"provider": "feishu"},
         "authorize_provider",
-        ("feishu", None),
+        ("feishu", None, False),
+        {
+            "provider": "feishu",
+            "state": "authorized",
+            "verification_url": None,
+            "expires_at": None,
+            "error": None,
+        },
+    ),
+    (
+        ReqMethod.PERSONAL_CONTEXT_FETCH_AUTHORIZE_PROVIDER,
+        {"provider": "feishu", "reauthorize": True},
+        "authorize_provider",
+        ("feishu", None, True),
         {
             "provider": "feishu",
             "state": "authorized",
@@ -455,7 +470,7 @@ PERSONAL_CONTEXT_HOST_CALLS = [
         ReqMethod.PERSONAL_CONTEXT_FETCH_AUTHORIZE_PROVIDER,
         {"provider": "github", "credentials": {"token": "github-canary"}},
         "authorize_provider",
-        ("github", {"token": "github-canary"}),
+        ("github", {"token": "github-canary"}, False),
         {
             "provider": "github",
             "state": "authorized",
@@ -488,11 +503,11 @@ PERSONAL_CONTEXT_HOST_CALLS = [
 ]
 
 
-def test_agentserver_registers_exact_25_personal_context_methods() -> None:
+def test_agentserver_registers_exact_26_personal_context_methods() -> None:
     assert server_module._PERSONAL_CONTEXT_REQ_METHODS == {
         item for item in ReqMethod if item.value.startswith("personal_context.")
     }
-    assert len(server_module._PERSONAL_CONTEXT_REQ_METHODS) == 25
+    assert len(server_module._PERSONAL_CONTEXT_REQ_METHODS) == 26
 
 
 @pytest.mark.asyncio
@@ -643,7 +658,13 @@ async def test_runtime_switch_callback_failure_is_fail_open(
             ReqMethod.PERSONAL_CONTEXT_FETCH_AUTHORIZE_PROVIDER,
             {"provider": "github", "credentials": "not-an-object"},
             {"provider": "github", "credentials": {"token": "github-canary"}},
-            ("authorize_provider", ("github", {"token": "github-canary"})),
+            ("authorize_provider", ("github", {"token": "github-canary"}, False)),
+        ),
+        (
+            ReqMethod.PERSONAL_CONTEXT_FETCH_AUTHORIZE_PROVIDER,
+            {"provider": "feishu", "reauthorize": "true"},
+            {"provider": "feishu", "reauthorize": True},
+            ("authorize_provider", ("feishu", None, True)),
         ),
     ],
 )
@@ -994,7 +1015,7 @@ async def test_core_error_is_returned_as_final_e2a_error(capture_wire: None) -> 
     assert ws.sent[0]["response_kind"] == "e2a.error"
     assert ws.sent[0]["body"]["details"] == {
         "error": "safe PersonalContext error",
-        "code": StatusCode.ERROR.code,
+        "code": str(StatusCode.ERROR.code),
         "status": "ERROR",
     }
 

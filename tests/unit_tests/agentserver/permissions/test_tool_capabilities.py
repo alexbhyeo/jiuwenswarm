@@ -6,13 +6,8 @@ from __future__ import annotations
 
 import pytest
 
-from openjiuwen.harness.security.permission_engine.fileguard.file_tool_specs import (
-    FileToolSpec,
-)
-
 from jiuwenswarm.agents.harness.common.rails.permissions.tool_capabilities import (
     classify_tool,
-    install_permission_file_semantics,
     normalize_tool_name,
 )
 
@@ -42,8 +37,9 @@ def test_classifies_cross_session_send_as_high_flex_delegation() -> None:
     assert capability.high_flex is True
 
 
-def test_classifies_cross_session_resolution_as_high_risk_state_change() -> None:
-    capability = classify_tool("session_message_resolve")
+@pytest.mark.parametrize("tool_name", ["session_message_resolve", "session_continue_queued"])
+def test_classifies_cross_session_resolution_as_high_risk_state_change(tool_name) -> None:
+    capability = classify_tool(tool_name)
 
     assert capability.category == "task_management"
     assert capability.operation_family == "cross_session_resolution"
@@ -55,7 +51,6 @@ def test_classifies_cross_session_resolution_as_high_risk_state_change() -> None
 def test_domain_tools_remain_high_flex_by_default() -> None:
     for tool_name in (
         "browser_snapshot",
-        "cron_preview_job",
         "task_tool",
         "write_memory",
     ):
@@ -140,6 +135,23 @@ def test_unknown_mcp_is_high_flex() -> None:
     info = classify_tool("mcp_unknown_server_tool")
     assert info.category == "mcp"
     assert info.high_flex is True
+
+
+@pytest.mark.parametrize("name", [
+    "cron_list_jobs", "cron_get_job", "cron_preview_job",
+    "heartbeat_list_jobs", "heartbeat_get_job", "heartbeat_preview_job",
+    "read_terminal_output", "wait_for_terminal_exit", "convert_timestamp_to_utc8_time",
+])
+def test_readonly_capabilities_require_exact_builtin_names(name, monkeypatch):
+    info = classify_tool(name)
+    assert (info.operation_family, info.risk_tier, info.high_flex) == ("internal_readonly", "low", False)
+    assert info.facts_source == "host_static" and not info.static_side_effects
+    for variant in (name.upper(), name + " ", "mcp_" + name):
+        assert classify_tool(variant).operation_family != "internal_readonly"
+    import jiuwenswarm.common.permission_tools as names
+    monkeypatch.setitem(names.PERMISSION_TOOL_ALIASES, "readonly_alias", name)
+    assert classify_tool("readonly_alias").operation_family != "internal_readonly"
+    assert classify_tool(name).operation_family != "internal_readonly"
 
 
 @pytest.mark.parametrize(
@@ -229,7 +241,7 @@ def test_search_skill_is_medium_skill_discovery_without_high_flex() -> None:
 
 
 def test_session_list_is_low_risk_task_status_query() -> None:
-    for tool_name in ("session_list", "session_message_list"):
+    for tool_name in ("session_list", "session_message_list", "session_read"):
         info = classify_tool(tool_name)
         assert info.category == "task_management"
         assert info.risk_tier == "low"
@@ -311,40 +323,6 @@ def test_read_pdf_is_a_static_read_path_tool() -> None:
     assert info.operation_family == "workspace_read"
     assert info.static_side_effects == frozenset()
     assert info.facts_source == "host_static"
-
-
-def test_permission_file_semantics_installer_is_explicit_and_idempotent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import jiuwenswarm.agents.harness.common.rails.permissions.tool_capabilities as mod
-
-    state: list[FileToolSpec] = []
-    monkeypatch.setattr(
-        mod,
-        "lookup_file_tool_specs",
-        lambda _tool_name: list(state) or None,
-    )
-    monkeypatch.setattr(mod, "register_file_tool", state.append)
-
-    install_permission_file_semantics()
-    install_permission_file_semantics()
-
-    assert state == [FileToolSpec("read_pdf", "pdf_path", "read")]
-
-
-def test_permission_file_semantics_installer_rejects_collision(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import jiuwenswarm.agents.harness.common.rails.permissions.tool_capabilities as mod
-
-    monkeypatch.setattr(
-        mod,
-        "lookup_file_tool_specs",
-        lambda _tool_name: [FileToolSpec("read_pdf", "path", "write")],
-    )
-
-    with pytest.raises(RuntimeError, match="permission_file_semantics_conflict:read_pdf"):
-        install_permission_file_semantics()
 
 
 def test_host_todo_tools_have_static_authority() -> None:
