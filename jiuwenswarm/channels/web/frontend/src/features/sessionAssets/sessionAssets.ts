@@ -76,4 +76,10 @@ export const useSessionAssetsStore = create<SessionAssetsState>((set) => {
   };
 });
 
-export { findReferencedAssets, withAssetReferenceNote } from './assetReferences';
+export {
+  assetKindFromMime,
+  findReferencedAssets,
+  stemFilename,
+  withAssetReferenceNote,
+  type NamedAsset,
+} from './assetReferences';
