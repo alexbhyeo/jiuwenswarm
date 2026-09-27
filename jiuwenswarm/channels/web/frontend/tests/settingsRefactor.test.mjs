@@ -1384,24 +1384,23 @@ test('video generation reuses dedicated vendor presets instead of the chat model
     supports_anthropic: true,
     anthropic_base: 'https://dashscope.aliyuncs.com/apps/anthropic',
     anthropic_client_provider: 'Anthropic',
-    video_gen_default_model: 'wan2.6-t2v',
-    video_gen_model_options: ['wan3.0-video-prime', 'wan2.6-t2v', 'happyhorse-1.1-t2v'],
-    video_gen_api_base: 'https://dashscope.aliyuncs.com/api/v1',
-    image_gen_default_model: 'wanx-v1',
-    image_gen_model_options: [
-      'wanx-v1',
-      'wan2.7-image',
-      'qwen-image-3.0',
-      'z-image-turbo',
-    ],
-    image_gen_api_base: 'https://dashscope.aliyuncs.com/api/v1',
-  };
-  assert.deepEqual(mediaModelOptionsForPreset(alibaba, 'video_gen'), [
-    'wan3.0-video-prime',
-    'wan2.6-t2v',
-    'happyhorse-1.1-t2v',
-  ]);
-  assert.equal(mediaDefaultModelForPreset(alibaba, 'video_gen'), 'wan2.6-t2v');
+  video_gen_default_model: 'wan3.0-video',
+  video_gen_model_options: ['wan3.0-video', 'wan3.0-video-prime'],
+  video_gen_api_base: 'https://dashscope.aliyuncs.com/api/v1',
+  image_gen_default_model: 'wanx-v1',
+  image_gen_model_options: [
+    'wanx-v1',
+    'wan2.7-image',
+    'qwen-image-3.0',
+    'z-image-turbo',
+  ],
+  image_gen_api_base: 'https://dashscope.aliyuncs.com/api/v1',
+};
+assert.deepEqual(mediaModelOptionsForPreset(alibaba, 'video_gen'), [
+  'wan3.0-video',
+  'wan3.0-video-prime',
+]);
+assert.equal(mediaDefaultModelForPreset(alibaba, 'video_gen'), 'wan3.0-video');
   assert.equal(shouldFetchRemoteMediaModels(alibaba, 'video_gen'), false);
   assert.deepEqual(mediaModelOptionsForPreset(alibaba, 'image_gen'), [
     'wanx-v1',
@@ -1420,7 +1419,7 @@ test('video generation reuses dedicated vendor presets instead of the chat model
         protocol: 'openai',
         api_base: alibaba.api_base,
         api_key: 'dash-key',
-        model_name: 'wan2.6-t2v',
+        model_name: 'wan3.0-video',
         model_input_mode: 'options',
         provider: 'OpenAI',
         endpoint_profile: 'dashscope',
@@ -1536,7 +1535,7 @@ test('generation-only vLLM-Omni preset is chat-hidden, media-visible, and keeps 
     icon_key: 'qwen',
     models_endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/models',
     models_needs_key: true,
-    video_gen_model_options: ['wan2.6-t2v'],
+    video_gen_model_options: ['wan3.0-video'],
     image_gen_model_options: ['wanx-v1'],
   };
   const catalog = {

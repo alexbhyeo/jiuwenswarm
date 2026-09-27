@@ -1250,7 +1250,7 @@ async def test_config_set_persists_video_gen_keys_to_env_file(tmp_path, monkeypa
         {
             "video_gen_api_base": "https://dashscope.aliyuncs.com/api/v1",
             "video_gen_api_key": "sk-video-gen",
-            "video_gen_model": "wan2.6-t2v",
+            "video_gen_model": "wan3.0-video",
             "video_gen_provider": "DashScope",
         },
         "sess-1",
@@ -1273,7 +1273,7 @@ async def test_config_set_persists_video_gen_keys_to_env_file(tmp_path, monkeypa
 
     await channel.methods["config.get"](object(), "req-get", {}, "sess-1")
     payload = channel.responses[-1]["payload"]
-    assert payload["video_gen_model"] == "wan2.6-t2v"
+    assert payload["video_gen_model"] == "wan3.0-video"
     assert payload["video_gen_provider"] == "DashScope"
 
 
