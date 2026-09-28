@@ -1468,6 +1468,40 @@
   background: #d64545;
 }
 
+/* 拖动一个已有片段悬停到另一个片段的左/右半边上时的插入指示线——同一行内
+   前后挪动、或带着精确落点挪到别的行，都靠这条线告诉用户会插到哪。 */
+.director-edit-clip--drop-before::after,
+.director-edit-clip--drop-after::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--d-accent);
+  z-index: 3;
+  border-radius: 2px;
+}
+
+.director-edit-clip--drop-before::after {
+  left: -2px;
+}
+
+.director-edit-clip--drop-after::after {
+  right: -2px;
+}
+
+/* 正在被拖动的那个片段本身——用 Pointer Events 自己实现拖拽，没有原生
+   drag-and-drop 自带的半透明"影子"，用降低透明度替代同样的视觉反馈。 */
+.director-edit-clip--dragging {
+  opacity: 0.45;
+}
+
+/* 拖拽落点是"这一行末尾/空行"而不是某个具体片段时，高亮整条轨道。 */
+.director-edit-track--drop-target {
+  border-color: var(--d-accent);
+  background: var(--d-accent-soft);
+}
+
 /* 附加轨道：纯组织用途（比如把分割出来的一段挪出主时间线暂存），自己独立
    一条时间轴，不参与预览/播放，也不用跟主行对齐——每一行自己按自己的内容
    摆开就行。 */
