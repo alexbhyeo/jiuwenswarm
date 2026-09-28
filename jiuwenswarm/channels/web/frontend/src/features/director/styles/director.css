@@ -1214,6 +1214,11 @@
   border-top: 1px solid var(--d-border-default);
   background: var(--d-bg-card);
   padding: 10px 24px;
+  /* 加了"添加轨道"之后这一块的高度不再是固定的——轨道加多了就得自己滚动，
+     不然会把上面的预览画面挤没了。 */
+  max-height: 46%;
+  overflow-y: auto;
+  flex-shrink: 0;
 }
 
 .director-edit-toolbar-row {
@@ -1433,6 +1438,80 @@
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: calc(100% - 6px);
+}
+
+.director-edit-clip-delete {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.director-edit-clip:hover .director-edit-clip-delete {
+  opacity: 1;
+}
+
+.director-edit-clip-delete:hover {
+  background: #d64545;
+}
+
+/* 附加轨道：纯组织用途（比如把分割出来的一段挪出主时间线暂存），自己独立
+   一条时间轴，不参与预览/播放，也不用跟主行对齐——每一行自己按自己的内容
+   摆开就行。 */
+.director-edit-extra-row {
+  margin-top: 10px;
+}
+
+.director-edit-extra-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.director-edit-extra-row-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--d-text-secondary);
+}
+
+.director-edit-track--extra {
+  height: 52px;
+}
+
+.director-edit-add-row-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 6px 12px;
+  border: 1.5px dashed var(--d-border-strong);
+  border-radius: var(--d-radius-md);
+  background: none;
+  color: var(--d-text-secondary);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
+  justify-content: center;
+}
+
+.director-edit-add-row-btn:hover {
+  background: var(--d-bg-shell);
+  color: var(--d-text-primary);
 }
 
 /* 剪辑 tab 的主区（预览+时间线）与右侧对话助手并排 —— 原来的

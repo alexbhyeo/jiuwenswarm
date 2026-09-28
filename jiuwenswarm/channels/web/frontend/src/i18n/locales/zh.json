@@ -171,7 +171,12 @@
       "pause": "暂停",
       "captured": "关键帧已保存到图片素材",
       "captureFailed": "截取关键帧失败",
-      "splitTooCloseToEdge": "播放头太靠近片段边缘，无法分割"
+      "splitTooCloseToEdge": "播放头太靠近片段边缘，无法分割",
+      "deleteClip": "删除片段",
+      "rowLabel": "轨道 {{index}}",
+      "removeRow": "删除该轨道",
+      "extraRowHint": "把片段拖到这里",
+      "addRow": "添加轨道"
     },
     "editChat": {
       "title": "剪辑助手",

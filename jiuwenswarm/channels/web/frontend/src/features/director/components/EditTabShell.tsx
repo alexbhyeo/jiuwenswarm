@@ -50,6 +50,31 @@ const captureIcon = (
   </svg>
 );
 
+const trashIcon = (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6" />
+  </svg>
+);
+
+const addRowIcon = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+
+/** 时间线上的一行——主行（'main'，唯一驱动预览/播放的那一行）或者某条附加行
+ *  （extraTracks 数组下标）。片段可以在任意两行之间互相拖动，删除同理。 */
+type RowRef = 'main' | number;
+
+/** 时间线内部"挪动一个已有片段"的拖拽负载，和 DIRECTOR_ASSET_DRAG_MIME（从
+ *  左侧 素材 面板拖一个新素材进来）是两种不同的拖拽来源，用不同的 MIME 区分，
+ *  同一次 drop 里两种都会尝试解析、以先取到数据的那种为准。 */
+const EDIT_CLIP_DRAG_MIME = 'application/x-director-edit-timeline-clip';
+interface EditClipDragPayload {
+  clipId: string;
+  fromRow: RowRef;
+}
+
 /** 图片素材在时间线上默认占用的时长（秒）——图片本身没有内在时长，给一个
  *  固定值才能像视频片段一样参与拼接播放/分割。 */
 const IMAGE_CLIP_DURATION = 3;
@@ -106,6 +131,10 @@ export function EditTabShell() {
   const uploadAsset = useDirectorStore((s) => s.uploadAsset);
 
   const [clips, setClips] = useState<EditClip[]>([]);
+  // 附加行：纯组织用途，不参与预览/播放——播放头、时长、播放/分割/截帧全部只
+  // 认主行（clips）。挪一段过去就是把它从时间线上"请出去"暂存，互相之间也能
+  // 再挪动/挪回主行。
+  const [extraTracks, setExtraTracks] = useState<EditClip[][]>([]);
   const [playheadTime, setPlayheadTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -118,6 +147,8 @@ export function EditTabShell() {
   playheadRef.current = playheadTime;
   const clipsRef = useRef(clips);
   clipsRef.current = clips;
+  const extraTracksRef = useRef(extraTracks);
+  extraTracksRef.current = extraTracks;
 
   const duration = useMemo(() => totalDuration(clips), [clips]);
   const { index: activeIndex, localTime } = useMemo(() => locate(clips, playheadTime), [clips, playheadTime]);
@@ -128,26 +159,84 @@ export function EditTabShell() {
     window.setTimeout(() => setNotice((cur) => (cur?.text === text ? null : cur)), 3000);
   }, []);
 
-  const appendClip = useCallback((payload: DirectorAssetDragPayload) => {
-    if (payload.type === 'video') {
-      // 时长要从真实视频文件探测——拖进来这一刻还不知道它有多长。
-      const probe = document.createElement('video');
-      probe.preload = 'metadata';
-      probe.src = rawFileUrl(payload.filePath);
-      probe.onloadedmetadata = () => {
-        const dur = Number.isFinite(probe.duration) && probe.duration > 0 ? probe.duration : 5;
-        setClips((prev) => [
-          ...prev,
-          { id: `clip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, assetId: payload.assetId, type: 'video', filePath: payload.filePath, name: payload.name, trimIn: 0, trimOut: dur },
-        ]);
-      };
+  // 按行取当前那一行的片段数组——统一走 ref（clipsRef/extraTracksRef 每次渲染都
+  // 会刷新成最新值），而不是分别现取 state，方便下面几个函数共用一套查找逻辑。
+  const clipsInRow = useCallback((row: RowRef): EditClip[] => (row === 'main' ? clipsRef.current : extraTracksRef.current[row] ?? []), []);
+
+  // 往指定行（主行或某条附加行）末尾加一个新片段/挪入一个已有片段的公共写法。
+  const addClipToRow = useCallback((row: RowRef, clip: EditClip) => {
+    if (row === 'main') setClips((prev) => [...prev, clip]);
+    else setExtraTracks((prev) => prev.map((track, i) => (i === row ? [...track, clip] : track)));
+  }, []);
+
+  // 从指定行里摘掉一个片段。摘的如果是主行的片段，顺带把播放头夹回新的总时长
+  // 以内，避免它悬空指向一个已经不存在的位置。
+  const removeClipFromRow = useCallback((row: RowRef, clipId: string) => {
+    if (row === 'main') {
+      setClips((prev) => {
+        const next = prev.filter((c) => c.id !== clipId);
+        setPlayheadTime((t) => Math.min(t, totalDuration(next)));
+        return next;
+      });
     } else {
-      setClips((prev) => [
-        ...prev,
-        { id: `clip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, assetId: payload.assetId, type: 'image', filePath: payload.filePath, name: payload.name, trimIn: 0, trimOut: IMAGE_CLIP_DURATION },
-      ]);
+      setExtraTracks((prev) => prev.map((track, i) => (i === row ? track.filter((c) => c.id !== clipId) : track)));
     }
   }, []);
+
+  const deleteClip = useCallback((row: RowRef, clipId: string) => removeClipFromRow(row, clipId), [removeClipFromRow]);
+
+  // React 的 setState 更新函数是排队执行的，不是调用 setClips(...) 那一刻就同步
+  // 跑完——不能指望从它的回调里用一个闭包变量"带出"删掉的那个片段给调用方接着
+  // 用（那个闭包变量在 setClips 真正跑之前就已经 return 出去了，拿到的永远是
+  // 初值 null）。要拿到片段本体，只能在调用任何 setState 之前，先从 ref 里读
+  // 当前真正的数组——这两步（摘除、追加）各自独立触发一次 setState 即可，互相
+  // 不需要等对方跑完。
+  const moveClipToRow = useCallback(
+    (clipId: string, fromRow: RowRef, toRow: RowRef) => {
+      if (fromRow === toRow) return;
+      const clip = clipsInRow(fromRow).find((c) => c.id === clipId);
+      if (!clip) return;
+      removeClipFromRow(fromRow, clipId);
+      addClipToRow(toRow, clip);
+    },
+    [addClipToRow, clipsInRow, removeClipFromRow],
+  );
+
+  const addExtraRow = useCallback(() => setExtraTracks((prev) => [...prev, []]), []);
+
+  const appendClip = useCallback(
+    (payload: DirectorAssetDragPayload, row: RowRef = 'main') => {
+      if (payload.type === 'video') {
+        // 时长要从真实视频文件探测——拖进来这一刻还不知道它有多长。
+        const probe = document.createElement('video');
+        probe.preload = 'metadata';
+        probe.src = rawFileUrl(payload.filePath);
+        probe.onloadedmetadata = () => {
+          const dur = Number.isFinite(probe.duration) && probe.duration > 0 ? probe.duration : 5;
+          addClipToRow(row, {
+            id: `clip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            assetId: payload.assetId,
+            type: 'video',
+            filePath: payload.filePath,
+            name: payload.name,
+            trimIn: 0,
+            trimOut: dur,
+          });
+        };
+      } else {
+        addClipToRow(row, {
+          id: `clip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          assetId: payload.assetId,
+          type: 'image',
+          filePath: payload.filePath,
+          name: payload.name,
+          trimIn: 0,
+          trimOut: IMAGE_CLIP_DURATION,
+        });
+      }
+    },
+    [addClipToRow],
+  );
 
   const onDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -155,22 +244,36 @@ export function EditTabShell() {
     setDragOver(true);
   }, []);
   const onDragLeave = useCallback(() => setDragOver(false), []);
-  const onDrop = useCallback(
-    (e: React.DragEvent) => {
+  // 每一行自己的 drop 目标：先看是不是"挪动一个已有片段"（时间线内部拖拽），
+  // 不是的话再看是不是"从 素材 面板拖一个新素材进来"——两种拖拽来源共用同一个
+  // drop 区域，靠 MIME 类型区分先后尝试。
+  const handleRowDrop = useCallback(
+    (row: RowRef) => (e: React.DragEvent) => {
       e.preventDefault();
       setDragOver(false);
-      const raw = e.dataTransfer.getData(DIRECTOR_ASSET_DRAG_MIME);
-      if (!raw) return;
+      const clipRaw = e.dataTransfer.getData(EDIT_CLIP_DRAG_MIME);
+      if (clipRaw) {
+        try {
+          const payload = JSON.parse(clipRaw) as EditClipDragPayload;
+          moveClipToRow(payload.clipId, payload.fromRow, row);
+        } catch {
+          /* not a timeline-clip drag payload */
+        }
+        return;
+      }
+      const assetRaw = e.dataTransfer.getData(DIRECTOR_ASSET_DRAG_MIME);
+      if (!assetRaw) return;
       try {
-        const payload = JSON.parse(raw) as DirectorAssetDragPayload;
+        const payload = JSON.parse(assetRaw) as DirectorAssetDragPayload;
         if (payload.type !== 'video' && payload.type !== 'image') return; // "角色" 素材本质是图片，但这里只接受显式的图片/视频，避免混淆
-        appendClip(payload);
+        appendClip(payload, row);
       } catch {
         /* not a director asset drag payload */
       }
     },
-    [appendClip],
+    [appendClip, moveClipToRow],
   );
+  const onDrop = useMemo(() => handleRowDrop('main'), [handleRowDrop]);
 
   // 播放：视频片段靠它自己的 <video> timeupdate 推进播放头；图片片段没有
   // 媒体元素可以驱动，靠 rAF 按真实经过时间累加。片段边界（无论哪种）都在
@@ -442,12 +545,7 @@ export function EditTabShell() {
           )}
         </div>
 
-        <div
-          className="director-edit-timeline"
-          onDragOver={onDragOver}
-          onDragLeave={onDragLeave}
-          onDrop={onDrop}
-        >
+        <div className="director-edit-timeline">
           <div className="director-edit-toolbar-row">
             <div className="director-edit-toolbar-left">
               <input
@@ -522,7 +620,13 @@ export function EditTabShell() {
                 <span key={mark}>{formatTime(mark)}</span>
               ))}
             </div>
-            <div className="director-edit-track" data-testid="director-edit-track">
+            <div
+              className="director-edit-track"
+              onDragOver={onDragOver}
+              onDragLeave={onDragLeave}
+              onDrop={onDrop}
+              data-testid="director-edit-track"
+            >
               {clips.length === 0 ? (
                 <span className="director-edit-track-hint">{t('director.edit.trackHint')}</span>
               ) : (
@@ -531,6 +635,11 @@ export function EditTabShell() {
                     key={clip.id}
                     className={`director-edit-clip${i === activeIndex ? ' director-edit-clip--active' : ''}`}
                     style={{ flexGrow: clipDuration(clip) }}
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData(EDIT_CLIP_DRAG_MIME, JSON.stringify({ clipId: clip.id, fromRow: 'main' }));
+                      e.dataTransfer.effectAllowed = 'move';
+                    }}
                     onClick={() => {
                       let before = 0;
                       for (let j = 0; j < i; j += 1) before += clipDuration(clips[j]);
@@ -546,6 +655,18 @@ export function EditTabShell() {
                       <video className="director-edit-clip-thumb" src={rawFileUrl(clip.filePath)} muted preload="metadata" />
                     )}
                     <span className="director-edit-clip-name">{clip.name}</span>
+                    <button
+                      type="button"
+                      className="director-edit-clip-delete"
+                      title={t('director.edit.deleteClip')}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteClip('main', clip.id);
+                      }}
+                      data-testid="director-edit-clip-delete"
+                    >
+                      {trashIcon}
+                    </button>
                   </div>
                 ))
               )}
@@ -559,6 +680,74 @@ export function EditTabShell() {
               <div className="director-edit-playhead-handle" />
             </div>
           </div>
+
+          {extraTracks.map((track, rowIndex) => (
+            <div key={rowIndex} className="director-edit-extra-row" data-testid="director-edit-extra-row">
+              <div className="director-edit-extra-row-header">
+                <span className="director-edit-extra-row-label">{t('director.edit.rowLabel', { index: rowIndex + 2 })}</span>
+                <button
+                  type="button"
+                  className="director-edit-toolbar-btn"
+                  title={t('director.edit.removeRow')}
+                  onClick={() => setExtraTracks((prev) => prev.filter((_, i) => i !== rowIndex))}
+                  data-testid="director-edit-remove-row-btn"
+                >
+                  {trashIcon}
+                </button>
+              </div>
+              <div
+                className="director-edit-track director-edit-track--extra"
+                onDragOver={onDragOver}
+                onDragLeave={onDragLeave}
+                onDrop={handleRowDrop(rowIndex)}
+                data-testid="director-edit-extra-track"
+              >
+                {track.length === 0 ? (
+                  <span className="director-edit-track-hint">{t('director.edit.extraRowHint')}</span>
+                ) : (
+                  track.map((clip) => (
+                    <div
+                      key={clip.id}
+                      className="director-edit-clip"
+                      style={{ flexGrow: clipDuration(clip) }}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData(EDIT_CLIP_DRAG_MIME, JSON.stringify({ clipId: clip.id, fromRow: rowIndex }));
+                        e.dataTransfer.effectAllowed = 'move';
+                      }}
+                      data-testid="director-edit-extra-clip"
+                      data-clip-type={clip.type}
+                      title={clip.name}
+                    >
+                      {clip.type === 'image' ? (
+                        <img className="director-edit-clip-thumb" src={rawFileUrl(clip.filePath)} alt="" />
+                      ) : (
+                        <video className="director-edit-clip-thumb" src={rawFileUrl(clip.filePath)} muted preload="metadata" />
+                      )}
+                      <span className="director-edit-clip-name">{clip.name}</span>
+                      <button
+                        type="button"
+                        className="director-edit-clip-delete"
+                        title={t('director.edit.deleteClip')}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteClip(rowIndex, clip.id);
+                        }}
+                        data-testid="director-edit-clip-delete"
+                      >
+                        {trashIcon}
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          ))}
+
+          <button type="button" className="director-edit-add-row-btn" onClick={addExtraRow} data-testid="director-edit-add-row-btn">
+            {addRowIcon}
+            {t('director.edit.addRow')}
+          </button>
         </div>
       </div>
     </div>

@@ -171,7 +171,12 @@
       "pause": "Pause",
       "captured": "Keyframe saved to image assets",
       "captureFailed": "Failed to capture keyframe",
-      "splitTooCloseToEdge": "Playhead is too close to the clip edge to split"
+      "splitTooCloseToEdge": "Playhead is too close to the clip edge to split",
+      "deleteClip": "Delete clip",
+      "rowLabel": "Track {{index}}",
+      "removeRow": "Remove this track",
+      "extraRowHint": "Drag a clip here",
+      "addRow": "Add track"
     },
     "editChat": {
       "title": "Edit Assistant",
