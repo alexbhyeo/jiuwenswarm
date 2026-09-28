@@ -279,6 +279,7 @@ export function GenerationModelConfigDialog({
           protocol="openai"
           catalog={catalog}
           includeOpenAIAccount={false}
+          groups={['custom_api', 'other']}
           disabled={fieldDisabled}
           invalid={Boolean(error)}
           onChange={updateVendor}
