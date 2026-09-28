@@ -1313,18 +1313,40 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
                 return
 
             mime_type, _ = mimetypes.guess_type(full_path.name)
-            self.send_response(200)
+            file_size = full_path.stat().st_size
+            # 视频/音频预览要能拖动播放头随意跳转，浏览器得先看到 Accept-Ranges
+            # 才会把这个资源当成"可以 seek"的——不给这个头，即使内容已经完整下载
+            # 到本地，<video>.currentTime 也会被浏览器直接忽略（seekable 区间算成
+            # 空区间），画面永远停在第一帧。见 _stream_verified_file 的同款实现。
+            byte_range = None
+            range_header = self.headers.get("Range")
+            if range_header:
+                byte_range = _parse_single_byte_range(range_header, file_size)
+                if byte_range is None:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{file_size}")
+                    self.end_headers()
+                    return
+            start, end = byte_range or (0, max(0, file_size - 1))
+            content_length = 0 if file_size == 0 else end - start + 1
+            self.send_response(206 if byte_range is not None else 200)
             self.send_header("Content-Type", mime_type or "application/octet-stream")
-            self.send_header("Content-Length", str(full_path.stat().st_size))
+            self.send_header("Content-Length", str(content_length))
+            self.send_header("Accept-Ranges", "bytes")
             self.send_header("Cache-Control", "no-store")
+            if byte_range is not None:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
             self.end_headers()
             if self.command != "HEAD":
                 with full_path.open("rb") as file_obj:
-                    while True:
-                        chunk = file_obj.read(65536)
+                    file_obj.seek(start)
+                    remaining = content_length
+                    while remaining > 0:
+                        chunk = file_obj.read(min(65536, remaining))
                         if not chunk:
                             break
                         self.wfile.write(chunk)
+                        remaining -= len(chunk)
             return
 
         if path == "/file-api/file-content":

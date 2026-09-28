@@ -1,5 +1,8 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDirectorStore } from '../directorStore';
+import { DIRECTOR_ASSET_DRAG_MIME } from '../types';
+import type { DirectorAssetDragPayload } from '../types';
 import { DirectorTabs } from './DirectorTabs';
 
 const backIcon = (
@@ -28,12 +31,350 @@ const playIcon = (
   </svg>
 );
 
-const RULER_MARKS = ['00:00.00', '00:00.20', '00:00.40', '00:00.60', '00:00.80', '00:01.00', '00:01.20', '00:01.40', '00:01.60', '00:01.80', '00:02.00', '00:02.20'];
+const pauseIcon = (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="#fff">
+    <path d="M6 5h4v14H6zM14 5h4v14h-4z" />
+  </svg>
+);
+
+const splitIcon = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M6 3v18M18 3v18M6 12h12" />
+  </svg>
+);
+
+const captureIcon = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+    <circle cx="12" cy="13" r="4" />
+  </svg>
+);
+
+/** 图片素材在时间线上默认占用的时长（秒）——图片本身没有内在时长，给一个
+ *  固定值才能像视频片段一样参与拼接播放/分割。 */
+const IMAGE_CLIP_DURATION = 3;
+const MIN_CLIP_DURATION = 0.2;
+
+interface EditClip {
+  id: string;
+  assetId: string;
+  type: 'image' | 'video';
+  filePath: string;
+  name: string;
+  /** 视频片段在源文件里的裁剪窗口（秒）；图片片段固定 trimIn=0。 */
+  trimIn: number;
+  trimOut: number;
+}
+
+function clipDuration(clip: EditClip): number {
+  return clip.type === 'image' ? IMAGE_CLIP_DURATION : Math.max(MIN_CLIP_DURATION, clip.trimOut - clip.trimIn);
+}
+
+function rawFileUrl(path: string): string {
+  return `/file-api/raw-file?path=${encodeURIComponent(path)}`;
+}
+
+function formatTime(seconds: number): string {
+  const s = Math.max(0, seconds);
+  const m = Math.floor(s / 60);
+  const r = s - m * 60;
+  return `${String(m).padStart(2, '0')}:${r.toFixed(2).padStart(5, '0')}`;
+}
+
+/** 播放头落在整条时间线的哪个片段、片段内部偏移多少秒。 */
+function locate(clips: EditClip[], time: number): { index: number; localTime: number } {
+  let elapsed = 0;
+  for (let i = 0; i < clips.length; i += 1) {
+    const d = clipDuration(clips[i]);
+    if (time < elapsed + d || i === clips.length - 1) {
+      return { index: i, localTime: Math.max(0, time - elapsed) };
+    }
+    elapsed += d;
+  }
+  return { index: -1, localTime: 0 };
+}
+
+function totalDuration(clips: EditClip[]): number {
+  return clips.reduce((sum, c) => sum + clipDuration(c), 0);
+}
 
 export function EditTabShell() {
   const { t } = useTranslation();
   const activeTab = useDirectorStore((s) => s.activeTab);
   const setActiveTab = useDirectorStore((s) => s.setActiveTab);
+  const selectedProjectId = useDirectorStore((s) => s.selectedProjectId);
+  const uploadAsset = useDirectorStore((s) => s.uploadAsset);
+
+  const [clips, setClips] = useState<EditClip[]>([]);
+  const [playheadTime, setPlayheadTime] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const rafRef = useRef<number | null>(null);
+  const lastTickRef = useRef<number | null>(null);
+  const playheadRef = useRef(playheadTime);
+  playheadRef.current = playheadTime;
+  const clipsRef = useRef(clips);
+  clipsRef.current = clips;
+
+  const duration = useMemo(() => totalDuration(clips), [clips]);
+  const { index: activeIndex, localTime } = useMemo(() => locate(clips, playheadTime), [clips, playheadTime]);
+  const activeClip = activeIndex >= 0 ? clips[activeIndex] : null;
+
+  const showNotice = useCallback((kind: 'ok' | 'error', text: string) => {
+    setNotice({ kind, text });
+    window.setTimeout(() => setNotice((cur) => (cur?.text === text ? null : cur)), 3000);
+  }, []);
+
+  const appendClip = useCallback((payload: DirectorAssetDragPayload) => {
+    if (payload.type === 'video') {
+      // 时长要从真实视频文件探测——拖进来这一刻还不知道它有多长。
+      const probe = document.createElement('video');
+      probe.preload = 'metadata';
+      probe.src = rawFileUrl(payload.filePath);
+      probe.onloadedmetadata = () => {
+        const dur = Number.isFinite(probe.duration) && probe.duration > 0 ? probe.duration : 5;
+        setClips((prev) => [
+          ...prev,
+          { id: `clip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, assetId: payload.assetId, type: 'video', filePath: payload.filePath, name: payload.name, trimIn: 0, trimOut: dur },
+        ]);
+      };
+    } else {
+      setClips((prev) => [
+        ...prev,
+        { id: `clip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, assetId: payload.assetId, type: 'image', filePath: payload.filePath, name: payload.name, trimIn: 0, trimOut: IMAGE_CLIP_DURATION },
+      ]);
+    }
+  }, []);
+
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    setDragOver(true);
+  }, []);
+  const onDragLeave = useCallback(() => setDragOver(false), []);
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragOver(false);
+      const raw = e.dataTransfer.getData(DIRECTOR_ASSET_DRAG_MIME);
+      if (!raw) return;
+      try {
+        const payload = JSON.parse(raw) as DirectorAssetDragPayload;
+        if (payload.type !== 'video' && payload.type !== 'image') return; // "角色" 素材本质是图片，但这里只接受显式的图片/视频，避免混淆
+        appendClip(payload);
+      } catch {
+        /* not a director asset drag payload */
+      }
+    },
+    [appendClip],
+  );
+
+  // 播放：视频片段靠它自己的 <video> timeupdate 推进播放头；图片片段没有
+  // 媒体元素可以驱动，靠 rAF 按真实经过时间累加。片段边界（无论哪种）都在
+  // 这个循环里检测并跳到下一段，播到最后一段自动停止。
+  useEffect(() => {
+    if (!playing) {
+      lastTickRef.current = null;
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      return;
+    }
+    const tick = (now: number) => {
+      const cs = clipsRef.current;
+      const total = totalDuration(cs);
+      const { index } = locate(cs, playheadRef.current);
+      const current = index >= 0 ? cs[index] : null;
+      const isVideoDriven = current?.type === 'video' && videoRef.current && !videoRef.current.paused;
+      if (!isVideoDriven) {
+        const last = lastTickRef.current ?? now;
+        const deltaSec = (now - last) / 1000;
+        const next = playheadRef.current + deltaSec;
+        if (next >= total) {
+          setPlayheadTime(total);
+          setPlaying(false);
+          lastTickRef.current = null;
+          return;
+        }
+        setPlayheadTime(next);
+      }
+      lastTickRef.current = now;
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    };
+  }, [playing]);
+
+  // 切到视频片段时把 <video> 定位到片段内应处的位置并按当前播放状态启停；
+  // 该视频自己的 timeupdate 再把（片段内本地时间 + 之前片段累计时长）写回
+  // 播放头，让时间线随视频真实播放进度前进，而不是靠 rAF 空转估算。
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el || !activeClip || activeClip.type !== 'video') return;
+    const target = activeClip.trimIn + localTime;
+    if (Math.abs(el.currentTime - target) > 0.35) el.currentTime = target;
+    if (playing) void el.play().catch(() => undefined);
+    else el.pause();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeClip?.id, playing]);
+
+  // 暂停状态下拖动播放头（或点击时间线/刻度尺跳转）时，把预览画面实时同步到
+  // 拖到的那一帧——上面那个 effect 只在"切换片段"或"播放/暂停状态改变"时才
+  // 跑，播放头在同一段视频内部移动并不会触发它，画面就会停在原处不跟着走。
+  // 播放中不跑这一段：那时候画面已经交给视频自己的 timeupdate 在推进（见下面
+  // handleVideoTimeUpdate），这里再抢着 seek 只会来回打架、造成卡顿。
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el || playing || !activeClip || activeClip.type !== 'video') return;
+    const target = activeClip.trimIn + localTime;
+    if (Math.abs(el.currentTime - target) > 0.02) el.currentTime = target;
+  }, [playing, activeClip?.id, localTime]);
+
+  const handleVideoTimeUpdate = useCallback(() => {
+    const el = videoRef.current;
+    const cs = clipsRef.current;
+    const { index } = locate(cs, playheadRef.current);
+    const clip = index >= 0 ? cs[index] : null;
+    if (!el || !clip || clip.type !== 'video' || !playing) return;
+    let elapsedBefore = 0;
+    for (let i = 0; i < index; i += 1) elapsedBefore += clipDuration(cs[i]);
+    if (el.currentTime >= clip.trimOut - 0.02) {
+      if (index >= cs.length - 1) {
+        setPlaying(false);
+        setPlayheadTime(totalDuration(cs));
+      } else {
+        setPlayheadTime(elapsedBefore + clipDuration(clip));
+      }
+      return;
+    }
+    setPlayheadTime(elapsedBefore + (el.currentTime - clip.trimIn));
+  }, [playing]);
+
+  const togglePlay = useCallback(() => {
+    if (clips.length === 0) return;
+    setPlaying((p) => {
+      const next = !p;
+      if (next && playheadRef.current >= totalDuration(clipsRef.current) - 0.01) setPlayheadTime(0);
+      return next;
+    });
+  }, [clips.length]);
+
+  const seekTo = useCallback(
+    (time: number) => {
+      setPlayheadTime(Math.min(Math.max(0, time), Math.max(0, duration)));
+    },
+    [duration],
+  );
+
+  // 刻度尺、轨道、播放头共用这一个容器的宽度做时间<->像素换算：三者必须严格
+  // 对齐（播放头那条竖线要能同时穿过刻度尺和下面的片段轨道），换算基准就不能
+  // 分别读刻度尺和轨道各自的宽度——哪怕两者理论上该一样宽，也经不起将来任何一
+  // 边加了 padding/边框就悄悄错位。
+  const scrubAreaRef = useRef<HTMLDivElement>(null);
+  const timeFromClientX = useCallback(
+    (clientX: number) => {
+      const el = scrubAreaRef.current;
+      if (!el || duration <= 0) return 0;
+      const rect = el.getBoundingClientRect();
+      const ratio = (clientX - rect.left) / rect.width;
+      return Math.min(Math.max(0, ratio), 1) * duration;
+    },
+    [duration],
+  );
+  const seekFromPointerEvent = useCallback(
+    (e: React.MouseEvent) => {
+      if (duration <= 0) return;
+      seekTo(timeFromClientX(e.clientX));
+    },
+    [duration, seekTo, timeFromClientX],
+  );
+  const handlePlayheadPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (duration <= 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setPlaying(false); // 拖动播放头这个动作本身就是"我要去看某一帧"，先暂停免得画面一直在跑
+      e.currentTarget.setPointerCapture(e.pointerId);
+      seekTo(timeFromClientX(e.clientX));
+      const onMove = (ev: PointerEvent) => seekTo(timeFromClientX(ev.clientX));
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp, { once: true });
+    },
+    [duration, seekTo, timeFromClientX],
+  );
+  // 刻度尺上均匀撒 ~10 个时间点；没有素材（duration=0）时退回一段固定范围的
+  // 占位刻度，不然时间线还没拖进任何东西之前，刻度尺看起来像是坏掉了。
+  const rulerMarks = useMemo(() => {
+    const span = duration > 0 ? duration : 2.2;
+    const step = span / 11;
+    return Array.from({ length: 12 }, (_, i) => i * step);
+  }, [duration]);
+
+  const handleSplit = useCallback(() => {
+    if (!activeClip || activeIndex < 0) return;
+    const d = clipDuration(activeClip);
+    // 播放头落在片段边界（几乎是起点/终点）就没有意义可分——两段里会有一段
+    // 时长几乎为 0。
+    if (localTime <= MIN_CLIP_DURATION || d - localTime <= MIN_CLIP_DURATION) {
+      showNotice('error', t('director.edit.splitTooCloseToEdge'));
+      return;
+    }
+    const first: EditClip =
+      activeClip.type === 'video'
+        ? { ...activeClip, id: `${activeClip.id}_a`, trimOut: activeClip.trimIn + localTime }
+        : { ...activeClip, id: `${activeClip.id}_a`, trimOut: localTime };
+    const second: EditClip =
+      activeClip.type === 'video'
+        ? { ...activeClip, id: `${activeClip.id}_b`, trimIn: activeClip.trimIn + localTime }
+        : { ...activeClip, id: `${activeClip.id}_b`, trimIn: 0, trimOut: d - localTime };
+    setClips((prev) => {
+      const next = [...prev];
+      next.splice(activeIndex, 1, first, second);
+      return next;
+    });
+  }, [activeClip, activeIndex, localTime, showNotice, t]);
+
+  const handleCapture = useCallback(async () => {
+    const el = videoRef.current;
+    if (!activeClip || activeClip.type !== 'video' || !el || !selectedProjectId) return;
+    if (!el.videoWidth || !el.videoHeight) {
+      showNotice('error', t('director.edit.captureFailed'));
+      return;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = el.videoWidth;
+    canvas.height = el.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      showNotice('error', t('director.edit.captureFailed'));
+      return;
+    }
+    ctx.drawImage(el, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(async (blob) => {
+      if (!blob) {
+        showNotice('error', t('director.edit.captureFailed'));
+        return;
+      }
+      try {
+        const file = new File([blob], `keyframe_${Date.now()}.png`, { type: 'image/png' });
+        await uploadAsset(selectedProjectId, file, 'image');
+        showNotice('ok', t('director.edit.captured'));
+      } catch {
+        showNotice('error', t('director.edit.captureFailed'));
+      }
+    }, 'image/png');
+  }, [activeClip, selectedProjectId, showNotice, t, uploadAsset]);
+
+  const importInputRef = useRef<HTMLInputElement>(null);
+
+  const playheadPct = duration > 0 ? (playheadTime / duration) * 100 : 0;
 
   return (
     <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -43,7 +384,6 @@ export function EditTabShell() {
             {backIcon}
           </button>
           <span className="director-lab-title">{t('director.edit.breadcrumb')}</span>
-          <span className="director-coming-soon-badge">{t('director.comingSoon')}</span>
         </div>
         <DirectorTabs activeTab={activeTab} onChange={setActiveTab} />
       </div>
@@ -61,37 +401,163 @@ export function EditTabShell() {
         </div>
       </div>
 
+      {notice ? (
+        <div className={`director-edit-notice director-edit-notice--${notice.kind}`} data-testid="director-edit-notice">
+          {notice.text}
+        </div>
+      ) : null}
+
       <div className="director-edit-body">
-        <div className="director-edit-stage">
-          <div className="director-edit-dropzone">
-            <div className="director-edit-dropzone-title">
-              {importIcon}
-              {t('director.edit.importMedia')}
+        <div
+          className="director-edit-stage"
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          onDrop={onDrop}
+          data-testid="director-edit-stage"
+        >
+          {activeClip ? (
+            <div className="director-edit-preview" data-testid="director-edit-preview">
+              {activeClip.type === 'video' ? (
+                <video
+                  ref={videoRef}
+                  className="director-edit-preview-media"
+                  src={rawFileUrl(activeClip.filePath)}
+                  onTimeUpdate={handleVideoTimeUpdate}
+                  playsInline
+                  muted
+                  data-testid="director-edit-preview-video"
+                />
+              ) : (
+                <img className="director-edit-preview-media" src={rawFileUrl(activeClip.filePath)} alt={activeClip.name} data-testid="director-edit-preview-image" />
+              )}
             </div>
-            <div className="director-edit-dropzone-hint">{t('director.edit.importHint')}</div>
-          </div>
+          ) : (
+            <div className={`director-edit-dropzone${dragOver ? ' director-edit-dropzone--over' : ''}`}>
+              <div className="director-edit-dropzone-title">
+                {importIcon}
+                {t('director.edit.importMedia')}
+              </div>
+              <div className="director-edit-dropzone-hint">{t('director.edit.importHint')}</div>
+            </div>
+          )}
         </div>
 
-        <div className="director-edit-timeline">
+        <div
+          className="director-edit-timeline"
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          onDrop={onDrop}
+        >
           <div className="director-edit-toolbar-row">
             <div className="director-edit-toolbar-left">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept="image/*,video/*"
+                multiple
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const files = e.target.files;
+                  if (!files || !selectedProjectId) return;
+                  Array.from(files).forEach((file) => {
+                    void uploadAsset(selectedProjectId, file).catch(() => showNotice('error', t('director.edit.captureFailed')));
+                  });
+                  e.target.value = '';
+                }}
+                data-testid="director-edit-import-input"
+              />
+              <button
+                type="button"
+                className="director-edit-toolbar-btn"
+                title={t('director.edit.importMedia')}
+                onClick={() => importInputRef.current?.click()}
+                data-testid="director-edit-add-btn"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className="director-edit-toolbar-btn"
+                title={t('director.edit.split')}
+                disabled={!activeClip}
+                onClick={handleSplit}
+                data-testid="director-edit-split-btn"
+              >
+                {splitIcon}
+              </button>
+              <button
+                type="button"
+                className="director-edit-toolbar-btn"
+                title={t('director.edit.captureKeyframe')}
+                disabled={!activeClip || activeClip.type !== 'video'}
+                onClick={() => void handleCapture()}
+                data-testid="director-edit-capture-btn"
+              >
+                {captureIcon}
+              </button>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <button type="button" style={{ width: 28, height: 28, borderRadius: '9999px', background: 'var(--d-accent)', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }} disabled>
-                {playIcon}
+              <button
+                type="button"
+                className="director-edit-play-btn"
+                onClick={togglePlay}
+                disabled={clips.length === 0}
+                data-testid="director-edit-play-btn"
+                data-state={playing ? 'playing' : 'paused'}
+                title={playing ? t('director.edit.pause') : t('director.edit.play')}
+              >
+                {playing ? pauseIcon : playIcon}
               </button>
-              <span style={{ fontSize: 12.5, color: 'var(--d-text-secondary)', fontVariantNumeric: 'tabular-nums' }}>00:00:00</span>
+              <span className="director-edit-clock" data-testid="director-edit-clock">
+                {formatTime(playheadTime)} / {formatTime(duration)}
+              </span>
             </div>
             <div style={{ width: 90 }} />
           </div>
-          <div className="director-edit-ruler">
-            {RULER_MARKS.map((mark) => (
-              <span key={mark}>{mark}</span>
-            ))}
-          </div>
-          <div className="director-edit-track">
-            <span className="director-edit-track-hint">{t('director.edit.trackHint')}</span>
+          <div className="director-edit-scrub-area" ref={scrubAreaRef}>
+            <div className="director-edit-ruler" onClick={seekFromPointerEvent} data-testid="director-edit-ruler">
+              {rulerMarks.map((mark) => (
+                <span key={mark}>{formatTime(mark)}</span>
+              ))}
+            </div>
+            <div className="director-edit-track" data-testid="director-edit-track">
+              {clips.length === 0 ? (
+                <span className="director-edit-track-hint">{t('director.edit.trackHint')}</span>
+              ) : (
+                clips.map((clip, i) => (
+                  <div
+                    key={clip.id}
+                    className={`director-edit-clip${i === activeIndex ? ' director-edit-clip--active' : ''}`}
+                    style={{ flexGrow: clipDuration(clip) }}
+                    onClick={() => {
+                      let before = 0;
+                      for (let j = 0; j < i; j += 1) before += clipDuration(clips[j]);
+                      seekTo(before + 0.01);
+                    }}
+                    data-testid="director-edit-clip"
+                    data-clip-type={clip.type}
+                    title={clip.name}
+                  >
+                    {clip.type === 'image' ? (
+                      <img className="director-edit-clip-thumb" src={rawFileUrl(clip.filePath)} alt="" />
+                    ) : (
+                      <video className="director-edit-clip-thumb" src={rawFileUrl(clip.filePath)} muted preload="metadata" />
+                    )}
+                    <span className="director-edit-clip-name">{clip.name}</span>
+                  </div>
+                ))
+              )}
+            </div>
+            <div
+              className="director-edit-playhead"
+              style={{ left: `${playheadPct}%` }}
+              onPointerDown={handlePlayheadPointerDown}
+              data-testid="director-edit-playhead"
+            >
+              <div className="director-edit-playhead-handle" />
+            </div>
           </div>
         </div>
       </div>

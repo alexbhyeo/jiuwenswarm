@@ -164,7 +164,14 @@
       "exit": "退出剪辑",
       "importMedia": "导入素材",
       "importHint": "支持导入图片与视频，或从左侧「素材」面板直接拖拽已生成的内容到时间线",
-      "trackHint": "将「素材」中的图片或视频拖拽到此处，开始剪辑"
+      "trackHint": "将「素材」中的图片或视频拖拽到此处，开始剪辑",
+      "split": "分割",
+      "captureKeyframe": "截取关键帧",
+      "play": "播放",
+      "pause": "暂停",
+      "captured": "关键帧已保存到图片素材",
+      "captureFailed": "截取关键帧失败",
+      "splitTooCloseToEdge": "播放头太靠近片段边缘，无法分割"
     },
     "editChat": {
       "title": "剪辑助手",
@@ -191,17 +198,60 @@
   "videoLive": {
     "modelFallback": "视频模型",
     "subtitle": "实时多屏音视频问答",
-    "status": { "connecting": "正在连接 Full-duplex 模型并申请麦克风权限…", "speaking": "模型正在回答…" },
-    "coreAgent": { "startFailed": "Jiuwen Core Agent 未能启动任务：{{message}}", "startFailedSummary": "任务未能启动，错误信息已经显示在界面中。" },
-    "errors": { "startFailed": "Full-duplex 会话启动失败。", "joyaiTextNotAccepted": "文字输入未进入 JoyAI 会话", "qwenTextNotAccepted": "文字输入未进入千问 Realtime 会话", "textSendFailed": "文字输入发送失败" },
-    "empty": { "title": "打开一个实时画面", "description": "使用摄像头、本地视频，或添加多个屏幕", "listening": "正在持续听取", "waiting": "等待开启 Full-duplex", "hint": "开启后直接说话，无需逐句点击" },
-    "sources": { "camera": "摄像头", "localVideo": "本地视频", "addScreen": "添加屏幕", "shareScreen": "共享屏幕", "stopCamera": "停止摄像头", "stopScreens": "停止全部屏幕" },
-    "actions": { "closeVideo": "关闭视频", "starting": "正在启动 Full-duplex 会话", "stopSession": "结束 Full-duplex 会话", "startSession": "开启 Full-duplex 会话" },
+    "status": {
+      "connecting": "正在连接 Full-duplex 模型并申请麦克风权限…",
+      "speaking": "模型正在回答…"
+    },
+    "coreAgent": {
+      "startFailed": "Jiuwen Core Agent 未能启动任务：{{message}}",
+      "startFailedSummary": "任务未能启动，错误信息已经显示在界面中。"
+    },
+    "errors": {
+      "startFailed": "Full-duplex 会话启动失败。",
+      "joyaiTextNotAccepted": "文字输入未进入 JoyAI 会话",
+      "qwenTextNotAccepted": "文字输入未进入千问 Realtime 会话",
+      "textSendFailed": "文字输入发送失败"
+    },
+    "empty": {
+      "title": "打开一个实时画面",
+      "description": "使用摄像头、本地视频，或添加多个屏幕",
+      "listening": "正在持续听取",
+      "waiting": "等待开启 Full-duplex",
+      "hint": "开启后直接说话，无需逐句点击"
+    },
+    "sources": {
+      "camera": "摄像头",
+      "localVideo": "本地视频",
+      "addScreen": "添加屏幕",
+      "shareScreen": "共享屏幕",
+      "stopCamera": "停止摄像头",
+      "stopScreens": "停止全部屏幕"
+    },
+    "actions": {
+      "closeVideo": "关闭视频",
+      "starting": "正在启动 Full-duplex 会话",
+      "stopSession": "结束 Full-duplex 会话",
+      "startSession": "开启 Full-duplex 会话"
+    },
     "frameWindow": "滚动窗口：{{count}}/{{max}} 帧",
     "audioOnly": "纯语音不发送画面",
-    "chat": { "coreResult": "工具结果 · Jiuwen Core Agent", "user": "你", "search": "九问搜索", "assistant": "助手", "searchCompleted": "九问搜索 Agent 搜索完成" },
-    "search": { "ready": "准备搜索", "selectHistory": "选择搜索记录", "latest": "最新搜索（自动）" },
-    "input": { "activePlaceholder": "也可以在当前会话中输入文字……", "inactivePlaceholder": "先开启 Full-duplex……", "send": "发送问题" }
+    "chat": {
+      "coreResult": "工具结果 · Jiuwen Core Agent",
+      "user": "你",
+      "search": "九问搜索",
+      "assistant": "助手",
+      "searchCompleted": "九问搜索 Agent 搜索完成"
+    },
+    "search": {
+      "ready": "准备搜索",
+      "selectHistory": "选择搜索记录",
+      "latest": "最新搜索（自动）"
+    },
+    "input": {
+      "activePlaceholder": "也可以在当前会话中输入文字……",
+      "inactivePlaceholder": "先开启 Full-duplex……",
+      "send": "发送问题"
+    }
   },
   "settingsPanel": {
     "title": "设置",
@@ -545,15 +595,37 @@
         "title": "浏览器运行方式",
         "description": "选择在前台显示浏览器窗口或以无头模式运行。"
       },
-      "model_name": { "title": "模型名称", "placeholder": "例如：glm-4.7" },
-      "alias": { "title": "自定义别名", "placeholder": "例如：GLM-4.7 生产环境" },
-      "api_base": { "title": "API 地址", "placeholder": "例如：https://api.openai.com/v1" },
-      "api_key": { "title": "API 密钥", "placeholder": "例如：sk-..." },
-      "model_provider": { "title": "模型提供商" },
-      "reasoning_level": { "title": "推理" },
-      "embed_api_base": { "title": "API 地址" },
-      "embed_api_key": { "title": "API 密钥" },
-      "embed_model": { "title": "模型名称" },
+      "model_name": {
+        "title": "模型名称",
+        "placeholder": "例如：glm-4.7"
+      },
+      "alias": {
+        "title": "自定义别名",
+        "placeholder": "例如：GLM-4.7 生产环境"
+      },
+      "api_base": {
+        "title": "API 地址",
+        "placeholder": "例如：https://api.openai.com/v1"
+      },
+      "api_key": {
+        "title": "API 密钥",
+        "placeholder": "例如：sk-..."
+      },
+      "model_provider": {
+        "title": "模型提供商"
+      },
+      "reasoning_level": {
+        "title": "推理"
+      },
+      "embed_api_base": {
+        "title": "API 地址"
+      },
+      "embed_api_key": {
+        "title": "API 密钥"
+      },
+      "embed_model": {
+        "title": "模型名称"
+      },
       "asr_api_base": {
         "title": "语音转写 API 地址",
         "description": "填写 OpenAI 兼容 Base URL 或完整的 /audio/transcriptions 地址。",
@@ -573,7 +645,10 @@
         "title": "语音转写",
         "description": "开启后，任务对话可以使用麦克风进行语音转写。"
       },
-      "skill_evolution": { "title": "本地技能自动演进与沉淀", "description": "控制本地技能的自动演进和沉淀" },
+      "skill_evolution": {
+        "title": "本地技能自动演进与沉淀",
+        "description": "控制本地技能的自动演进和沉淀"
+      },
       "symphony_evolution_enabled": {
         "title": "发现技能包",
         "description": "任务结束后从执行经验中沉淀技能组合，自动发现技能包"
@@ -586,48 +661,139 @@
         "title": "本地环境事实与任务经验自动演进",
         "description": "控制智能体对于环境事实和任务经验学习"
       },
-      "free_search_ddg_enabled": { "title": "DuckDuckGo 搜索", "description": "启用 DuckDuckGo 免费搜索来源。" },
-      "free_search_bing_enabled": { "title": "Bing 搜索", "description": "启用 Bing 免费搜索来源。" },
-      "jina_api_key": { "title": "Jina API 密钥" },
-      "bocha_api_key": { "title": "博查 API 密钥" },
-      "perplexity_api_key": { "title": "Perplexity API 密钥" },
-      "serper_api_key": { "title": "Serper API 密钥" },
-      "github_token": { "title": "GitHub 访问令牌" },
-      "vision_api_base": { "title": "API 地址" },
-      "vision_api_key": { "title": "API 密钥" },
-      "vision_model": { "title": "模型名称" },
-      "vision_provider": { "title": "模型提供商" },
-      "audio_api_base": { "title": "API 地址" },
-      "audio_api_key": { "title": "API 密钥" },
-      "audio_model": { "title": "模型名称" },
-      "audio_provider": { "title": "模型提供商" },
-      "video_api_base": { "title": "API 地址" },
-      "video_api_key": { "title": "API 密钥" },
-      "video_model": { "title": "模型名称" },
-      "video_provider": { "title": "模型提供商" },
-      "video_gen_provider": { "title": "模型提供商" },
-      "video_gen_protocol": { "title": "协议" },
-      "video_gen_api_base": { "title": "API 地址", "placeholder": "例如 https://openrouter.ai/api/v1" },
-      "video_gen_api_key": { "title": "API 密钥", "placeholder": "例如 sk-..." },
-      "video_gen_model": { "title": "模型名称", "placeholder": "例如 bytedance/seedance-2.0-fast" },
+      "free_search_ddg_enabled": {
+        "title": "DuckDuckGo 搜索",
+        "description": "启用 DuckDuckGo 免费搜索来源。"
+      },
+      "free_search_bing_enabled": {
+        "title": "Bing 搜索",
+        "description": "启用 Bing 免费搜索来源。"
+      },
+      "jina_api_key": {
+        "title": "Jina API 密钥"
+      },
+      "bocha_api_key": {
+        "title": "博查 API 密钥"
+      },
+      "perplexity_api_key": {
+        "title": "Perplexity API 密钥"
+      },
+      "serper_api_key": {
+        "title": "Serper API 密钥"
+      },
+      "github_token": {
+        "title": "GitHub 访问令牌"
+      },
+      "vision_api_base": {
+        "title": "API 地址"
+      },
+      "vision_api_key": {
+        "title": "API 密钥"
+      },
+      "vision_model": {
+        "title": "模型名称"
+      },
+      "vision_provider": {
+        "title": "模型提供商"
+      },
+      "audio_api_base": {
+        "title": "API 地址"
+      },
+      "audio_api_key": {
+        "title": "API 密钥"
+      },
+      "audio_model": {
+        "title": "模型名称"
+      },
+      "audio_provider": {
+        "title": "模型提供商"
+      },
+      "video_api_base": {
+        "title": "API 地址"
+      },
+      "video_api_key": {
+        "title": "API 密钥"
+      },
+      "video_model": {
+        "title": "模型名称"
+      },
+      "video_provider": {
+        "title": "模型提供商"
+      },
+      "video_gen_provider": {
+        "title": "模型提供商"
+      },
+      "video_gen_protocol": {
+        "title": "协议"
+      },
+      "video_gen_api_base": {
+        "title": "API 地址",
+        "placeholder": "例如 https://openrouter.ai/api/v1"
+      },
+      "video_gen_api_key": {
+        "title": "API 密钥",
+        "placeholder": "例如 sk-..."
+      },
+      "video_gen_model": {
+        "title": "模型名称",
+        "placeholder": "例如 bytedance/seedance-2.0-fast"
+      },
       "video_gen_enabled": {
         "title": "视频生成",
         "description": "启用视频生成工具（文生视频）；关闭后仍保留已保存的模型配置。"
       },
-      "visual_gen_provider": { "title": "模型提供商" },
-      "visual_gen_protocol": { "title": "协议" },
-      "visual_gen_api_base": { "title": "API 地址", "placeholder": "例如 https://openrouter.ai/api/v1" },
-      "visual_gen_api_key": { "title": "API 密钥", "placeholder": "例如 sk-..." },
-      "visual_gen_model": { "title": "模型名称", "placeholder": "例如 google/gemini-3.1-flash-image" },
-      "visual_gen_enabled": { "title": "图像生成", "description": "启用图像生成工具（文生图）；关闭后仍保留已保存的模型配置。" },
-      "edit_chat_provider": { "title": "模型提供商" },
-      "edit_chat_protocol": { "title": "协议" },
-      "edit_chat_api_base": { "title": "API 地址", "placeholder": "例如 https://openrouter.ai/api/v1" },
-      "edit_chat_api_key": { "title": "API 密钥", "placeholder": "例如 sk-..." },
-      "edit_chat_model": { "title": "模型名称", "placeholder": "例如 anthropic/claude-sonnet-4.5" },
-      "edit_chat_enabled": { "title": "剪辑对话", "description": "启用「导演模式 · 剪辑」里的 AI 对话助手；关闭后仍保留已保存的模型配置。" },
-      "permissions_mode": { "title": "全局权限模式", "description": "为普通 Agent 与 Team 选择统一的安全护栏模式。" },
-      "a2ui_enabled": { "title": "启用 A2UI", "description": "允许将支持的结果渲染成交互式界面。" },
+      "visual_gen_provider": {
+        "title": "模型提供商"
+      },
+      "visual_gen_protocol": {
+        "title": "协议"
+      },
+      "visual_gen_api_base": {
+        "title": "API 地址",
+        "placeholder": "例如 https://openrouter.ai/api/v1"
+      },
+      "visual_gen_api_key": {
+        "title": "API 密钥",
+        "placeholder": "例如 sk-..."
+      },
+      "visual_gen_model": {
+        "title": "模型名称",
+        "placeholder": "例如 google/gemini-3.1-flash-image"
+      },
+      "visual_gen_enabled": {
+        "title": "图像生成",
+        "description": "启用图像生成工具（文生图）；关闭后仍保留已保存的模型配置。"
+      },
+      "edit_chat_provider": {
+        "title": "模型提供商"
+      },
+      "edit_chat_protocol": {
+        "title": "协议"
+      },
+      "edit_chat_api_base": {
+        "title": "API 地址",
+        "placeholder": "例如 https://openrouter.ai/api/v1"
+      },
+      "edit_chat_api_key": {
+        "title": "API 密钥",
+        "placeholder": "例如 sk-..."
+      },
+      "edit_chat_model": {
+        "title": "模型名称",
+        "placeholder": "例如 anthropic/claude-sonnet-4.5"
+      },
+      "edit_chat_enabled": {
+        "title": "剪辑对话",
+        "description": "启用「导演模式 · 剪辑」里的 AI 对话助手；关闭后仍保留已保存的模型配置。"
+      },
+      "permissions_mode": {
+        "title": "全局权限模式",
+        "description": "为普通 Agent 与 Team 选择统一的安全护栏模式。"
+      },
+      "a2ui_enabled": {
+        "title": "启用 A2UI",
+        "description": "允许将支持的结果渲染成交互式界面。"
+      },
       "rsi_enabled": {
         "title": "启用 RSI",
         "description": "显示侧边栏「实验」入口，可创建并查看 Harness 优化和产物优化（论文、程序）实验；关闭后隐藏该入口。"
@@ -2884,8 +3050,19 @@
     "title": "专家管理",
     "subtitle": "创建并管理专家，快速复用专家资产",
     "tabsLabel": "专家管理分类",
-    "tabs": { "catalog": "专家广场", "teams": "专家团广场", "mine": "我的专家", "mineAgent": "专家", "mineGroup": "专家团", "mineLabel": "我的资产类型" },
-    "source": { "builtin": "官方", "local": "我的", "hub": "Hub" },
+    "tabs": {
+      "catalog": "专家广场",
+      "teams": "专家团广场",
+      "mine": "我的专家",
+      "mineAgent": "专家",
+      "mineGroup": "专家团",
+      "mineLabel": "我的资产类型"
+    },
+    "source": {
+      "builtin": "官方",
+      "local": "我的",
+      "hub": "Hub"
+    },
     "categoryLabel": "专家分类",
     "categoryAll": "全部",
     "categoryOther": "其他",
@@ -2937,7 +3114,11 @@
     "confirm": {
       "deleteMessage": "确定要删除专家「{{name}}」吗？此操作不可恢复。"
     },
-    "card": { "open": "查看 {{name}} 详情", "actions": "{{name}} 操作", "moreTagsTooltip": "更多标签：{{tags}}" },
+    "card": {
+      "open": "查看 {{name}} 详情",
+      "actions": "{{name}} 操作",
+      "moreTagsTooltip": "更多标签：{{tags}}"
+    },
     "states": {
       "installed": "已安装",
       "loadError": "专家列表加载失败，请重试。",
@@ -3112,7 +3293,10 @@
         "delete": "删除",
         "saving": "保存中…"
       },
-      "card": { "open": "查看 {{name}} 详情", "actions": "{{name}} 操作" },
+      "card": {
+        "open": "查看 {{name}} 详情",
+        "actions": "{{name}} 操作"
+      },
       "states": {
         "loadError": "专家团列表加载失败，请重试。",
         "detailError": "专家团详情加载失败，请重试。",
@@ -3139,7 +3323,10 @@
         "noDetails": "暂无更多详情",
         "filesUnavailable": "安装后即可查看该专家团的文件。"
       },
-      "files": { "loadError": "专家团文件列表加载失败，请重试。", "readError": "专家团文件读取失败，请重试。" },
+      "files": {
+        "loadError": "专家团文件列表加载失败，请重试。",
+        "readError": "专家团文件读取失败，请重试。"
+      },
       "form": {
         "title": "手动创建",
         "createAgentTab": "创建专家",
@@ -4105,9 +4292,18 @@
       "expired": "已过期"
     },
     "schedule": {
-      "tab": { "interval": "按间隔", "cron": "Cron 表达式", "once": "单次" },
-      "interval": { "label": "每隔", "unit": "分钟回到当前会话" },
-      "cron": { "hint": "支持 5 段（分 时 日 月 周）或与普通 Cron 任务相同的 7 段格式（秒 分 时 日 月 周 年）。" },
+      "tab": {
+        "interval": "按间隔",
+        "cron": "Cron 表达式",
+        "once": "单次"
+      },
+      "interval": {
+        "label": "每隔",
+        "unit": "分钟回到当前会话"
+      },
+      "cron": {
+        "hint": "支持 5 段（分 时 日 月 周）或与普通 Cron 任务相同的 7 段格式（秒 分 时 日 月 周 年）。"
+      },
       "once": {
         "hint": "选择具体日期和时间，到点后回到当前会话触发一次，之后自动标记为已完成",
         "dateLabel": "日期",
@@ -4416,7 +4612,7 @@
       "candidateError": "候选 {{index}}/{{total}} 生成失败",
       "scoreSuffix": " · 得分 {{score}}"
     }
-    },
+  },
   "swarmflow": {
     "statusPlanned": "已规划",
     "statusPending": "等待中",
