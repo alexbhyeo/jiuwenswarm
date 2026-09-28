@@ -176,7 +176,8 @@
       "rowLabel": "轨道 {{index}}",
       "removeRow": "删除该轨道",
       "extraRowHint": "把片段拖到这里",
-      "addRow": "添加轨道"
+      "addRow": "添加轨道",
+      "clipOverlap": "此位置与同一轨道上的其他片段重叠"
     },
     "editChat": {
       "title": "剪辑助手",

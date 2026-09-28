@@ -1257,6 +1257,8 @@
   align-items: center;
   justify-content: center;
   margin-top: 10px;
+  /* 片段现在按绝对时间定位（left/width 百分比），需要这一层做定位基准。 */
+  position: relative;
 }
 
 .director-edit-track-hint {
@@ -1298,6 +1300,16 @@
 .director-edit-preview-media {
   max-width: 100%;
   max-height: 100%;
+  border-radius: var(--d-radius-md);
+  background: #000;
+}
+
+/* 播放头当前所在时刻，所有轨道在这一刻都没有片段覆盖（轨道间的空隙）——
+   跟"整条时间线还没有任何素材"是两回事，不用再提示拖素材进来，纯黑即可，
+   跟真实剪辑软件里放到空隙时的表现一致。 */
+.director-edit-preview--empty {
+  width: 100%;
+  height: 100%;
   border-radius: var(--d-radius-md);
   background: #000;
 }
@@ -1394,16 +1406,20 @@
 }
 
 .director-edit-track {
-  gap: 4px;
-  padding: 6px;
+  /* 横向不再留内边距——片段的 left/width 百分比是相对刻度尺/播放头共用的
+     scrubAreaRef 宽度换算出来的，轨道内容框的左右边界必须跟它精确对齐，
+     否则拖放定位和实际渲染位置会错开。 */
+  padding: 6px 0;
   overflow: hidden;
 }
 
 .director-edit-clip {
-  position: relative;
-  height: 100%;
+  /* 片段现在按"绝对时间"定位，不再是顺序排列的 flex 子项——可以留空隙，
+     也可以被拖到轨道上的任意时间点（只要不跟同轨道其它片段重叠）。 */
+  position: absolute;
+  top: 0;
+  bottom: 0;
   min-width: 36px;
-  flex-basis: 0;
   border-radius: var(--d-radius-sm);
   border: 1.5px solid var(--d-border-default);
   background: var(--d-bg-card);
@@ -1468,38 +1484,28 @@
   background: #d64545;
 }
 
-/* 拖动一个已有片段悬停到另一个片段的左/右半边上时的插入指示线——同一行内
-   前后挪动、或带着精确落点挪到别的行，都靠这条线告诉用户会插到哪。 */
-.director-edit-clip--drop-before::after,
-.director-edit-clip--drop-after::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-  background: var(--d-accent);
-  z-index: 3;
-  border-radius: 2px;
-}
-
-.director-edit-clip--drop-before::after {
-  left: -2px;
-}
-
-.director-edit-clip--drop-after::after {
-  right: -2px;
-}
-
 /* 正在被拖动的那个片段本身——用 Pointer Events 自己实现拖拽，没有原生
    drag-and-drop 自带的半透明"影子"，用降低透明度替代同样的视觉反馈。 */
 .director-edit-clip--dragging {
   opacity: 0.45;
 }
 
-/* 拖拽落点是"这一行末尾/空行"而不是某个具体片段时，高亮整条轨道。 */
-.director-edit-track--drop-target {
-  border-color: var(--d-accent);
+/* 拖拽落点预览——新素材从 素材 面板拖进时间线、或者挪动一个已有片段时，
+   实时显示"松手会落在哪、占多宽"；跟目标轨道其它片段重叠时变红且不能放。 */
+.director-edit-drop-preview {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: var(--d-radius-sm);
+  border: 1.5px dashed var(--d-accent);
   background: var(--d-accent-soft);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.director-edit-drop-preview--invalid {
+  border-color: #d64545;
+  background: rgba(214, 69, 69, 0.12);
 }
 
 /* 附加轨道：纯组织用途（比如把分割出来的一段挪出主时间线暂存），自己独立

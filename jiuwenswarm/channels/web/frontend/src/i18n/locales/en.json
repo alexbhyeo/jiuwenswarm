@@ -176,7 +176,8 @@
       "rowLabel": "Track {{index}}",
       "removeRow": "Remove this track",
       "extraRowHint": "Drag a clip here",
-      "addRow": "Add track"
+      "addRow": "Add track",
+      "clipOverlap": "This position overlaps another clip on the same track"
     },
     "editChat": {
       "title": "Edit Assistant",

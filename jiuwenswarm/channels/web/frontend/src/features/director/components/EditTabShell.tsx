@@ -62,23 +62,20 @@ const addRowIcon = (
   </svg>
 );
 
-/** 时间线上的一行——主行（'main'，唯一驱动预览/播放的那一行）或者某条附加行
- *  （extraTracks 数组下标）。片段可以在任意两行之间互相拖动，删除同理。 */
-type RowRef = 'main' | number;
-
-/** 挪动一个已有片段（同一行内前后排序 / 挪到别的行）走的是自定义的 Pointer
- *  Events 拖拽——不是原生 HTML5 drag-and-drop（draggable/dragstart/drop）。
- *  实测发现原生拖拽即便每一步 dragover 都正确 preventDefault，松开鼠标时也
- *  经常直接以 dragend 收场、drop 根本不触发（真实浏览器里同样复现，不只是
- *  自动化测试的限制）——原生 HTML5 DnD 对"程序化/连续拖动"这类手势本来就不够
- *  可靠。播放头拖拽已经在用 Pointer Events 并且很稳，这里的片段拖拽照搬同一
- *  套模式。素材面板（DirectorRail）拖新素材进时间线仍然是原生 DnD，两者互不
- *  干扰，分别处理。*/
-
 /** 图片素材在时间线上默认占用的时长（秒）——图片本身没有内在时长，给一个
  *  固定值才能像视频片段一样参与拼接播放/分割。 */
 const IMAGE_CLIP_DURATION = 3;
 const MIN_CLIP_DURATION = 0.2;
+/** 整条时间线还没有任何素材时，刻度尺/拖放定位用的占位时长——不然连"往
+ *  第几秒拖"这个换算都没有基准。 */
+const EMPTY_TIMELINE_SPAN = 10;
+/** 时间线可拖放的范围要比"当前内容的总时长"多留一截——不然任何轨道一旦有
+ *  了内容，可见范围就正好卡死在最后一个片段的结尾，没有任何空白像素可以
+ *  拖放到"更晚的时间"，用户永远没法把新素材拖到已有内容之后去（拖动已有
+ *  片段想往后挪同理会卡住）。这一截跟当前总时长成比例（内容越长，留白也
+ *  跟着变宽），同时给一个固定下限，内容很短时也有够用的余量。 */
+const MIN_TIMELINE_HEADROOM = 5;
+const TIMELINE_HEADROOM_RATIO = 0.15;
 
 interface EditClip {
   id: string;
@@ -89,10 +86,17 @@ interface EditClip {
   /** 视频片段在源文件里的裁剪窗口（秒）；图片片段固定 trimIn=0。 */
   trimIn: number;
   trimOut: number;
+  /** 片段在所属轨道上的绝对起始时间（秒）——片段可以摆在轨道上任意时间点，
+   *  彼此之间可以留空隙，不再是"挨个首尾相连"。 */
+  start: number;
 }
 
 function clipDuration(clip: EditClip): number {
   return clip.type === 'image' ? IMAGE_CLIP_DURATION : Math.max(MIN_CLIP_DURATION, clip.trimOut - clip.trimIn);
+}
+
+function clipEnd(clip: EditClip): number {
+  return clip.start + clipDuration(clip);
 }
 
 function rawFileUrl(path: string): string {
@@ -106,21 +110,36 @@ function formatTime(seconds: number): string {
   return `${String(m).padStart(2, '0')}:${r.toFixed(2).padStart(5, '0')}`;
 }
 
-/** 播放头落在整条时间线的哪个片段、片段内部偏移多少秒。 */
-function locate(clips: EditClip[], time: number): { index: number; localTime: number } {
-  let elapsed = 0;
-  for (let i = 0; i < clips.length; i += 1) {
-    const d = clipDuration(clips[i]);
-    if (time < elapsed + d || i === clips.length - 1) {
-      return { index: i, localTime: Math.max(0, time - elapsed) };
-    }
-    elapsed += d;
+/** 整条时间线的总时长——所有轨道里最晚结束的那个片段决定，不只是主轨道。 */
+function totalDurationAcrossTracks(tracks: EditClip[][]): number {
+  let max = 0;
+  for (const track of tracks) {
+    for (const clip of track) max = Math.max(max, clipEnd(clip));
   }
-  return { index: -1, localTime: 0 };
+  return max;
 }
 
-function totalDuration(clips: EditClip[]): number {
-  return clips.reduce((sum, c) => sum + clipDuration(c), 0);
+/** 播放头当前这一刻，从最上面的轨道开始找第一条"有片段覆盖这一刻"的轨道——
+ *  最上面的轨道优先级最高，只有它在这一刻是空隙时才会往下一条轨道找，都没有
+ *  就是真正的空隙（返回 null，预览区显示黑屏）。 */
+function locateActive(tracks: EditClip[][], time: number): { trackIndex: number; clip: EditClip; localTime: number } | null {
+  for (let t = 0; t < tracks.length; t += 1) {
+    const hit = tracks[t].find((c) => time >= c.start && time < clipEnd(c));
+    if (hit) return { trackIndex: t, clip: hit, localTime: time - hit.start };
+  }
+  return null;
+}
+
+/** 目标时间窗 [start, end) 是否跟这条轨道上（自己除外）的其它片段重叠。 */
+function overlaps(track: EditClip[], start: number, end: number, excludeId?: string): boolean {
+  return track.some((c) => c.id !== excludeId && start < clipEnd(c) && c.start < end);
+}
+
+interface DropPreview {
+  trackIndex: number;
+  start: number;
+  end: number;
+  valid: boolean;
 }
 
 export function EditTabShell() {
@@ -130,23 +149,23 @@ export function EditTabShell() {
   const selectedProjectId = useDirectorStore((s) => s.selectedProjectId);
   const uploadAsset = useDirectorStore((s) => s.uploadAsset);
 
-  const [clips, setClips] = useState<EditClip[]>([]);
-  // 附加行：纯组织用途，不参与预览/播放——播放头、时长、播放/分割/截帧全部只
-  // 认主行（clips）。挪一段过去就是把它从时间线上"请出去"暂存，互相之间也能
-  // 再挪动/挪回主行。
-  const [extraTracks, setExtraTracks] = useState<EditClip[][]>([]);
+  // tracks[0] 是主轨——唯一没有"轨道 N"标签的那条，但不再是唯一参与播放的
+  // 轨道：所有轨道都会参与播放，播放优先级按轨道从上到下（见 locateActive）。
+  // tracks[1:] 是用户自己加的附加轨道。
+  const [tracks, setTracks] = useState<EditClip[][]>([[]]);
   const [playheadTime, setPlayheadTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
-  // clipId === null 表示落点是"这一行末尾/空行"(没有具体命中某个片段),仅
-  // 用于渲染插入指示线/高亮;真正的落点在拖拽结束那一刻从 pendingDropRef 里
-  // 同步读取,不依赖这份仅用于展示的 state。
-  const [dropIndicator, setDropIndicator] = useState<{ row: RowRef; clipId: string | null; side: 'before' | 'after' } | null>(null);
   const [draggingClipId, setDraggingClipId] = useState<string | null>(null);
-  const pendingDropRef = useRef<{ row: RowRef; clipId: string | null; side: 'before' | 'after' } | null>(null);
-  // 拖拽结束(pointerup)时置位,让紧随其后的原生 click 事件(main 行片段点击
-  // 会触发跳转播放头)被吞掉一次——不然一次拖拽松手后还会顺带触发一次"点击"。
+  // 拖拽落点预览——新素材从 素材 面板拖进来、或者挪动一个已有片段，两种情况
+  // 共用同一份状态：目标轨道 + 起止时间 + 跟该轨道其它片段是否重叠（重叠就
+  // 不能放）。真正提交时从 pendingDropRef 同步读最后一次算出的值，不依赖这
+  // 份仅用于渲染预览的 state（可能落后于最后一次指针移动）。
+  const [dropPreview, setDropPreview] = useState<DropPreview | null>(null);
+  const pendingDropRef = useRef<DropPreview | null>(null);
+  // 拖拽结束（pointerup）时置位，让紧随其后的原生 click 事件（点击片段跳转
+  // 播放头）被吞掉一次——不然一次拖拽松手后还会顺带触发一次"点击"。
   const suppressClipClickRef = useRef(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -154,110 +173,97 @@ export function EditTabShell() {
   const lastTickRef = useRef<number | null>(null);
   const playheadRef = useRef(playheadTime);
   playheadRef.current = playheadTime;
-  const clipsRef = useRef(clips);
-  clipsRef.current = clips;
-  const extraTracksRef = useRef(extraTracks);
-  extraTracksRef.current = extraTracks;
+  const tracksRef = useRef(tracks);
+  tracksRef.current = tracks;
 
-  const duration = useMemo(() => totalDuration(clips), [clips]);
-  const { index: activeIndex, localTime } = useMemo(() => locate(clips, playheadTime), [clips, playheadTime]);
-  const activeClip = activeIndex >= 0 ? clips[activeIndex] : null;
+  const duration = useMemo(() => totalDurationAcrossTracks(tracks), [tracks]);
+  const timeScale =
+    duration > 0 ? duration + Math.max(MIN_TIMELINE_HEADROOM, duration * TIMELINE_HEADROOM_RATIO) : EMPTY_TIMELINE_SPAN;
+  const active = useMemo(() => locateActive(tracks, playheadTime), [tracks, playheadTime]);
+  const activeClip = active?.clip ?? null;
+  const activeTrackIndex = active?.trackIndex ?? -1;
+  const localTime = active?.localTime ?? 0;
+  const hasAnyClip = useMemo(() => tracks.some((track) => track.length > 0), [tracks]);
 
   const showNotice = useCallback((kind: 'ok' | 'error', text: string) => {
     setNotice({ kind, text });
     window.setTimeout(() => setNotice((cur) => (cur?.text === text ? null : cur)), 3000);
   }, []);
 
-  // 按行取当前那一行的片段数组——统一走 ref（clipsRef/extraTracksRef 每次渲染都
-  // 会刷新成最新值），而不是分别现取 state，方便下面几个函数共用一套查找逻辑。
-  const clipsInRow = useCallback((row: RowRef): EditClip[] => (row === 'main' ? clipsRef.current : extraTracksRef.current[row] ?? []), []);
-
-  // 对指定行的片段数组做一次变换（增/删/挪位置都走这一个口子）。摘掉主行的
-  // 片段会让总时长变短，顺带把播放头夹回新的总时长以内，避免它悬空指向一个
-  // 已经不存在的位置；附加行不参与播放，不需要这一步。
-  const applyRow = useCallback((row: RowRef, updater: (arr: EditClip[]) => EditClip[]) => {
-    if (row === 'main') {
-      setClips((prev) => {
-        const next = updater(prev);
-        if (next.length < prev.length) setPlayheadTime((t) => Math.min(t, totalDuration(next)));
-        return next;
-      });
-    } else {
-      setExtraTracks((prev) => prev.map((track, i) => (i === row ? updater(track) : track)));
-    }
+  // 对指定轨道的片段数组做一次变换（增/删/挪位置都走这一个口子），变换后
+  // 顺带把播放头夹回新的总时长以内，避免它悬空指向一个已经不存在的位置。
+  const applyTrack = useCallback((trackIndex: number, updater: (arr: EditClip[]) => EditClip[]) => {
+    setTracks((prev) => {
+      const next = prev.map((track, i) => (i === trackIndex ? updater(track) : track));
+      const total = totalDurationAcrossTracks(next);
+      setPlayheadTime((time) => Math.min(time, total));
+      return next;
+    });
   }, []);
 
-  // 往指定行（主行或某条附加行）插入一个新片段/挪入一个已有片段的公共写法；
-  // 不传 atIndex 就插到末尾。
-  const addClipToRow = useCallback(
-    (row: RowRef, clip: EditClip, atIndex?: number) => {
-      applyRow(row, (arr) => {
-        const next = [...arr];
-        const at = atIndex === undefined ? next.length : Math.max(0, Math.min(atIndex, next.length));
-        next.splice(at, 0, clip);
-        return next;
+  const addClipToTrack = useCallback(
+    (trackIndex: number, clip: EditClip) => {
+      applyTrack(trackIndex, (arr) => [...arr, clip].sort((a, b) => a.start - b.start));
+    },
+    [applyTrack],
+  );
+
+  const removeClipFromTrack = useCallback(
+    (trackIndex: number, clipId: string) => applyTrack(trackIndex, (arr) => arr.filter((c) => c.id !== clipId)),
+    [applyTrack],
+  );
+
+  const deleteClip = useCallback((trackIndex: number, clipId: string) => removeClipFromTrack(trackIndex, clipId), [removeClipFromTrack]);
+
+  // 把一个已有片段挪到目标轨道的目标起始时间；跟目标轨道其它片段（自己除外）
+  // 重叠就拒绝、什么都不改，调用方负责在拒绝时提示用户。
+  const moveClip = useCallback((clipId: string, fromTrack: number, toTrack: number, rawStart: number): boolean => {
+    const clip = tracksRef.current[fromTrack]?.find((c) => c.id === clipId);
+    if (!clip) return false;
+    const start = Math.max(0, rawStart);
+    const end = start + clipDuration(clip);
+    if (overlaps(tracksRef.current[toTrack] ?? [], start, end, fromTrack === toTrack ? clipId : undefined)) return false;
+    setTracks((prev) => {
+      const moved = { ...clip, start };
+      const next = prev.map((track, i) => {
+        if (i === fromTrack && i === toTrack) return track.filter((c) => c.id !== clipId).concat(moved).sort((a, b) => a.start - b.start);
+        if (i === fromTrack) return track.filter((c) => c.id !== clipId);
+        if (i === toTrack) return [...track, moved].sort((a, b) => a.start - b.start);
+        return track;
       });
-    },
-    [applyRow],
-  );
+      const total = totalDurationAcrossTracks(next);
+      setPlayheadTime((time) => Math.min(time, total));
+      return next;
+    });
+    return true;
+  }, []);
 
-  const removeClipFromRow = useCallback(
-    (row: RowRef, clipId: string) => applyRow(row, (arr) => arr.filter((c) => c.id !== clipId)),
-    [applyRow],
-  );
+  const addTrack = useCallback(() => setTracks((prev) => [...prev, []]), []);
+  const removeTrack = useCallback((trackIndex: number) => {
+    if (trackIndex === 0) return; // 主轨不能删
+    setTracks((prev) => prev.filter((_, i) => i !== trackIndex));
+  }, []);
 
-  const deleteClip = useCallback((row: RowRef, clipId: string) => removeClipFromRow(row, clipId), [removeClipFromRow]);
-
-  // 同一行内前后挪动：把片段从原位置摘出来，插回目标位置——目标位置是"摘除前"
-  // 数组里的下标，所以摘除后如果目标在原位置之后，要往前借一位。
-  const reorderClipInRow = useCallback(
-    (row: RowRef, clipId: string, targetIndex: number) => {
-      applyRow(row, (arr) => {
-        const idx = arr.findIndex((c) => c.id === clipId);
-        if (idx === -1) return arr;
-        const next = [...arr];
-        const [item] = next.splice(idx, 1);
-        const insertAt = Math.max(0, Math.min(idx < targetIndex ? targetIndex - 1 : targetIndex, next.length));
-        next.splice(insertAt, 0, item);
-        return next;
-      });
-    },
-    [applyRow],
-  );
-
-  // React 的 setState 更新函数是排队执行的，不是调用 setClips(...) 那一刻就同步
-  // 跑完——不能指望从它的回调里用一个闭包变量"带出"删掉的那个片段给调用方接着
-  // 用（那个闭包变量在 setClips 真正跑之前就已经 return 出去了，拿到的永远是
-  // 初值 null）。要拿到片段本体，只能在调用任何 setState 之前，先从 ref 里读
-  // 当前真正的数组——这两步（摘除、追加）各自独立触发一次 setState 即可，互相
-  // 不需要等对方跑完。同一行内挪动（fromRow === toRow）则走 reorderClipInRow，
-  // 不传 toIndex 时视为"没有具体落点"，不做任何事（比如拖回同一行的空白处）。
-  const moveClipToRow = useCallback(
-    (clipId: string, fromRow: RowRef, toRow: RowRef, toIndex?: number) => {
-      if (fromRow === toRow) {
-        if (toIndex !== undefined) reorderClipInRow(toRow, clipId, toIndex);
-        return;
-      }
-      const clip = clipsInRow(fromRow).find((c) => c.id === clipId);
-      if (!clip) return;
-      removeClipFromRow(fromRow, clipId);
-      addClipToRow(toRow, clip, toIndex);
-    },
-    [addClipToRow, clipsInRow, removeClipFromRow, reorderClipInRow],
-  );
-
-  const addExtraRow = useCallback(() => setExtraTracks((prev) => [...prev, []]), []);
-
-  const appendClip = useCallback(
-    (payload: DirectorAssetDragPayload, row: RowRef = 'main') => {
+  // 把一个新素材放进指定轨道的指定起始时间；跟该轨道现有片段重叠就拒绝并提示
+  // （视频要等探测完真实时长才能确定终点，所以视频的重叠检查发生在探测完成
+  // 之后，图片时长是固定值可以立即检查）。
+  const appendClipAt = useCallback(
+    (payload: DirectorAssetDragPayload, trackIndex: number, rawStart: number) => {
+      const start = Math.max(0, rawStart);
+      const commit = (clip: EditClip) => {
+        if (overlaps(tracksRef.current[trackIndex] ?? [], clip.start, clip.start + clipDuration(clip))) {
+          showNotice('error', t('director.edit.clipOverlap'));
+          return;
+        }
+        addClipToTrack(trackIndex, clip);
+      };
       if (payload.type === 'video') {
-        // 时长要从真实视频文件探测——拖进来这一刻还不知道它有多长。
         const probe = document.createElement('video');
         probe.preload = 'metadata';
         probe.src = rawFileUrl(payload.filePath);
         probe.onloadedmetadata = () => {
           const dur = Number.isFinite(probe.duration) && probe.duration > 0 ? probe.duration : 5;
-          addClipToRow(row, {
+          commit({
             id: `clip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
             assetId: payload.assetId,
             type: 'video',
@@ -265,10 +271,11 @@ export function EditTabShell() {
             name: payload.name,
             trimIn: 0,
             trimOut: dur,
+            start,
           });
         };
       } else {
-        addClipToRow(row, {
+        commit({
           id: `clip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           assetId: payload.assetId,
           type: 'image',
@@ -276,121 +283,153 @@ export function EditTabShell() {
           name: payload.name,
           trimIn: 0,
           trimOut: IMAGE_CLIP_DURATION,
+          start,
         });
       }
     },
-    [addClipToRow],
+    [addClipToTrack, showNotice, t],
   );
 
-  const onDragOver = useCallback((e: React.DragEvent) => {
+  // 刻度尺、轨道、播放头共用这一个容器的宽度做时间<->像素换算：三者必须严格
+  // 对齐（播放头那条竖线要能同时穿过刻度尺和下面的片段轨道），换算基准就不能
+  // 分别读刻度尺和轨道各自的宽度——哪怕两者理论上该一样宽，也经不起将来任何一
+  // 边加了 padding/边框就悄悄错位。这一层也是所有轨道片段 left/width 百分比
+  // 共用的同一套时间刻度（各轨道横向留白已经对齐，见 CSS）。
+  const scrubAreaRef = useRef<HTMLDivElement>(null);
+  const timeFromClientX = useCallback(
+    (clientX: number) => {
+      const el = scrubAreaRef.current;
+      if (!el) return 0;
+      const rect = el.getBoundingClientRect();
+      const ratio = (clientX - rect.left) / rect.width;
+      return Math.min(Math.max(0, ratio), 1) * timeScale;
+    },
+    [timeScale],
+  );
+
+  const trackIndexFromPoint = useCallback((clientX: number, clientY: number): number | null => {
+    const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+    const trackEl = el?.closest('[data-track-row]') as HTMLElement | null;
+    if (!trackEl) return null;
+    const idx = Number(trackEl.getAttribute('data-track-row'));
+    return Number.isFinite(idx) ? idx : null;
+  }, []);
+
+  const onDragOverGeneric = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
     setDragOver(true);
   }, []);
   const onDragLeave = useCallback(() => {
     setDragOver(false);
-    setDropIndicator(null);
+    setDropPreview(null);
   }, []);
-  // 每一行自己的 drop 目标：只处理"从 素材 面板拖一个新素材进来"（原生 HTML5
-  // DnD）——时间线内部挪动已有片段走的是下面的 Pointer Events 方案，不再经过
-  // 这里。
-  const handleRowDrop = useCallback(
-    (row: RowRef) => (e: React.DragEvent) => {
+
+  // 素材面板拖新素材悬停在某条轨道上时，实时算出落点预览（用图片默认时长
+  // 近似——视频的真实时长要等真正放下后探测才知道，悬停阶段只能给个近似宽度）。
+  const onTrackDragOver = useCallback(
+    (trackIndex: number) => (e: React.DragEvent) => {
+      onDragOverGeneric(e);
+      const start = timeFromClientX(e.clientX);
+      const end = start + IMAGE_CLIP_DURATION;
+      const valid = !overlaps(tracksRef.current[trackIndex] ?? [], start, end);
+      setDropPreview({ trackIndex, start, end, valid });
+    },
+    [onDragOverGeneric, timeFromClientX],
+  );
+
+  const handleTrackDrop = useCallback(
+    (trackIndex: number) => (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragOver(false);
+      setDropPreview(null);
+      const assetRaw = e.dataTransfer.getData(DIRECTOR_ASSET_DRAG_MIME);
+      if (!assetRaw) return;
+      try {
+        const payload = JSON.parse(assetRaw) as DirectorAssetDragPayload;
+        if (payload.type !== 'video' && payload.type !== 'image') return; // "角色" 素材本质是图片，但这里只接受显式的图片/视频，避免混淆
+        appendClipAt(payload, trackIndex, timeFromClientX(e.clientX));
+      } catch {
+        /* not a director asset drag payload */
+      }
+    },
+    [appendClipAt, timeFromClientX],
+  );
+
+  // 拖到预览舞台（时间线上方那块大预览区）而不是具体某条轨道上时，没有一个
+  // 自然的"时间点"可用——落到主轨末尾，跟以前"直接追加"的简单交互保持一致。
+  const stageDrop = useCallback(
+    (e: React.DragEvent) => {
       e.preventDefault();
       setDragOver(false);
       const assetRaw = e.dataTransfer.getData(DIRECTOR_ASSET_DRAG_MIME);
       if (!assetRaw) return;
       try {
         const payload = JSON.parse(assetRaw) as DirectorAssetDragPayload;
-        if (payload.type !== 'video' && payload.type !== 'image') return; // "角色" 素材本质是图片，但这里只接受显式的图片/视频，避免混淆
-        appendClip(payload, row);
+        if (payload.type !== 'video' && payload.type !== 'image') return;
+        const main = tracksRef.current[0] ?? [];
+        const start = main.length ? Math.max(...main.map(clipEnd)) : 0;
+        appendClipAt(payload, 0, start);
       } catch {
         /* not a director asset drag payload */
       }
     },
-    [appendClip],
-  );
-  const onDrop = useMemo(() => handleRowDrop('main'), [handleRowDrop]);
-
-  // 拖拽经过的落点：命中某个片段就说明要插到它的左/右半边（同一行内重排，
-  // 或者带着精确位置挪到别的行）；命中的是行/轨道容器本身（没有落在任何片段
-  // 上，比如空行，或者片段列表末尾的空白）就说明是"追加到这一行末尾"。用
-  // document.elementFromPoint 而不是 React 事件的 currentTarget——拖拽过程中
-  // 鼠标经过的元素在 React 合成事件体系之外持续变化，Pointer Events 只在
-  // “按下的那个元素”上收，中途移动到哪由这里主动查询当前坐标命中了什么。
-  const resolveDropTarget = useCallback(
-    (clientX: number, clientY: number, draggedClipId: string): { row: RowRef; clipId: string | null; side: 'before' | 'after' } | null => {
-      const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
-      if (!el) return null;
-      const clipEl = el.closest('[data-clip-id]') as HTMLElement | null;
-      if (clipEl && clipEl.getAttribute('data-clip-id') !== draggedClipId) {
-        const rowAttr = clipEl.getAttribute('data-clip-row') ?? 'main';
-        const row: RowRef = rowAttr === 'main' ? 'main' : Number(rowAttr);
-        const rect = clipEl.getBoundingClientRect();
-        const side: 'before' | 'after' = clientX < rect.left + rect.width / 2 ? 'before' : 'after';
-        return { row, clipId: clipEl.getAttribute('data-clip-id'), side };
-      }
-      const trackEl = el.closest('[data-track-row]') as HTMLElement | null;
-      if (trackEl) {
-        const rowAttr = trackEl.getAttribute('data-track-row') ?? 'main';
-        const row: RowRef = rowAttr === 'main' ? 'main' : Number(rowAttr);
-        return { row, clipId: null, side: 'after' };
-      }
-      return null;
-    },
-    [],
+    [appendClipAt],
   );
 
-  // 挪动一个已有片段：按下即开始跟踪指针，移动超过一点点距离才算"在拖"（不
-  // 然主行片段原有的"点击跳转播放头"就没法用了），松手那一刻从
-  // pendingDropRef 同步读最后一次算出的落点并真正提交——落点信息不经由
-  // dropIndicator 这个 state 传递，因为它只用于渲染插入线，读取时机可能落后
-  // 于最后一次指针移动。
+  // 挪动一个已有片段：按下即开始跟踪指针，移动超过一点点距离才算"在拖"（不然
+  // 原有的"点击跳转播放头"就没法用了）。拖动过程中片段起点跟着光标走，但保持
+  // 抓取时光标相对片段起点的偏移（不是让光标对齐到片段最左边），手感更自然；
+  // 目标轨道由光标当前悬停的轨道决定。松手那一刻从 pendingDropRef 同步读最后
+  // 一次算出的落点并真正提交——不依赖 dropPreview 这个 state，它只用于渲染，
+  // 读取时机可能落后于最后一次指针移动。
   const handleClipPointerDown = useCallback(
-    (row: RowRef, clipId: string) => (e: React.PointerEvent) => {
+    (trackIndex: number, clipId: string) => (e: React.PointerEvent) => {
       if (e.button !== 0) return;
-      const startX = e.clientX;
-      const startY = e.clientY;
+      const clip = tracksRef.current[trackIndex]?.find((c) => c.id === clipId);
+      if (!clip) return;
+      const startClientX = e.clientX;
+      const startClientY = e.clientY;
+      const grabOffsetTime = timeFromClientX(startClientX) - clip.start;
       let dragging = false;
       const onMove = (ev: PointerEvent) => {
         if (!dragging) {
-          if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return;
+          if (Math.hypot(ev.clientX - startClientX, ev.clientY - startClientY) < 4) return;
           dragging = true;
           setDraggingClipId(clipId);
         }
-        const target = resolveDropTarget(ev.clientX, ev.clientY, clipId);
-        pendingDropRef.current = target;
-        setDropIndicator(target);
+        const targetTrack = trackIndexFromPoint(ev.clientX, ev.clientY) ?? trackIndex;
+        const start = Math.max(0, timeFromClientX(ev.clientX) - grabOffsetTime);
+        const end = start + clipDuration(clip);
+        const valid = !overlaps(tracksRef.current[targetTrack] ?? [], start, end, targetTrack === trackIndex ? clipId : undefined);
+        const preview: DropPreview = { trackIndex: targetTrack, start, end, valid };
+        pendingDropRef.current = preview;
+        setDropPreview(preview);
       };
       const onUp = () => {
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
         if (dragging) {
           suppressClipClickRef.current = true;
-          const target = pendingDropRef.current;
-          if (target) {
-            if (target.clipId) {
-              const idx = clipsInRow(target.row).findIndex((c) => c.id === target.clipId);
-              const toIndex = idx === -1 ? undefined : idx + (target.side === 'before' ? 0 : 1);
-              moveClipToRow(clipId, row, target.row, toIndex);
-            } else {
-              moveClipToRow(clipId, row, target.row);
-            }
+          const preview = pendingDropRef.current;
+          if (preview) {
+            if (preview.valid) moveClip(clipId, trackIndex, preview.trackIndex, preview.start);
+            else showNotice('error', t('director.edit.clipOverlap'));
           }
         }
         pendingDropRef.current = null;
         setDraggingClipId(null);
-        setDropIndicator(null);
+        setDropPreview(null);
       };
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp, { once: true });
     },
-    [clipsInRow, moveClipToRow, resolveDropTarget],
+    [moveClip, showNotice, t, timeFromClientX, trackIndexFromPoint],
   );
 
-  // 播放：视频片段靠它自己的 <video> timeupdate 推进播放头；图片片段没有
-  // 媒体元素可以驱动，靠 rAF 按真实经过时间累加。片段边界（无论哪种）都在
-  // 这个循环里检测并跳到下一段，播到最后一段自动停止。
+  // 播放：视频片段靠它自己的 <video> timeupdate 推进播放头；图片片段/轨道
+  // 间的空隙没有媒体元素可以驱动，靠 rAF 按真实经过时间累加。谁是"当前活跃
+  // 片段"由 locateActive 按轨道优先级现算，不再依赖固定的顺序数组。
   useEffect(() => {
     if (!playing) {
       lastTickRef.current = null;
@@ -398,11 +437,10 @@ export function EditTabShell() {
       return;
     }
     const tick = (now: number) => {
-      const cs = clipsRef.current;
-      const total = totalDuration(cs);
-      const { index } = locate(cs, playheadRef.current);
-      const current = index >= 0 ? cs[index] : null;
-      const isVideoDriven = current?.type === 'video' && videoRef.current && !videoRef.current.paused;
+      const ts = tracksRef.current;
+      const total = totalDurationAcrossTracks(ts);
+      const current = locateActive(ts, playheadRef.current);
+      const isVideoDriven = current?.clip.type === 'video' && videoRef.current && !videoRef.current.paused;
       if (!isVideoDriven) {
         const last = lastTickRef.current ?? now;
         const deltaSec = (now - last) / 1000;
@@ -425,8 +463,8 @@ export function EditTabShell() {
   }, [playing]);
 
   // 切到视频片段时把 <video> 定位到片段内应处的位置并按当前播放状态启停；
-  // 该视频自己的 timeupdate 再把（片段内本地时间 + 之前片段累计时长）写回
-  // 播放头，让时间线随视频真实播放进度前进，而不是靠 rAF 空转估算。
+  // 该视频自己的 timeupdate 再把（片段起始时间 + 片段内本地时间）写回播放
+  // 头，让时间线随视频真实播放进度前进，而不是靠 rAF 空转估算。
   useEffect(() => {
     const el = videoRef.current;
     if (!el || !activeClip || activeClip.type !== 'video') return;
@@ -451,32 +489,31 @@ export function EditTabShell() {
 
   const handleVideoTimeUpdate = useCallback(() => {
     const el = videoRef.current;
-    const cs = clipsRef.current;
-    const { index } = locate(cs, playheadRef.current);
-    const clip = index >= 0 ? cs[index] : null;
-    if (!el || !clip || clip.type !== 'video' || !playing) return;
-    let elapsedBefore = 0;
-    for (let i = 0; i < index; i += 1) elapsedBefore += clipDuration(cs[i]);
+    const current = locateActive(tracksRef.current, playheadRef.current);
+    if (!el || !current || current.clip.type !== 'video' || !playing) return;
+    const { clip } = current;
     if (el.currentTime >= clip.trimOut - 0.02) {
-      if (index >= cs.length - 1) {
+      const total = totalDurationAcrossTracks(tracksRef.current);
+      const end = clipEnd(clip);
+      if (end >= total - 0.01) {
         setPlaying(false);
-        setPlayheadTime(totalDuration(cs));
+        setPlayheadTime(total);
       } else {
-        setPlayheadTime(elapsedBefore + clipDuration(clip));
+        setPlayheadTime(end);
       }
       return;
     }
-    setPlayheadTime(elapsedBefore + (el.currentTime - clip.trimIn));
+    setPlayheadTime(clip.start + (el.currentTime - clip.trimIn));
   }, [playing]);
 
   const togglePlay = useCallback(() => {
-    if (clips.length === 0) return;
+    if (!hasAnyClip) return;
     setPlaying((p) => {
       const next = !p;
-      if (next && playheadRef.current >= totalDuration(clipsRef.current) - 0.01) setPlayheadTime(0);
+      if (next && playheadRef.current >= totalDurationAcrossTracks(tracksRef.current) - 0.01) setPlayheadTime(0);
       return next;
     });
-  }, [clips.length]);
+  }, [hasAnyClip]);
 
   const seekTo = useCallback(
     (time: number) => {
@@ -485,31 +522,14 @@ export function EditTabShell() {
     [duration],
   );
 
-  // 刻度尺、轨道、播放头共用这一个容器的宽度做时间<->像素换算：三者必须严格
-  // 对齐（播放头那条竖线要能同时穿过刻度尺和下面的片段轨道），换算基准就不能
-  // 分别读刻度尺和轨道各自的宽度——哪怕两者理论上该一样宽，也经不起将来任何一
-  // 边加了 padding/边框就悄悄错位。
-  const scrubAreaRef = useRef<HTMLDivElement>(null);
-  const timeFromClientX = useCallback(
-    (clientX: number) => {
-      const el = scrubAreaRef.current;
-      if (!el || duration <= 0) return 0;
-      const rect = el.getBoundingClientRect();
-      const ratio = (clientX - rect.left) / rect.width;
-      return Math.min(Math.max(0, ratio), 1) * duration;
-    },
-    [duration],
-  );
   const seekFromPointerEvent = useCallback(
     (e: React.MouseEvent) => {
-      if (duration <= 0) return;
       seekTo(timeFromClientX(e.clientX));
     },
-    [duration, seekTo, timeFromClientX],
+    [seekTo, timeFromClientX],
   );
   const handlePlayheadPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
-      if (duration <= 0) return;
       e.preventDefault();
       e.stopPropagation();
       setPlaying(false); // 拖动播放头这个动作本身就是"我要去看某一帧"，先暂停免得画面一直在跑
@@ -523,18 +543,16 @@ export function EditTabShell() {
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp, { once: true });
     },
-    [duration, seekTo, timeFromClientX],
+    [seekTo, timeFromClientX],
   );
-  // 刻度尺上均匀撒 ~10 个时间点；没有素材（duration=0）时退回一段固定范围的
-  // 占位刻度，不然时间线还没拖进任何东西之前，刻度尺看起来像是坏掉了。
+  // 刻度尺上均匀撒 ~10 个时间点。
   const rulerMarks = useMemo(() => {
-    const span = duration > 0 ? duration : 2.2;
-    const step = span / 11;
+    const step = timeScale / 11;
     return Array.from({ length: 12 }, (_, i) => i * step);
-  }, [duration]);
+  }, [timeScale]);
 
   const handleSplit = useCallback(() => {
-    if (!activeClip || activeIndex < 0) return;
+    if (!activeClip || activeTrackIndex < 0) return;
     const d = clipDuration(activeClip);
     // 播放头落在片段边界（几乎是起点/终点）就没有意义可分——两段里会有一段
     // 时长几乎为 0。
@@ -542,20 +560,21 @@ export function EditTabShell() {
       showNotice('error', t('director.edit.splitTooCloseToEdge'));
       return;
     }
+    const splitAt = activeClip.start + localTime;
     const first: EditClip =
       activeClip.type === 'video'
         ? { ...activeClip, id: `${activeClip.id}_a`, trimOut: activeClip.trimIn + localTime }
         : { ...activeClip, id: `${activeClip.id}_a`, trimOut: localTime };
     const second: EditClip =
       activeClip.type === 'video'
-        ? { ...activeClip, id: `${activeClip.id}_b`, trimIn: activeClip.trimIn + localTime }
-        : { ...activeClip, id: `${activeClip.id}_b`, trimIn: 0, trimOut: d - localTime };
-    setClips((prev) => {
-      const next = [...prev];
-      next.splice(activeIndex, 1, first, second);
-      return next;
+        ? { ...activeClip, id: `${activeClip.id}_b`, trimIn: activeClip.trimIn + localTime, start: splitAt }
+        : { ...activeClip, id: `${activeClip.id}_b`, trimIn: 0, trimOut: d - localTime, start: splitAt };
+    applyTrack(activeTrackIndex, (arr) => {
+      const next = arr.filter((c) => c.id !== activeClip.id);
+      next.push(first, second);
+      return next.sort((a, b) => a.start - b.start);
     });
-  }, [activeClip, activeIndex, localTime, showNotice, t]);
+  }, [activeClip, activeTrackIndex, applyTrack, localTime, showNotice, t]);
 
   const handleCapture = useCallback(async () => {
     const el = videoRef.current;
@@ -590,7 +609,90 @@ export function EditTabShell() {
 
   const importInputRef = useRef<HTMLInputElement>(null);
 
-  const playheadPct = duration > 0 ? (playheadTime / duration) * 100 : 0;
+  const playheadPct = (playheadTime / timeScale) * 100;
+
+  const renderClip = (trackIndex: number, clip: EditClip) => {
+    const leftPct = (clip.start / timeScale) * 100;
+    const widthPct = (clipDuration(clip) / timeScale) * 100;
+    return (
+      <div
+        key={clip.id}
+        className={[
+          'director-edit-clip',
+          activeClip?.id === clip.id ? 'director-edit-clip--active' : '',
+          draggingClipId === clip.id ? 'director-edit-clip--dragging' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        style={{ left: `${leftPct}%`, width: `${widthPct}%`, touchAction: 'none' }}
+        onPointerDown={handleClipPointerDown(trackIndex, clip.id)}
+        onClick={() => {
+          if (suppressClipClickRef.current) {
+            suppressClipClickRef.current = false;
+            return;
+          }
+          seekTo(clip.start + 0.01);
+        }}
+        data-testid={trackIndex === 0 ? 'director-edit-clip' : 'director-edit-extra-clip'}
+        data-clip-type={clip.type}
+        data-clip-id={clip.id}
+        data-clip-row={trackIndex}
+        data-clip-start={clip.start.toFixed(2)}
+        title={clip.name}
+      >
+        {clip.type === 'image' ? (
+          <img className="director-edit-clip-thumb" src={rawFileUrl(clip.filePath)} alt="" draggable={false} />
+        ) : (
+          <video className="director-edit-clip-thumb" src={rawFileUrl(clip.filePath)} muted preload="metadata" draggable={false} />
+        )}
+        <span className="director-edit-clip-name">{clip.name}</span>
+        <button
+          type="button"
+          className="director-edit-clip-delete"
+          title={t('director.edit.deleteClip')}
+          onClick={(e) => {
+            e.stopPropagation();
+            deleteClip(trackIndex, clip.id);
+          }}
+          data-testid="director-edit-clip-delete"
+        >
+          {trashIcon}
+        </button>
+      </div>
+    );
+  };
+
+  const renderTrack = (trackIndex: number) => {
+    const track = tracks[trackIndex] ?? [];
+    const isMain = trackIndex === 0;
+    const preview = dropPreview && dropPreview.trackIndex === trackIndex ? dropPreview : null;
+    return (
+      <div
+        className={`director-edit-track${isMain ? '' : ' director-edit-track--extra'}`}
+        onDragOver={onTrackDragOver(trackIndex)}
+        onDragLeave={onDragLeave}
+        onDrop={handleTrackDrop(trackIndex)}
+        data-track-row={trackIndex}
+        data-testid={isMain ? 'director-edit-track' : 'director-edit-extra-track'}
+      >
+        {track.length === 0 ? (
+          <span className="director-edit-track-hint">{t(isMain ? 'director.edit.trackHint' : 'director.edit.extraRowHint')}</span>
+        ) : null}
+        {track.map((clip) => renderClip(trackIndex, clip))}
+        {preview ? (
+          <div
+            className={`director-edit-drop-preview${preview.valid ? '' : ' director-edit-drop-preview--invalid'}`}
+            style={{
+              left: `${(preview.start / timeScale) * 100}%`,
+              width: `${((preview.end - preview.start) / timeScale) * 100}%`,
+            }}
+            data-testid="director-edit-drop-preview"
+            data-valid={preview.valid}
+          />
+        ) : null}
+      </div>
+    );
+  };
 
   return (
     <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -626,9 +728,9 @@ export function EditTabShell() {
       <div className="director-edit-body">
         <div
           className="director-edit-stage"
-          onDragOver={onDragOver}
+          onDragOver={onDragOverGeneric}
           onDragLeave={onDragLeave}
-          onDrop={onDrop}
+          onDrop={stageDrop}
           data-testid="director-edit-stage"
         >
           {activeClip ? (
@@ -647,6 +749,8 @@ export function EditTabShell() {
                 <img className="director-edit-preview-media" src={rawFileUrl(activeClip.filePath)} alt={activeClip.name} data-testid="director-edit-preview-image" />
               )}
             </div>
+          ) : hasAnyClip ? (
+            <div className="director-edit-preview director-edit-preview--empty" data-testid="director-edit-preview-empty" />
           ) : (
             <div className={`director-edit-dropzone${dragOver ? ' director-edit-dropzone--over' : ''}`}>
               <div className="director-edit-dropzone-title">
@@ -714,7 +818,7 @@ export function EditTabShell() {
                 type="button"
                 className="director-edit-play-btn"
                 onClick={togglePlay}
-                disabled={clips.length === 0}
+                disabled={!hasAnyClip}
                 data-testid="director-edit-play-btn"
                 data-state={playing ? 'playing' : 'paused'}
                 title={playing ? t('director.edit.pause') : t('director.edit.play')}
@@ -733,67 +837,7 @@ export function EditTabShell() {
                 <span key={mark}>{formatTime(mark)}</span>
               ))}
             </div>
-            <div
-              className={`director-edit-track${dropIndicator?.row === 'main' && dropIndicator.clipId === null ? ' director-edit-track--drop-target' : ''}`}
-              onDragOver={onDragOver}
-              onDragLeave={onDragLeave}
-              onDrop={onDrop}
-              data-track-row="main"
-              data-testid="director-edit-track"
-            >
-              {clips.length === 0 ? (
-                <span className="director-edit-track-hint">{t('director.edit.trackHint')}</span>
-              ) : (
-                clips.map((clip, i) => (
-                  <div
-                    key={clip.id}
-                    className={[
-                      'director-edit-clip',
-                      i === activeIndex ? 'director-edit-clip--active' : '',
-                      draggingClipId === clip.id ? 'director-edit-clip--dragging' : '',
-                      dropIndicator?.clipId === clip.id ? `director-edit-clip--drop-${dropIndicator.side}` : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' ')}
-                    style={{ flexGrow: clipDuration(clip), touchAction: 'none' }}
-                    onPointerDown={handleClipPointerDown('main', clip.id)}
-                    onClick={() => {
-                      if (suppressClipClickRef.current) {
-                        suppressClipClickRef.current = false;
-                        return;
-                      }
-                      let before = 0;
-                      for (let j = 0; j < i; j += 1) before += clipDuration(clips[j]);
-                      seekTo(before + 0.01);
-                    }}
-                    data-testid="director-edit-clip"
-                    data-clip-type={clip.type}
-                    data-clip-id={clip.id}
-                    data-clip-row="main"
-                    title={clip.name}
-                  >
-                    {clip.type === 'image' ? (
-                      <img className="director-edit-clip-thumb" src={rawFileUrl(clip.filePath)} alt="" draggable={false} />
-                    ) : (
-                      <video className="director-edit-clip-thumb" src={rawFileUrl(clip.filePath)} muted preload="metadata" draggable={false} />
-                    )}
-                    <span className="director-edit-clip-name">{clip.name}</span>
-                    <button
-                      type="button"
-                      className="director-edit-clip-delete"
-                      title={t('director.edit.deleteClip')}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        deleteClip('main', clip.id);
-                      }}
-                      data-testid="director-edit-clip-delete"
-                    >
-                      {trashIcon}
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
+            {renderTrack(0)}
             <div
               className="director-edit-playhead"
               style={{ left: `${playheadPct}%` }}
@@ -804,75 +848,28 @@ export function EditTabShell() {
             </div>
           </div>
 
-          {extraTracks.map((track, rowIndex) => (
-            <div key={rowIndex} className="director-edit-extra-row" data-testid="director-edit-extra-row">
-              <div className="director-edit-extra-row-header">
-                <span className="director-edit-extra-row-label">{t('director.edit.rowLabel', { index: rowIndex + 2 })}</span>
-                <button
-                  type="button"
-                  className="director-edit-toolbar-btn"
-                  title={t('director.edit.removeRow')}
-                  onClick={() => setExtraTracks((prev) => prev.filter((_, i) => i !== rowIndex))}
-                  data-testid="director-edit-remove-row-btn"
-                >
-                  {trashIcon}
-                </button>
+          {tracks.slice(1).map((_, i) => {
+            const trackIndex = i + 1;
+            return (
+              <div key={trackIndex} className="director-edit-extra-row" data-testid="director-edit-extra-row">
+                <div className="director-edit-extra-row-header">
+                  <span className="director-edit-extra-row-label">{t('director.edit.rowLabel', { index: trackIndex + 1 })}</span>
+                  <button
+                    type="button"
+                    className="director-edit-toolbar-btn"
+                    title={t('director.edit.removeRow')}
+                    onClick={() => removeTrack(trackIndex)}
+                    data-testid="director-edit-remove-row-btn"
+                  >
+                    {trashIcon}
+                  </button>
+                </div>
+                {renderTrack(trackIndex)}
               </div>
-              <div
-                className={`director-edit-track director-edit-track--extra${dropIndicator?.row === rowIndex && dropIndicator.clipId === null ? ' director-edit-track--drop-target' : ''}`}
-                onDragOver={onDragOver}
-                onDragLeave={onDragLeave}
-                onDrop={handleRowDrop(rowIndex)}
-                data-track-row={rowIndex}
-                data-testid="director-edit-extra-track"
-              >
-                {track.length === 0 ? (
-                  <span className="director-edit-track-hint">{t('director.edit.extraRowHint')}</span>
-                ) : (
-                  track.map((clip) => (
-                    <div
-                      key={clip.id}
-                      className={[
-                        'director-edit-clip',
-                        draggingClipId === clip.id ? 'director-edit-clip--dragging' : '',
-                        dropIndicator?.clipId === clip.id ? `director-edit-clip--drop-${dropIndicator.side}` : '',
-                      ]
-                        .filter(Boolean)
-                        .join(' ')}
-                      style={{ flexGrow: clipDuration(clip), touchAction: 'none' }}
-                      onPointerDown={handleClipPointerDown(rowIndex, clip.id)}
-                      data-testid="director-edit-extra-clip"
-                      data-clip-type={clip.type}
-                      data-clip-id={clip.id}
-                      data-clip-row={rowIndex}
-                      title={clip.name}
-                    >
-                      {clip.type === 'image' ? (
-                        <img className="director-edit-clip-thumb" src={rawFileUrl(clip.filePath)} alt="" draggable={false} />
-                      ) : (
-                        <video className="director-edit-clip-thumb" src={rawFileUrl(clip.filePath)} muted preload="metadata" draggable={false} />
-                      )}
-                      <span className="director-edit-clip-name">{clip.name}</span>
-                      <button
-                        type="button"
-                        className="director-edit-clip-delete"
-                        title={t('director.edit.deleteClip')}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteClip(rowIndex, clip.id);
-                        }}
-                        data-testid="director-edit-clip-delete"
-                      >
-                        {trashIcon}
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          ))}
+            );
+          })}
 
-          <button type="button" className="director-edit-add-row-btn" onClick={addExtraRow} data-testid="director-edit-add-row-btn">
+          <button type="button" className="director-edit-add-row-btn" onClick={addTrack} data-testid="director-edit-add-row-btn">
             {addRowIcon}
             {t('director.edit.addRow')}
           </button>
