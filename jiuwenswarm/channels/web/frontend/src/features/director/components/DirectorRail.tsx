@@ -186,12 +186,14 @@ const trashIcon = (
 interface ProjectRowNameProps {
   project: DirectorProject;
   onRename: (name: string) => void;
+  onDelete: () => void;
 }
 
 /** 项目行名称：默认展示项目名，点击铅笔图标进入行内编辑（跟 AssetNameLabel
  *  同一套交互：回车/失焦保存、Esc 取消），但项目名没有"素材"那样的兜底
- *  展示（prompt），所以失焦时留空或跟原名相同就直接丢弃草稿、不提交空名。 */
-function ProjectRowName({ project, onRename }: ProjectRowNameProps) {
+ *  展示（prompt），所以失焦时留空或跟原名相同就直接丢弃草稿、不提交空名。
+ *  垃圾桶图标：二次确认后删除整个项目（元数据 + 磁盘上该项目全部素材）。 */
+function ProjectRowName({ project, onRename, onDelete }: ProjectRowNameProps) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -243,6 +245,20 @@ function ProjectRowName({ project, onRename }: ProjectRowNameProps) {
         data-testid="director-project-rename-btn"
       >
         {pencilIcon}
+      </button>
+      <button
+        type="button"
+        className="director-project-rename-btn director-project-delete-btn"
+        title={t('director.delete.action')}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (window.confirm(t('director.delete.confirm', { name: project.name }))) {
+            onDelete();
+          }
+        }}
+        data-testid="director-project-delete-btn"
+      >
+        {trashIcon}
       </button>
     </>
   );
@@ -328,6 +344,7 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
   const [expanded, setExpanded] = useState<ExpandedCategory>('image');
   const renameAsset = useDirectorStore((s) => s.renameAsset);
   const renameProject = useDirectorStore((s) => s.renameProject);
+  const deleteProject = useDirectorStore((s) => s.deleteProject);
   const deleteAsset = useDirectorStore((s) => s.deleteAsset);
   const uploadAsset = useDirectorStore((s) => s.uploadAsset);
   const uploading = useDirectorStore((s) => s.uploading);
@@ -406,7 +423,11 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
                     data-testid="director-project-row"
                     data-project-id={project.project_id}
                   >
-                    <ProjectRowName project={project} onRename={(name) => renameProject(project.project_id, name)} />
+                    <ProjectRowName
+                      project={project}
+                      onRename={(name) => renameProject(project.project_id, name)}
+                      onDelete={() => deleteProject(project.project_id)}
+                    />
                     <span className="director-category-count">{project.assets.length}</span>
                   </div>
                 ))}

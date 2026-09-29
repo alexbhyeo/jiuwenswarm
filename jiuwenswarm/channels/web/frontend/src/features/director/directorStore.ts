@@ -46,6 +46,7 @@ interface DirectorState {
   loadProjects: () => Promise<void>;
   createProject: (name: string) => Promise<DirectorProject | null>;
   renameProject: (projectId: string, name: string) => Promise<void>;
+  deleteProject: (projectId: string) => Promise<void>;
   selectProject: (projectId: string | null) => void;
 
   setComposerMode: (mode: ComposerMode) => void;
@@ -191,6 +192,25 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
       const { project } = await directorProjectsRename(projectId, name);
       set((s) => ({
         projects: s.projects.map((p) => (p.project_id === project.project_id ? project : p)),
+      }));
+    } catch (e) {
+      const message = e instanceof DirectorApiError ? e.message : e instanceof Error ? e.message : String(e);
+      set({ projectsError: message });
+    }
+  },
+
+  deleteProject: async (projectId) => {
+    try {
+      const { directorProjectsDelete } = await import('./directorApi');
+      const { projects, assetCounts } = await directorProjectsDelete(projectId);
+      set((s) => ({
+        projects,
+        assetCounts,
+        // 删的正好是当前选中的项目——挑列表里剩下的第一个顶替上去（没有
+        // 剩余项目就回到"未选中"），不然界面会继续显示一个已经不存在的
+        // 项目 ID，创作/剪辑/实验室几个 tab 都会卡在空数据状态。
+        selectedProjectId:
+          s.selectedProjectId === projectId ? (projects[0]?.project_id ?? null) : s.selectedProjectId,
       }));
     } catch (e) {
       const message = e instanceof DirectorApiError ? e.message : e instanceof Error ? e.message : String(e);

@@ -181,12 +181,21 @@ def _get_state_file() -> Path:
     return _get_director_dir() / "director_state.json"
 
 
+def get_project_dir(project_id: str) -> Path:
+    """项目自己的整个磁盘目录（assets/ 的上一级）.
+
+    不像 get_project_assets_dir 那样顺带 mkdir——只用来算路径，典型调用点
+    是删除整个项目时定位要 rmtree 的目录，不该在删除前先把它创建出来。
+    """
+    return _get_director_dir() / "projects" / project_id
+
+
 def get_project_assets_dir(project_id: str) -> Path:
     """generate_video/generate_visual 的 save_dir 落点.
 
     按项目隔离产物，不混入共享的 generated_videos/ · generated_images/。
     """
-    path = _get_director_dir() / "projects" / project_id / "assets"
+    path = get_project_dir(project_id) / "assets"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -260,6 +269,13 @@ class DirectorStore:
         project.updated_at = time.time()
         self._save(projects)
         return project
+
+    def delete_project(self, project_id: str) -> None:
+        projects = self._load()
+        if project_id not in projects:
+            raise KeyError(project_id)
+        del projects[project_id]
+        self._save(projects)
 
     def append_asset(self, project_id: str, asset: DirectorAsset) -> DirectorProject:
         projects = self._load()

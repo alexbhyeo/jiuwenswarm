@@ -16,6 +16,7 @@ import json
 import logging
 import re
 import secrets
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,7 @@ from jiuwenswarm.server.runtime.director.director_store import (
     DirectorStore,
     EditChatMessage,
     get_project_assets_dir,
+    get_project_dir,
 )
 
 logger = logging.getLogger(__name__)
@@ -295,6 +297,31 @@ class DirectorManager:
             raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")
         project = self._store.rename_project(project_id, name)
         return {"project": project.to_dict()}
+
+    async def handle_director_projects_delete(self, params: dict) -> dict:
+        project_id = str(params.get("project_id") or "").strip()
+        if not project_id:
+            raise DirectorRpcError("INVALID_PARAMS", "缺少 project_id")
+        if self._store.get_project(project_id) is None:
+            raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")
+
+        self._store.delete_project(project_id)
+
+        # 尽力删除整个项目目录（素材文件等）；失败只记日志，不影响已经生效
+        # 的元数据删除——跟 handle_director_asset_delete 对单个素材文件的
+        # 处理是同一个原则，用户在 UI 上看到的"已删除"以 director_state.json
+        # 为准。
+        try:
+            project_dir = get_project_dir(project_id)
+            if project_dir.exists():
+                shutil.rmtree(project_dir, ignore_errors=True)
+        except OSError:
+            logger.exception("[DirectorManager] 删除项目目录失败: %s", project_id)
+
+        return {
+            "projects": [p.to_dict() for p in self._store.list_projects()],
+            "asset_counts": self._store.asset_counts(),
+        }
 
     def _resolve_at_references(
         self, project: DirectorProject, prompt: str, max_refs: int

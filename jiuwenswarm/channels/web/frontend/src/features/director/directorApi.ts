@@ -22,6 +22,7 @@ const METHOD = {
   projectsCreate: 'director.projects.create',
   projectsGet: 'director.projects.get',
   projectsRename: 'director.projects.rename',
+  projectsDelete: 'director.projects.delete',
   generate: 'director.generate',
   generateCheckStatus: 'director.generate.check_status',
   assetRename: 'director.asset.rename',
@@ -103,6 +104,14 @@ export function directorProjectsGet(projectId: string): Promise<ProjectResult> {
 export function directorProjectsRename(projectId: string, name: string): Promise<ProjectResult> {
   return webRequest<unknown>(METHOD.projectsRename, { project_id: projectId, name })
     .then(normalizeProjectResult)
+    .catch((err) => {
+      throw toDirectorError(err);
+    });
+}
+
+export function directorProjectsDelete(projectId: string): Promise<ProjectsListResult> {
+  return webRequest<unknown>(METHOD.projectsDelete, { project_id: projectId })
+    .then(normalizeProjectsList)
     .catch((err) => {
       throw toDirectorError(err);
     });
