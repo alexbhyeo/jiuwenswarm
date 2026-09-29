@@ -177,7 +177,10 @@
       "removeRow": "Remove this track",
       "extraRowHint": "Drag a clip here",
       "addRow": "Add track",
-      "clipOverlap": "This position overlaps another clip on the same track"
+      "clipOverlap": "This position overlaps another clip on the same track",
+      "zoomIn": "Zoom In (Ctrl + +)",
+      "zoomOut": "Zoom Out (Ctrl + -)",
+      "zoomLevel": "Zoom: {{level}}x"
     },
     "editChat": {
       "title": "Edit Assistant",

@@ -1235,8 +1235,47 @@
   gap: 14px;
 }
 
-.director-edit-ruler {
+.director-edit-zoom {
   display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 110px;
+  justify-content: flex-end;
+}
+
+.director-edit-zoom-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: none;
+  border-radius: var(--d-radius-sm);
+  color: var(--d-text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.director-edit-zoom-btn:hover:not(:disabled) {
+  background: var(--d-bg-shell);
+  color: var(--d-text-primary);
+}
+
+.director-edit-zoom-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.director-edit-zoom-slider {
+  width: 56px;
+  accent-color: var(--d-accent);
+  cursor: pointer;
+}
+
+.director-edit-ruler {
+  position: relative;
+  height: 18px;
   font-size: 10px;
   color: var(--d-text-secondary);
   padding-bottom: 6px;
@@ -1244,8 +1283,31 @@
   margin-bottom: 2px;
 }
 
+/* 刻度数量会随缩放变化（放大后刻度更密），不再是固定 12 个等宽 flex 项，
+   每个刻度按自己代表的时间点绝对定位（内联 style 里的 left）。 */
 .director-edit-ruler span {
-  width: 8.33%;
+  position: absolute;
+  top: 0;
+  white-space: nowrap;
+}
+
+/* 缩放后的时间线内容（刻度尺 + 所有轨道）可能比可视区域更宽——只在这一层
+   开横向滚动，工具栏和"添加轨道"按钮留在外面不跟着滚。
+   注意：只设置 overflow-x 时，CSS 规范会强制把没显式设置的 overflow-y 从
+   visible 提升成 auto（不允许一边 visible 一边不是）——播放头的圆点手柄用
+   负偏移刻意露到 .director-edit-scrub-area 顶部之外一截，一旦这里也变成
+   auto，那一截会被裁掉，圆点既不可见也点不中。留出比它探出去的距离更大的
+   顶部内边距，让它始终落在这个容器自己的内边距框以内，不会被当成"溢出"。 */
+.director-edit-tracks-scroll {
+  overflow-x: auto;
+  padding-top: 20px;
+  margin-top: -20px;
+}
+
+.director-edit-tracks-content {
+  /* 实际宽度由内联 style 按当前缩放算出；内容比可视区域窄时靠这个撑满，
+     跟没有缩放功能之前"始终占满容器宽度"的观感一致。 */
+  min-width: 100%;
 }
 
 .director-edit-track {

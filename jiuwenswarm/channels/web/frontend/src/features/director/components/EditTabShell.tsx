@@ -62,6 +62,20 @@ const addRowIcon = (
   </svg>
 );
 
+const zoomOutIcon = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="11" cy="11" r="7" />
+    <path d="m21 21-4.3-4.3M8 11h6" />
+  </svg>
+);
+
+const zoomInIcon = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="11" cy="11" r="7" />
+    <path d="m21 21-4.3-4.3M11 8v6M8 11h6" />
+  </svg>
+);
+
 /** 图片素材在时间线上默认占用的时长（秒）——图片本身没有内在时长，给一个
  *  固定值才能像视频片段一样参与拼接播放/分割。 */
 const IMAGE_CLIP_DURATION = 3;
@@ -79,6 +93,17 @@ const TIMELINE_HEADROOM_RATIO = 0.15;
 /** 拖动片段贴近同一轨道上另一个片段的边缘时自动吸附的命中距离（像素）——
  *  按屏幕像素定义,不管当前时间刻度缩放到多大,手感都一样。 */
 const SNAP_PIXELS = 10;
+
+/** 缩放为 1 倍时，每秒对应的像素数——这是唯一的"基准密度"，缩放只是在它
+ *  上面乘一个倍数。整条时间线的实际渲染宽度 = timeScale * BASE_PX_PER_SECOND
+ *  * zoom；这个宽度小于可视区域时靠 CSS min-width:100% 撑满（跟没有缩放功能
+ *  之前的观感一致），一旦放大到超出可视区域，靠横向滚动查看——刻度尺/轨道/
+ *  播放头三者的时间-像素换算永远读的是这个渲染出来的真实宽度（不是某个
+ *  缓存值），所以不管缩放到多大、滚动到哪，换算永远是对的。 */
+const BASE_PX_PER_SECOND = 60;
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 6;
+const ZOOM_STEP = 0.5;
 
 interface EditClip {
   id: string;
@@ -184,6 +209,7 @@ export function EditTabShell() {
   const [tracks, setTracks] = useState<EditClip[][]>([[]]);
   const [playheadTime, setPlayheadTime] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [zoom, setZoom] = useState(1);
   const [dragOver, setDragOver] = useState(false);
   const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const [draggingClipId, setDraggingClipId] = useState<string | null>(null);
@@ -208,6 +234,11 @@ export function EditTabShell() {
   const duration = useMemo(() => totalDurationAcrossTracks(tracks), [tracks]);
   const timeScale =
     duration > 0 ? duration + Math.max(MIN_TIMELINE_HEADROOM, duration * TIMELINE_HEADROOM_RATIO) : EMPTY_TIMELINE_SPAN;
+  // 缩放只改变"这段时长用多少像素画出来"，不改变 timeScale 本身（可拖放的
+  // 时间范围跟缩放无关）；内容比可视区域窄时靠 CSS min-width:100% 撑满，见
+  // .director-edit-tracks-content。
+  const pxPerSecond = BASE_PX_PER_SECOND * zoom;
+  const contentWidthPx = timeScale * pxPerSecond;
   const active = useMemo(() => locateActive(tracks, playheadTime), [tracks, playheadTime]);
   const activeClip = active?.clip ?? null;
   const activeTrackIndex = active?.trackIndex ?? -1;
@@ -325,6 +356,21 @@ export function EditTabShell() {
   // 边加了 padding/边框就悄悄错位。这一层也是所有轨道片段 left/width 百分比
   // 共用的同一套时间刻度（各轨道横向留白已经对齐，见 CSS）。
   const scrubAreaRef = useRef<HTMLDivElement>(null);
+  // 刻度尺按"实际渲染出来有多少像素"决定疏密——缩放到内容比可视区域窄时，
+  // CSS min-width:100% 会把它撑得比 timeScale*pxPerSecond 算出来的还宽，
+  // 只按缩放倍数算刻度会比视觉上实际能放下的更稀疏；量出这层容器的真实宽度
+  // 才准。初次渲染前用缩放算出的理论宽度兜底，观察到真实宽度后再纠正。
+  const [renderedWidth, setRenderedWidth] = useState(0);
+  useEffect(() => {
+    const el = scrubAreaRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) setRenderedWidth(entry.contentRect.width);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
   const timeFromClientX = useCallback(
     (clientX: number) => {
       const el = scrubAreaRef.current;
@@ -571,6 +617,26 @@ export function EditTabShell() {
     [duration],
   );
 
+  const zoomIn = useCallback(() => setZoom((z) => Math.min(MAX_ZOOM, Number((z + ZOOM_STEP).toFixed(2)))), []);
+  const zoomOut = useCallback(() => setZoom((z) => Math.max(MIN_ZOOM, Number((z - ZOOM_STEP).toFixed(2)))), []);
+
+  // Ctrl/Cmd + "+"/"-" 缩放时间线——跟工具栏里放大镜按钮走同一个口子，
+  // preventDefault 是为了不要连带触发浏览器自己的整页面缩放。
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key === '=' || e.key === '+') {
+        e.preventDefault();
+        zoomIn();
+      } else if (e.key === '-' || e.key === '_') {
+        e.preventDefault();
+        zoomOut();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [zoomIn, zoomOut]);
+
   const seekFromPointerEvent = useCallback(
     (e: React.MouseEvent) => {
       seekTo(timeFromClientX(e.clientX));
@@ -594,11 +660,17 @@ export function EditTabShell() {
     },
     [seekTo, timeFromClientX],
   );
-  // 刻度尺上均匀撒 ~10 个时间点。
+  // 刻度尺按"大约每 90px 一个刻度"来定密度——放大后每秒占的像素变多，同样
+  // 90px range 里能塞下的刻度数变多，看起来就是刻度变细了（更精细的时间
+  // 粒度）；缩小同理变粗，不会在缩得很小时挤成一团。用实际渲染宽度（见
+  // renderedWidth），内容被 CSS 撑满可视区域时也能正确算出足够的刻度数。
   const rulerMarks = useMemo(() => {
-    const step = timeScale / 11;
-    return Array.from({ length: 12 }, (_, i) => i * step);
-  }, [timeScale]);
+    const targetPxPerTick = 90;
+    const effectiveWidth = renderedWidth > 0 ? renderedWidth : timeScale * pxPerSecond;
+    const tickCount = Math.max(2, Math.round(effectiveWidth / targetPxPerTick));
+    const step = timeScale / tickCount;
+    return Array.from({ length: tickCount + 1 }, (_, i) => i * step);
+  }, [pxPerSecond, renderedWidth, timeScale]);
 
   const handleSplit = useCallback(() => {
     if (!activeClip || activeTrackIndex < 0) return;
@@ -878,45 +950,87 @@ export function EditTabShell() {
                 {formatTime(playheadTime)} / {formatTime(duration)}
               </span>
             </div>
-            <div style={{ width: 90 }} />
-          </div>
-          <div className="director-edit-scrub-area" ref={scrubAreaRef}>
-            <div className="director-edit-ruler" onClick={seekFromPointerEvent} data-testid="director-edit-ruler">
-              {rulerMarks.map((mark) => (
-                <span key={mark}>{formatTime(mark)}</span>
-              ))}
-            </div>
-            {renderTrack(0)}
-            <div
-              className="director-edit-playhead"
-              style={{ left: `${playheadPct}%` }}
-              onPointerDown={handlePlayheadPointerDown}
-              data-testid="director-edit-playhead"
-            >
-              <div className="director-edit-playhead-handle" />
+            <div className="director-edit-zoom" data-testid="director-edit-zoom">
+              <button
+                type="button"
+                className="director-edit-zoom-btn"
+                title={t('director.edit.zoomOut')}
+                onClick={zoomOut}
+                disabled={zoom <= MIN_ZOOM}
+                data-testid="director-edit-zoom-out-btn"
+              >
+                {zoomOutIcon}
+              </button>
+              <input
+                type="range"
+                className="director-edit-zoom-slider"
+                min={MIN_ZOOM}
+                max={MAX_ZOOM}
+                step={ZOOM_STEP}
+                value={zoom}
+                onChange={(e) => setZoom(Number(e.target.value))}
+                title={t('director.edit.zoomLevel', { level: zoom.toFixed(1) })}
+                data-testid="director-edit-zoom-slider"
+              />
+              <button
+                type="button"
+                className="director-edit-zoom-btn"
+                title={t('director.edit.zoomIn')}
+                onClick={zoomIn}
+                disabled={zoom >= MAX_ZOOM}
+                data-testid="director-edit-zoom-in-btn"
+              >
+                {zoomInIcon}
+              </button>
             </div>
           </div>
 
-          {tracks.slice(1).map((_, i) => {
-            const trackIndex = i + 1;
-            return (
-              <div key={trackIndex} className="director-edit-extra-row" data-testid="director-edit-extra-row">
-                <div className="director-edit-extra-row-header">
-                  <span className="director-edit-extra-row-label">{t('director.edit.rowLabel', { index: trackIndex + 1 })}</span>
-                  <button
-                    type="button"
-                    className="director-edit-toolbar-btn"
-                    title={t('director.edit.removeRow')}
-                    onClick={() => removeTrack(trackIndex)}
-                    data-testid="director-edit-remove-row-btn"
-                  >
-                    {trashIcon}
-                  </button>
+          {/* 横向滚动只包这一块——刻度尺/轨道/播放头按当前缩放渲染成一个可能
+              比可视区域更宽的内容块；放大到超出可视宽度时靠这里滚动查看，
+              工具栏和下面的"添加轨道"按钮留在外面，不跟着滚动。 */}
+          <div className="director-edit-tracks-scroll" data-testid="director-edit-tracks-scroll">
+            <div className="director-edit-tracks-content" style={{ width: `${contentWidthPx}px` }}>
+              <div className="director-edit-scrub-area" ref={scrubAreaRef}>
+                <div className="director-edit-ruler" onClick={seekFromPointerEvent} data-testid="director-edit-ruler">
+                  {rulerMarks.map((mark) => (
+                    <span key={mark} style={{ left: `${(mark / timeScale) * 100}%` }}>
+                      {formatTime(mark)}
+                    </span>
+                  ))}
                 </div>
-                {renderTrack(trackIndex)}
+                {renderTrack(0)}
+                <div
+                  className="director-edit-playhead"
+                  style={{ left: `${playheadPct}%` }}
+                  onPointerDown={handlePlayheadPointerDown}
+                  data-testid="director-edit-playhead"
+                >
+                  <div className="director-edit-playhead-handle" />
+                </div>
               </div>
-            );
-          })}
+
+              {tracks.slice(1).map((_, i) => {
+                const trackIndex = i + 1;
+                return (
+                  <div key={trackIndex} className="director-edit-extra-row" data-testid="director-edit-extra-row">
+                    <div className="director-edit-extra-row-header">
+                      <span className="director-edit-extra-row-label">{t('director.edit.rowLabel', { index: trackIndex + 1 })}</span>
+                      <button
+                        type="button"
+                        className="director-edit-toolbar-btn"
+                        title={t('director.edit.removeRow')}
+                        onClick={() => removeTrack(trackIndex)}
+                        data-testid="director-edit-remove-row-btn"
+                      >
+                        {trashIcon}
+                      </button>
+                    </div>
+                    {renderTrack(trackIndex)}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
 
           <button type="button" className="director-edit-add-row-btn" onClick={addTrack} data-testid="director-edit-add-row-btn">
             {addRowIcon}
