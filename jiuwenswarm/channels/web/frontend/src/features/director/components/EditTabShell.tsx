@@ -222,6 +222,19 @@ interface TracksHistory {
   future: EditClip[][][];
 }
 
+const EMPTY_HISTORY: TracksHistory = { past: [], present: [[]], future: [] };
+
+/** 挂载那一刻读一次初始时间线状态——优先读 directorStore.editTimelineByProject
+ *  （同步写入的会话内权威副本），这是切到 创作/实验室 再切回 剪辑 时间线
+ *  不丢的关键；这个项目在当前会话里还没打开过 剪辑 tab 的话就是空时间线。
+ *  DirectorPage.tsx 用 key={selectedProjectId} 强制切换项目时整个重新
+ *  挂载，所以这里只需要在挂载时读一次，不需要另外监听项目切换。 */
+function readInitialHistory(projectId: string | null): TracksHistory {
+  if (!projectId) return EMPTY_HISTORY;
+  const cached = useDirectorStore.getState().editTimelineByProject[projectId];
+  return (cached as TracksHistory | undefined) ?? EMPTY_HISTORY;
+}
+
 export function EditTabShell() {
   const { t } = useTranslation();
   const activeTab = useDirectorStore((s) => s.activeTab);
@@ -234,8 +247,17 @@ export function EditTabShell() {
   // tracks[1:] 是用户自己加的附加轨道。用一份撤销/重做栈包着它——下面的
   // setTracks 是原地替换 useState 版本的等价写法（同样接受新值或更新函数），
   // 所有既有调用点（applyTrack/moveClip/addTrack/removeTrack）不用改。
-  const [history, setHistory] = useState<TracksHistory>({ past: [], present: [[]], future: [] });
+  const [history, setHistory] = useState<TracksHistory>(() => readInitialHistory(selectedProjectId));
   const tracks = history.present;
+
+  // 每次时间线变化（增删移动片段、撤销/重做……）都同步写一份到
+  // directorStore.editTimelineByProject——不 debounce，切 tab 卸载组件前
+  // 最后一次改动已经落进去了，切回来（重新挂载）时上面 readInitialHistory
+  // 就能读到最新的，不会丢。（会话内持久化；真正落盘到项目文件是"保存到
+  // 项目"按钮的事，目前还是"即将推出"的占位，跟这里是两回事。）
+  useEffect(() => {
+    if (selectedProjectId) useDirectorStore.getState().setEditTimeline(selectedProjectId, history);
+  }, [history, selectedProjectId]);
   const setTracks = useCallback((updater: EditClip[][] | ((prev: EditClip[][]) => EditClip[][])) => {
     setHistory((h) => {
       const next = typeof updater === 'function' ? (updater as (prev: EditClip[][]) => EditClip[][])(h.present) : updater;

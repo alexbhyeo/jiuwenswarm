@@ -80,6 +80,15 @@ interface DirectorState {
   // 保证）。这份内存副本是同步写入的，不存在这个竞态。
   labCanvasByProject: Record<string, { nodes: unknown[]; edges: unknown[] }>;
   setLabCanvas: (projectId: string, nodes: unknown[], edges: unknown[]) => void;
+
+  // 剪辑 tab 时间线的"会话内权威副本"——跟上面 labCanvasByProject 是同一个
+  //道理：切到 创作/实验室 再切回来会把 EditTabShell 整个卸载重新挂载，只
+  // 靠它自己的 useState 存时间线（轨道/片段/撤销栈）就会在切 tab 时丢光。
+  // 存的是 EditTabShell 自己定义的撤销/重做历史对象，这里不需要认识它的
+  // 具体形状（跟 labCanvasByProject 存 nodes/edges 时用 unknown[] 同理），
+  // 只负责原样存、原样还给它。
+  editTimelineByProject: Record<string, unknown>;
+  setEditTimeline: (projectId: string, snapshot: unknown) => void;
 }
 
 // 轮询中的 job 共享同一个定时器句柄，避免重复轮询同一个 asset。
@@ -119,6 +128,10 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
   labCanvasByProject: {},
   setLabCanvas: (projectId, nodes, edges) =>
     set((s) => ({ labCanvasByProject: { ...s.labCanvasByProject, [projectId]: { nodes, edges } } })),
+
+  editTimelineByProject: {},
+  setEditTimeline: (projectId, snapshot) =>
+    set((s) => ({ editTimelineByProject: { ...s.editTimelineByProject, [projectId]: snapshot } })),
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 
