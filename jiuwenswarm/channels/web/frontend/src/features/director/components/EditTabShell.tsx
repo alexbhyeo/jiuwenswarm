@@ -76,6 +76,9 @@ const EMPTY_TIMELINE_SPAN = 10;
  *  跟着变宽），同时给一个固定下限，内容很短时也有够用的余量。 */
 const MIN_TIMELINE_HEADROOM = 5;
 const TIMELINE_HEADROOM_RATIO = 0.15;
+/** 拖动片段贴近同一轨道上另一个片段的边缘时自动吸附的命中距离（像素）——
+ *  按屏幕像素定义,不管当前时间刻度缩放到多大,手感都一样。 */
+const SNAP_PIXELS = 10;
 
 interface EditClip {
   id: string;
@@ -133,6 +136,32 @@ function locateActive(tracks: EditClip[][], time: number): { trackIndex: number;
 /** 目标时间窗 [start, end) 是否跟这条轨道上（自己除外）的其它片段重叠。 */
 function overlaps(track: EditClip[], start: number, end: number, excludeId?: string): boolean {
   return track.some((c) => c.id !== excludeId && start < clipEnd(c) && c.start < end);
+}
+
+/** 拖动一个片段（新素材或已有片段）快靠近同一轨道上另一个片段的边缘时，
+ *  自动吸附对齐——起点贴到别的片段的终点（松手正好接在它后面），或者终点
+ *  贴到别的片段的起点（松手正好接在它前面），不用再靠鼠标像素级精确对齐。
+ *  在阈值范围内取距离最近的那个吸附点；范围外原样返回，不吸附。 */
+function snapToNeighbors(track: EditClip[], rawStart: number, dur: number, thresholdSeconds: number, excludeId?: string): number {
+  if (thresholdSeconds <= 0) return rawStart;
+  const rawEnd = rawStart + dur;
+  let best = rawStart;
+  let bestDist = thresholdSeconds;
+  for (const c of track) {
+    if (c.id === excludeId) continue;
+    const cEnd = clipEnd(c);
+    const distStartToEnd = Math.abs(rawStart - cEnd);
+    if (distStartToEnd <= bestDist) {
+      bestDist = distStartToEnd;
+      best = cEnd;
+    }
+    const distEndToStart = Math.abs(rawEnd - c.start);
+    if (distEndToStart <= bestDist) {
+      bestDist = distEndToStart;
+      best = c.start - dur;
+    }
+  }
+  return Math.max(0, best);
 }
 
 interface DropPreview {
@@ -307,6 +336,16 @@ export function EditTabShell() {
     [timeScale],
   );
 
+  // 磁吸阈值换算成秒——固定按像素定义（不管当前时间刻度缩放到多大，屏幕上
+  // 差不多这么近就该吸附），所以要用当前的像素/秒换算成对应的秒数。
+  const snapThresholdSeconds = useCallback(() => {
+    const el = scrubAreaRef.current;
+    if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0) return 0;
+    return (SNAP_PIXELS / rect.width) * timeScale;
+  }, [timeScale]);
+
   const trackIndexFromPoint = useCallback((clientX: number, clientY: number): number | null => {
     const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
     const trackEl = el?.closest('[data-track-row]') as HTMLElement | null;
@@ -330,12 +369,13 @@ export function EditTabShell() {
   const onTrackDragOver = useCallback(
     (trackIndex: number) => (e: React.DragEvent) => {
       onDragOverGeneric(e);
-      const start = timeFromClientX(e.clientX);
+      const raw = timeFromClientX(e.clientX);
+      const start = snapToNeighbors(tracksRef.current[trackIndex] ?? [], raw, IMAGE_CLIP_DURATION, snapThresholdSeconds());
       const end = start + IMAGE_CLIP_DURATION;
       const valid = !overlaps(tracksRef.current[trackIndex] ?? [], start, end);
       setDropPreview({ trackIndex, start, end, valid });
     },
-    [onDragOverGeneric, timeFromClientX],
+    [onDragOverGeneric, snapThresholdSeconds, timeFromClientX],
   );
 
   const handleTrackDrop = useCallback(
@@ -348,12 +388,14 @@ export function EditTabShell() {
       try {
         const payload = JSON.parse(assetRaw) as DirectorAssetDragPayload;
         if (payload.type !== 'video' && payload.type !== 'image') return; // "角色" 素材本质是图片，但这里只接受显式的图片/视频，避免混淆
-        appendClipAt(payload, trackIndex, timeFromClientX(e.clientX));
+        const raw = timeFromClientX(e.clientX);
+        const start = snapToNeighbors(tracksRef.current[trackIndex] ?? [], raw, IMAGE_CLIP_DURATION, snapThresholdSeconds());
+        appendClipAt(payload, trackIndex, start);
       } catch {
         /* not a director asset drag payload */
       }
     },
-    [appendClipAt, timeFromClientX],
+    [appendClipAt, snapThresholdSeconds, timeFromClientX],
   );
 
   // 拖到预览舞台（时间线上方那块大预览区）而不是具体某条轨道上时，没有一个
@@ -399,7 +441,14 @@ export function EditTabShell() {
           setDraggingClipId(clipId);
         }
         const targetTrack = trackIndexFromPoint(ev.clientX, ev.clientY) ?? trackIndex;
-        const start = Math.max(0, timeFromClientX(ev.clientX) - grabOffsetTime);
+        const raw = Math.max(0, timeFromClientX(ev.clientX) - grabOffsetTime);
+        const start = snapToNeighbors(
+          tracksRef.current[targetTrack] ?? [],
+          raw,
+          clipDuration(clip),
+          snapThresholdSeconds(),
+          targetTrack === trackIndex ? clipId : undefined,
+        );
         const end = start + clipDuration(clip);
         const valid = !overlaps(tracksRef.current[targetTrack] ?? [], start, end, targetTrack === trackIndex ? clipId : undefined);
         const preview: DropPreview = { trackIndex: targetTrack, start, end, valid };
@@ -424,7 +473,7 @@ export function EditTabShell() {
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp, { once: true });
     },
-    [moveClip, showNotice, t, timeFromClientX, trackIndexFromPoint],
+    [moveClip, showNotice, snapThresholdSeconds, t, timeFromClientX, trackIndexFromPoint],
   );
 
   // 播放：视频片段靠它自己的 <video> timeupdate 推进播放头；图片片段/轨道
