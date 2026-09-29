@@ -1564,6 +1564,46 @@
   opacity: 0.45;
 }
 
+/* 图片片段两端的伸缩手柄——平时隐身（不挡住底下的缩略图/拖动手势），
+   鼠标悬停或片段处于 active 状态时才露出一条竖杠提示"这里可以拖"。 */
+.director-edit-clip-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  cursor: ew-resize;
+  z-index: 3;
+  touch-action: none;
+}
+
+.director-edit-clip-handle--start {
+  left: 0;
+}
+
+.director-edit-clip-handle--end {
+  right: 0;
+}
+
+.director-edit-clip-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 3px;
+  height: 22px;
+  max-height: 60%;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.9);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.director-edit-clip:hover .director-edit-clip-handle::after,
+.director-edit-clip--active .director-edit-clip-handle::after {
+  opacity: 1;
+}
+
 /* 拖拽落点预览——新素材从 素材 面板拖进时间线、或者挪动一个已有片段时，
    实时显示"松手会落在哪、占多宽"；跟目标轨道其它片段重叠时变红且不能放。 */
 .director-edit-drop-preview {

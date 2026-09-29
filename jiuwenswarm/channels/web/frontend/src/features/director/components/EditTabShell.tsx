@@ -138,7 +138,10 @@ interface EditClip {
 }
 
 function clipDuration(clip: EditClip): number {
-  return clip.type === 'image' ? IMAGE_CLIP_DURATION : Math.max(MIN_CLIP_DURATION, clip.trimOut - clip.trimIn);
+  // 图片素材没有内在时长，但一旦放上时间线就跟视频片段一样用 trimIn/trimOut
+  // 表示"这一段占用多久"——拖动片段两端的伸缩手柄改的就是这两个值，从而让
+  // 图片片段可以在时间线上被拉长/缩短（split 逻辑本来就已经假定这个模型）。
+  return Math.max(MIN_CLIP_DURATION, clip.trimOut - clip.trimIn);
 }
 
 function clipEnd(clip: EditClip): number {
@@ -212,6 +215,15 @@ interface DropPreview {
   start: number;
   end: number;
   valid: boolean;
+}
+
+/** 拖动图片片段左/右两端的伸缩手柄时的实时预览——只覆盖被拖的那个片段，
+ *  真正提交（写回 tracks）要等松手，拖动过程中只是临时的渲染态。 */
+interface ClipResizePreview {
+  clipId: string;
+  start: number;
+  trimIn: number;
+  trimOut: number;
 }
 
 /** 撤销/重做栈——past 是"在到达当前状态之前"依次经过的每一步（越靠后越
@@ -298,6 +310,10 @@ export function EditTabShell() {
   // 份仅用于渲染预览的 state（可能落后于最后一次指针移动）。
   const [dropPreview, setDropPreview] = useState<DropPreview | null>(null);
   const pendingDropRef = useRef<DropPreview | null>(null);
+  // 拖动图片片段的伸缩手柄时的实时预览，同样的"渲染用 state + 提交时读 ref"
+  // 套路：state 驱动画面跟手，ref 保证松手那一刻读到的是最后一次指针位置。
+  const [resizePreview, setResizePreview] = useState<ClipResizePreview | null>(null);
+  const resizePreviewRef = useRef<ClipResizePreview | null>(null);
   // 拖拽结束（pointerup）时置位，让紧随其后的原生 click 事件（点击片段跳转
   // 播放头）被吞掉一次——不然一次拖拽松手后还会顺带触发一次"点击"。
   const suppressClipClickRef = useRef(false);
@@ -601,6 +617,67 @@ export function EditTabShell() {
     [moveClip, showNotice, snapThresholdSeconds, t, timeFromClientX, trackIndexFromPoint],
   );
 
+  // 拖动图片片段左/右两端的伸缩手柄改变它的时长——右手柄只改 trimOut（起点不
+  // 变，往右拉变长/往左拉变短），左手柄同时挪动 start 和反向调整 trimOut
+  // （终点保持不动，图片没有源素材裁剪窗口，trimIn 恒为 0，"从左边缩短"实际
+  // 上是把起点往右推、时长跟着减少）。两端都不能越过同一轨道上相邻片段的
+  // 边界（片段之间不允许重叠），也不能缩到比最小时长还短。拖动过程中只更新
+  // 本地预览，松手那一刻才提交一次到撤销栈，避免每个像素的移动都算一步。
+  const handleClipResizeStart = useCallback(
+    (trackIndex: number, clipId: string, edge: 'start' | 'end') => (e: React.PointerEvent) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const track = tracksRef.current[trackIndex] ?? [];
+      const clip = track.find((c) => c.id === clipId);
+      if (!clip) return;
+      const originalStart = clip.start;
+      const originalTrimIn = clip.trimIn;
+      const originalTrimOut = clip.trimOut;
+      const sorted = [...track].sort((a, b) => a.start - b.start);
+      const selfIndex = sorted.findIndex((c) => c.id === clipId);
+      const prevClip = selfIndex > 0 ? sorted[selfIndex - 1] : null;
+      const nextClip = selfIndex >= 0 && selfIndex < sorted.length - 1 ? sorted[selfIndex + 1] : null;
+      const startClientX = e.clientX;
+      const startTime = timeFromClientX(startClientX);
+      setDraggingClipId(clipId);
+      const onMove = (ev: PointerEvent) => {
+        const deltaTime = timeFromClientX(ev.clientX) - startTime;
+        let preview: ClipResizePreview;
+        if (edge === 'end') {
+          const minTrimOut = originalTrimIn + MIN_CLIP_DURATION;
+          const maxTrimOut = nextClip ? nextClip.start - originalStart : Infinity;
+          const newTrimOut = Math.min(Math.max(originalTrimOut + deltaTime, minTrimOut), maxTrimOut);
+          preview = { clipId, start: originalStart, trimIn: originalTrimIn, trimOut: newTrimOut };
+        } else {
+          const minStart = prevClip ? clipEnd(prevClip) : 0;
+          const maxStart = originalStart + (originalTrimOut - originalTrimIn) - MIN_CLIP_DURATION;
+          const newStart = Math.min(Math.max(originalStart + deltaTime, minStart), maxStart);
+          const newTrimOut = originalTrimOut - (newStart - originalStart);
+          preview = { clipId, start: newStart, trimIn: originalTrimIn, trimOut: newTrimOut };
+        }
+        resizePreviewRef.current = preview;
+        setResizePreview(preview);
+      };
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        const preview = resizePreviewRef.current;
+        resizePreviewRef.current = null;
+        setDraggingClipId(null);
+        setResizePreview(null);
+        if (preview) {
+          applyTrack(trackIndex, (arr) =>
+            arr.map((c) => (c.id === clipId ? { ...c, start: preview.start, trimIn: preview.trimIn, trimOut: preview.trimOut } : c)),
+          );
+        }
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp, { once: true });
+    },
+    [applyTrack, timeFromClientX],
+  );
+
   // 播放：视频片段靠它自己的 <video> timeupdate 推进播放头；图片片段/轨道
   // 间的空隙没有媒体元素可以驱动，靠 rAF 按真实经过时间累加。谁是"当前活跃
   // 片段"由 locateActive 按轨道优先级现算，不再依赖固定的顺序数组。
@@ -822,8 +899,13 @@ export function EditTabShell() {
   const playheadPct = (playheadTime / timeScale) * 100;
 
   const renderClip = (trackIndex: number, clip: EditClip) => {
-    const leftPct = (clip.start / timeScale) * 100;
-    const widthPct = (clipDuration(clip) / timeScale) * 100;
+    // 正在被拖伸缩手柄的那个片段渲染用本地预览值（还没提交到 tracks），
+    // 其它片段照常用 tracks 里的真实值。
+    const preview = resizePreview?.clipId === clip.id ? resizePreview : null;
+    const effectiveStart = preview?.start ?? clip.start;
+    const effectiveDuration = preview ? Math.max(MIN_CLIP_DURATION, preview.trimOut - preview.trimIn) : clipDuration(clip);
+    const leftPct = (effectiveStart / timeScale) * 100;
+    const widthPct = (effectiveDuration / timeScale) * 100;
     return (
       <div
         key={clip.id}
@@ -848,6 +930,7 @@ export function EditTabShell() {
         data-clip-id={clip.id}
         data-clip-row={trackIndex}
         data-clip-start={clip.start.toFixed(2)}
+        data-clip-duration={clipDuration(clip).toFixed(2)}
         title={clip.name}
       >
         {clip.type === 'image' ? (
@@ -868,6 +951,22 @@ export function EditTabShell() {
         >
           {trashIcon}
         </button>
+        {clip.type === 'image' ? (
+          <>
+            <div
+              className="director-edit-clip-handle director-edit-clip-handle--start"
+              onPointerDown={handleClipResizeStart(trackIndex, clip.id, 'start')}
+              onClick={(e) => e.stopPropagation()}
+              data-testid="director-edit-clip-resize-start"
+            />
+            <div
+              className="director-edit-clip-handle director-edit-clip-handle--end"
+              onPointerDown={handleClipResizeStart(trackIndex, clip.id, 'end')}
+              onClick={(e) => e.stopPropagation()}
+              data-testid="director-edit-clip-resize-end"
+            />
+          </>
+        ) : null}
       </div>
     );
   };
