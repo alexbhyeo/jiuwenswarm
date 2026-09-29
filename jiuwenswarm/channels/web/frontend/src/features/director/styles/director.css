@@ -796,7 +796,10 @@
 }
 
 .director-project-thumb {
-  height: 128px;
+  /* 固定像素高度会让封面图在宽屏上跟着 4 列栅格越拉越宽，却还是这么矮，
+     变成又扁又长的"全景条"；改成固定宽高比（跟这个功能默认的 16:9 一致）
+     以后，卡片不管多宽，封面裁出来的比例都一样，不会再随窗口变宽走样。 */
+  aspect-ratio: 16 / 9;
   background: linear-gradient(135deg, #dbe6fb, #aecbfa);
   position: relative;
   display: flex;
