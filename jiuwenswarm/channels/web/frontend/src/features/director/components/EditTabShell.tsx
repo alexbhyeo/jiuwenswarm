@@ -76,6 +76,20 @@ const zoomInIcon = (
   </svg>
 );
 
+const undoIcon = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M9 14 4 9l5-5" />
+    <path d="M4 9h10.5A5.5 5.5 0 0 1 20 14.5v0A5.5 5.5 0 0 1 14.5 20H11" />
+  </svg>
+);
+
+const redoIcon = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <path d="m15 14 5-5-5-5" />
+    <path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5v0A5.5 5.5 0 0 0 9.5 20H13" />
+  </svg>
+);
+
 /** 图片素材在时间线上默认占用的时长（秒）——图片本身没有内在时长，给一个
  *  固定值才能像视频片段一样参与拼接播放/分割。 */
 const IMAGE_CLIP_DURATION = 3;
@@ -104,6 +118,10 @@ const BASE_PX_PER_SECOND = 60;
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 6;
 const ZOOM_STEP = 0.5;
+
+/** 撤销栈最多保留多少步——每一步就是一份 tracks 快照，够用又不至于无限
+ *  增长；超出时扔掉最旧的一步。 */
+const MAX_HISTORY = 50;
 
 interface EditClip {
   id: string;
@@ -196,6 +214,14 @@ interface DropPreview {
   valid: boolean;
 }
 
+/** 撤销/重做栈——past 是"在到达当前状态之前"依次经过的每一步（越靠后越
+ *  新），future 是撤销掉之后还能重做回去的那些步骤（越靠前越接近当前）。 */
+interface TracksHistory {
+  past: EditClip[][][];
+  present: EditClip[][];
+  future: EditClip[][][];
+}
+
 export function EditTabShell() {
   const { t } = useTranslation();
   const activeTab = useDirectorStore((s) => s.activeTab);
@@ -205,8 +231,39 @@ export function EditTabShell() {
 
   // tracks[0] 是主轨——唯一没有"轨道 N"标签的那条，但不再是唯一参与播放的
   // 轨道：所有轨道都会参与播放，播放优先级按轨道从上到下（见 locateActive）。
-  // tracks[1:] 是用户自己加的附加轨道。
-  const [tracks, setTracks] = useState<EditClip[][]>([[]]);
+  // tracks[1:] 是用户自己加的附加轨道。用一份撤销/重做栈包着它——下面的
+  // setTracks 是原地替换 useState 版本的等价写法（同样接受新值或更新函数），
+  // 所有既有调用点（applyTrack/moveClip/addTrack/removeTrack）不用改。
+  const [history, setHistory] = useState<TracksHistory>({ past: [], present: [[]], future: [] });
+  const tracks = history.present;
+  const setTracks = useCallback((updater: EditClip[][] | ((prev: EditClip[][]) => EditClip[][])) => {
+    setHistory((h) => {
+      const next = typeof updater === 'function' ? (updater as (prev: EditClip[][]) => EditClip[][])(h.present) : updater;
+      if (next === h.present) return h; // 比如挪动被判定重叠而拒绝时，调用方根本不会走到这里，但留一道保险
+      const past = h.past.length >= MAX_HISTORY ? [...h.past.slice(1), h.present] : [...h.past, h.present];
+      return { past, present: next, future: [] };
+    });
+  }, []);
+  const canUndo = history.past.length > 0;
+  const canRedo = history.future.length > 0;
+  const undo = useCallback(() => {
+    setHistory((h) => {
+      if (h.past.length === 0) return h;
+      const previous = h.past[h.past.length - 1];
+      const total = totalDurationAcrossTracks(previous);
+      setPlayheadTime((time) => Math.min(time, total));
+      return { past: h.past.slice(0, -1), present: previous, future: [h.present, ...h.future] };
+    });
+  }, []);
+  const redo = useCallback(() => {
+    setHistory((h) => {
+      if (h.future.length === 0) return h;
+      const next = h.future[0];
+      const total = totalDurationAcrossTracks(next);
+      setPlayheadTime((time) => Math.min(time, total));
+      return { past: [...h.past, h.present], present: next, future: h.future.slice(1) };
+    });
+  }, []);
   const [playheadTime, setPlayheadTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [zoom, setZoom] = useState(1);
@@ -620,8 +677,9 @@ export function EditTabShell() {
   const zoomIn = useCallback(() => setZoom((z) => Math.min(MAX_ZOOM, Number((z + ZOOM_STEP).toFixed(2)))), []);
   const zoomOut = useCallback(() => setZoom((z) => Math.max(MIN_ZOOM, Number((z - ZOOM_STEP).toFixed(2)))), []);
 
-  // Ctrl/Cmd + "+"/"-" 缩放时间线——跟工具栏里放大镜按钮走同一个口子，
-  // preventDefault 是为了不要连带触发浏览器自己的整页面缩放。
+  // Ctrl/Cmd + "+"/"-" 缩放时间线，Ctrl/Cmd+Z 撤销、Ctrl/Cmd+Shift+Z 或
+  // Ctrl/Cmd+Y 重做——都跟工具栏里对应的按钮走同一个口子，preventDefault
+  // 是为了不要连带触发浏览器自己的整页面缩放/后退前进手势。
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return;
@@ -631,11 +689,20 @@ export function EditTabShell() {
       } else if (e.key === '-' || e.key === '_') {
         e.preventDefault();
         zoomOut();
+      } else if (e.key.toLowerCase() === 'z' && e.shiftKey) {
+        e.preventDefault();
+        redo();
+      } else if (e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        undo();
+      } else if (e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        redo();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [zoomIn, zoomOut]);
+  }, [redo, undo, zoomIn, zoomOut]);
 
   const seekFromPointerEvent = useCallback(
     (e: React.MouseEvent) => {
@@ -950,38 +1017,63 @@ export function EditTabShell() {
                 {formatTime(playheadTime)} / {formatTime(duration)}
               </span>
             </div>
-            <div className="director-edit-zoom" data-testid="director-edit-zoom">
-              <button
-                type="button"
-                className="director-edit-zoom-btn"
-                title={t('director.edit.zoomOut')}
-                onClick={zoomOut}
-                disabled={zoom <= MIN_ZOOM}
-                data-testid="director-edit-zoom-out-btn"
-              >
-                {zoomOutIcon}
-              </button>
-              <input
-                type="range"
-                className="director-edit-zoom-slider"
-                min={MIN_ZOOM}
-                max={MAX_ZOOM}
-                step={ZOOM_STEP}
-                value={zoom}
-                onChange={(e) => setZoom(Number(e.target.value))}
-                title={t('director.edit.zoomLevel', { level: zoom.toFixed(1) })}
-                data-testid="director-edit-zoom-slider"
-              />
-              <button
-                type="button"
-                className="director-edit-zoom-btn"
-                title={t('director.edit.zoomIn')}
-                onClick={zoomIn}
-                disabled={zoom >= MAX_ZOOM}
-                data-testid="director-edit-zoom-in-btn"
-              >
-                {zoomInIcon}
-              </button>
+            <div className="director-edit-toolbar-right">
+              <div className="director-edit-zoom" data-testid="director-edit-zoom">
+                <button
+                  type="button"
+                  className="director-edit-zoom-btn"
+                  title={t('director.edit.zoomOut')}
+                  onClick={zoomOut}
+                  disabled={zoom <= MIN_ZOOM}
+                  data-testid="director-edit-zoom-out-btn"
+                >
+                  {zoomOutIcon}
+                </button>
+                <input
+                  type="range"
+                  className="director-edit-zoom-slider"
+                  min={MIN_ZOOM}
+                  max={MAX_ZOOM}
+                  step={ZOOM_STEP}
+                  value={zoom}
+                  onChange={(e) => setZoom(Number(e.target.value))}
+                  title={t('director.edit.zoomLevel', { level: zoom.toFixed(1) })}
+                  data-testid="director-edit-zoom-slider"
+                />
+                <button
+                  type="button"
+                  className="director-edit-zoom-btn"
+                  title={t('director.edit.zoomIn')}
+                  onClick={zoomIn}
+                  disabled={zoom >= MAX_ZOOM}
+                  data-testid="director-edit-zoom-in-btn"
+                >
+                  {zoomInIcon}
+                </button>
+              </div>
+              <div className="director-toolbar-divider" />
+              <div className="director-edit-history" data-testid="director-edit-history">
+                <button
+                  type="button"
+                  className="director-edit-toolbar-btn"
+                  title={t('director.edit.undo')}
+                  onClick={undo}
+                  disabled={!canUndo}
+                  data-testid="director-edit-undo-btn"
+                >
+                  {undoIcon}
+                </button>
+                <button
+                  type="button"
+                  className="director-edit-toolbar-btn"
+                  title={t('director.edit.redo')}
+                  onClick={redo}
+                  disabled={!canRedo}
+                  data-testid="director-edit-redo-btn"
+                >
+                  {redoIcon}
+                </button>
+              </div>
             </div>
           </div>
 

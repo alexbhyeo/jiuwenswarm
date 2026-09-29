@@ -180,7 +180,9 @@
       "clipOverlap": "This position overlaps another clip on the same track",
       "zoomIn": "Zoom In (Ctrl + +)",
       "zoomOut": "Zoom Out (Ctrl + -)",
-      "zoomLevel": "Zoom: {{level}}x"
+      "zoomLevel": "Zoom: {{level}}x",
+      "undo": "Undo (Ctrl + Z)",
+      "redo": "Redo (Ctrl + Shift + Z)"
     },
     "editChat": {
       "title": "Edit Assistant",

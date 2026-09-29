@@ -1235,6 +1235,18 @@
   gap: 14px;
 }
 
+.director-edit-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.director-edit-history {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .director-edit-zoom {
   display: flex;
   align-items: center;

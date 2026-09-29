@@ -180,7 +180,9 @@
       "clipOverlap": "此位置与同一轨道上的其他片段重叠",
       "zoomIn": "放大 (Ctrl + +)",
       "zoomOut": "缩小 (Ctrl + -)",
-      "zoomLevel": "缩放：{{level}}x"
+      "zoomLevel": "缩放：{{level}}x",
+      "undo": "撤销 (Ctrl + Z)",
+      "redo": "重做 (Ctrl + Shift + Z)"
     },
     "editChat": {
       "title": "剪辑助手",
