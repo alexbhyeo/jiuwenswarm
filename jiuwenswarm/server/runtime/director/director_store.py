@@ -251,6 +251,16 @@ class DirectorStore:
         self._save(projects)
         return project
 
+    def rename_project(self, project_id: str, name: str) -> DirectorProject:
+        projects = self._load()
+        project = projects.get(project_id)
+        if project is None:
+            raise KeyError(project_id)
+        project.name = name
+        project.updated_at = time.time()
+        self._save(projects)
+        return project
+
     def append_asset(self, project_id: str, asset: DirectorAsset) -> DirectorProject:
         projects = self._load()
         project = projects.get(project_id)

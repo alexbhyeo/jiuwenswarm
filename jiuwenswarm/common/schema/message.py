@@ -288,6 +288,7 @@ class ReqMethod(Enum):
     DIRECTOR_PROJECTS_LIST = "director.projects.list"
     DIRECTOR_PROJECTS_CREATE = "director.projects.create"
     DIRECTOR_PROJECTS_GET = "director.projects.get"
+    DIRECTOR_PROJECTS_RENAME = "director.projects.rename"
     DIRECTOR_GENERATE = "director.generate"
     DIRECTOR_GENERATE_CHECK_STATUS = "director.generate.check_status"
     DIRECTOR_ASSET_RENAME = "director.asset.rename"

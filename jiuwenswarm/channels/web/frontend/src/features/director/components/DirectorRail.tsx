@@ -183,6 +183,71 @@ const trashIcon = (
   </svg>
 );
 
+interface ProjectRowNameProps {
+  project: DirectorProject;
+  onRename: (name: string) => void;
+}
+
+/** 项目行名称：默认展示项目名，点击铅笔图标进入行内编辑（跟 AssetNameLabel
+ *  同一套交互：回车/失焦保存、Esc 取消），但项目名没有"素材"那样的兜底
+ *  展示（prompt），所以失焦时留空或跟原名相同就直接丢弃草稿、不提交空名。 */
+function ProjectRowName({ project, onRename }: ProjectRowNameProps) {
+  const { t } = useTranslation();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        className="director-project-row-name-input"
+        value={draft}
+        placeholder={t('director.rename.placeholder')}
+        onChange={(e) => setDraft(e.target.value)}
+        onClick={(e) => e.stopPropagation()}
+        onBlur={() => {
+          setEditing(false);
+          const trimmed = draft.trim();
+          if (trimmed && trimmed !== project.name) onRename(trimmed);
+        }}
+        onKeyDown={(e) => {
+          // 必须 stopPropagation：外层项目行是 role="button"，自己的
+          // onKeyDown 把 Enter/空格当"选中该项目"处理——不挡住冒泡的话，
+          // 敲回车保存重命名会顺带把这个项目选中，这是个真的会复现的 bug。
+          e.stopPropagation();
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            (e.target as HTMLInputElement).blur();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            setEditing(false);
+          }
+        }}
+        data-testid="director-project-rename-input"
+      />
+    );
+  }
+
+  return (
+    <>
+      <span className="director-project-row-name">{project.name}</span>
+      <button
+        type="button"
+        className="director-project-rename-btn"
+        title={t('director.rename.action')}
+        onClick={(e) => {
+          e.stopPropagation();
+          setDraft(project.name);
+          setEditing(true);
+        }}
+        data-testid="director-project-rename-btn"
+      >
+        {pencilIcon}
+      </button>
+    </>
+  );
+}
+
 interface AssetNameLabelProps {
   asset: DirectorAsset;
   fallback: string;
@@ -262,6 +327,7 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState<ExpandedCategory>('image');
   const renameAsset = useDirectorStore((s) => s.renameAsset);
+  const renameProject = useDirectorStore((s) => s.renameProject);
   const deleteAsset = useDirectorStore((s) => s.deleteAsset);
   const uploadAsset = useDirectorStore((s) => s.uploadAsset);
   const uploading = useDirectorStore((s) => s.uploading);
@@ -323,17 +389,26 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
             {expanded === 'projects' && (
               <div className="director-project-list">
                 {projects.map((project) => (
-                  <button
+                  <div
                     key={project.project_id}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     className={`director-project-row ${
                       project.project_id === selectedProject?.project_id ? 'director-project-row--active' : ''
                     }`}
                     onClick={() => onSelectProject(project.project_id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onSelectProject(project.project_id);
+                      }
+                    }}
+                    data-testid="director-project-row"
+                    data-project-id={project.project_id}
                   >
-                    <span className="director-project-row-name">{project.name}</span>
+                    <ProjectRowName project={project} onRename={(name) => renameProject(project.project_id, name)} />
                     <span className="director-category-count">{project.assets.length}</span>
-                  </button>
+                  </div>
                 ))}
               </div>
             )}

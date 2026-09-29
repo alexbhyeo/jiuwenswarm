@@ -284,6 +284,18 @@ class DirectorManager:
             raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")
         return {"project": project.to_dict()}
 
+    async def handle_director_projects_rename(self, params: dict) -> dict:
+        project_id = str(params.get("project_id") or "").strip()
+        name = str(params.get("name") or "").strip()
+        if not project_id:
+            raise DirectorRpcError("INVALID_PARAMS", "缺少 project_id")
+        if not name:
+            raise DirectorRpcError("INVALID_PARAMS", "项目名称不能为空")
+        if self._store.get_project(project_id) is None:
+            raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")
+        project = self._store.rename_project(project_id, name)
+        return {"project": project.to_dict()}
+
     def _resolve_at_references(
         self, project: DirectorProject, prompt: str, max_refs: int
     ) -> tuple[str, list[str]]:

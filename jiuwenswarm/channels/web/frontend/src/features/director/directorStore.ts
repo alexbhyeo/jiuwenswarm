@@ -45,6 +45,7 @@ interface DirectorState {
   setActiveTab: (tab: DirectorTabKey) => void;
   loadProjects: () => Promise<void>;
   createProject: (name: string) => Promise<DirectorProject | null>;
+  renameProject: (projectId: string, name: string) => Promise<void>;
   selectProject: (projectId: string | null) => void;
 
   setComposerMode: (mode: ComposerMode) => void;
@@ -181,6 +182,19 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
     } catch (e) {
       set({ projectsError: e instanceof Error ? e.message : String(e) });
       return null;
+    }
+  },
+
+  renameProject: async (projectId, name) => {
+    try {
+      const { directorProjectsRename } = await import('./directorApi');
+      const { project } = await directorProjectsRename(projectId, name);
+      set((s) => ({
+        projects: s.projects.map((p) => (p.project_id === project.project_id ? project : p)),
+      }));
+    } catch (e) {
+      const message = e instanceof DirectorApiError ? e.message : e instanceof Error ? e.message : String(e);
+      set({ projectsError: message });
     }
   },
 

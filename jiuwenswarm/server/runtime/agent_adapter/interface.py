@@ -967,6 +967,7 @@ _DIRECTOR_ROUTES: dict[ReqMethod, str] = {
     ReqMethod.DIRECTOR_PROJECTS_LIST: "handle_director_projects_list",
     ReqMethod.DIRECTOR_PROJECTS_CREATE: "handle_director_projects_create",
     ReqMethod.DIRECTOR_PROJECTS_GET: "handle_director_projects_get",
+    ReqMethod.DIRECTOR_PROJECTS_RENAME: "handle_director_projects_rename",
     ReqMethod.DIRECTOR_GENERATE: "handle_director_generate",
     ReqMethod.DIRECTOR_GENERATE_CHECK_STATUS: "handle_director_generate_check_status",
     ReqMethod.DIRECTOR_ASSET_RENAME: "handle_director_asset_rename",

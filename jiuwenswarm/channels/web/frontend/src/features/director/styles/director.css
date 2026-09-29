@@ -136,6 +136,11 @@
   font-weight: 600;
 }
 
+.director-project-row:focus-visible {
+  outline: 2px solid var(--d-accent);
+  outline-offset: -2px;
+}
+
 .director-project-row-name {
   flex: 1;
   min-width: 0;
@@ -143,6 +148,44 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.director-project-rename-btn {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--d-radius-sm);
+  border: none;
+  background: none;
+  color: var(--d-text-secondary);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.director-project-row:hover .director-project-rename-btn {
+  opacity: 1;
+}
+
+.director-project-rename-btn:hover {
+  background: #fff;
+  color: var(--d-text-primary);
+}
+
+.director-project-row-name-input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  font-size: 12.5px;
+  font-family: inherit;
+  color: var(--d-text-primary);
+  border: 1px solid var(--d-accent);
+  border-radius: var(--d-radius-sm);
+  padding: 0 4px;
+  outline: none;
+  background: var(--d-bg-card);
 }
 
 .director-category-row {
