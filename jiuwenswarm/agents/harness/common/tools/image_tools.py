@@ -539,6 +539,15 @@ async def _invoke_model_image_generation(
                 model=model,
                 size=size,
             )
+        if backend == "openrouter":
+            return await asyncio.to_thread(
+                _invoke_openrouter_image_generation_sync,
+                prompt,
+                api_key=api_key,
+                api_base=api_base,
+                model=model,
+                size=size,
+            )
 
         # 新声明下 DashScope 不再是独立 client_provider，而是 OpenAI + endpoint_profile=dashscope。
         # 兼容旧 IMAGE_GEN_PROVIDER=DashScope：归一为 OpenAI 并补 dashscope profile。
@@ -727,6 +736,14 @@ def _resolve_image_gen_backend(
         or "dashscope" in base
     ):
         return "dashscope"
+
+    if (
+        vendor == "openrouter"
+        or profile == "openrouter"
+        or prov == "openrouter"
+        or "openrouter.ai" in base
+    ):
+        return "openrouter"
 
     return "dashscope"
 
@@ -980,6 +997,53 @@ def _invoke_minimax_image_generation_sync(
     image_url = str(urls[0]).strip() if urls else None
     image_b64 = str(b64s[0]).strip() if b64s else None
     return _save_generated_image(prompt=text, image_url=image_url, image_b64=image_b64)
+
+
+def _openrouter_images_api_url(api_base: str) -> str:
+    root = (api_base or "").strip().rstrip("/") or "https://openrouter.ai/api/v1"
+    if root.endswith("/images"):
+        return root
+    return f"{root}/images"
+
+
+def _invoke_openrouter_image_generation_sync(
+    prompt: str,
+    *,
+    api_key: str,
+    api_base: str,
+    model: str,
+    size: str | None,
+) -> dict[str, Any]:
+    """OpenRouter text-to-image (POST {api_base}/images, dedicated Images API —
+    distinct from /chat/completions; see https://openrouter.ai/docs/features/multimodal/image-generation).
+    """
+    url = _openrouter_images_api_url(api_base)
+    model_name = (model or "").strip()
+    if not model_name:
+        raise ValueError("image model is required (configure models.image_gen)")
+    payload: dict[str, Any] = {
+        "model": model_name,
+        "prompt": str(prompt or "").strip(),
+    }
+    headers = {
+        "User-Agent": _USER_AGENT,
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    response = _http_post_json(url, headers=headers, payload=payload, timeout=180)
+    if not response.ok:
+        raise ValueError(
+            f"OpenRouter image create failed {response.status_code}: "
+            f"{_image_api_error_message(response)}"
+        )
+    body = response.json()
+    data = body.get("data") if isinstance(body.get("data"), list) else []
+    if not data:
+        raise ValueError(f"OpenRouter image response missing data: {body}")
+    first = data[0] if isinstance(data[0], dict) else {}
+    image_b64 = str(first.get("b64_json") or "").strip() or None
+    image_url = str(first.get("url") or "").strip() or None
+    return _save_generated_image(prompt=prompt, image_url=image_url, image_b64=image_b64)
 
 
 def _invoke_volcengine_image_generation_sync(

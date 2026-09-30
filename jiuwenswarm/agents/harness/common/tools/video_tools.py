@@ -410,6 +410,19 @@ def _resolve_video_gen_backend(
     if vendor == "vllm-omni" or profile == "vllm-omni":
         return "vllm-omni"
 
+    # Checked before the volcengine model-name heuristic below: OpenRouter's own
+    # namespaced model ids (e.g. "bytedance/seedance-2.0-fast") can contain
+    # "seedance" and would otherwise false-positive as volcengine, sending an
+    # OpenRouter key to Volcengine's real endpoint. An explicit vendor/profile/
+    # provider/api_base signal for OpenRouter always wins over that heuristic.
+    if (
+        vendor == "openrouter"
+        or profile == "openrouter"
+        or prov == "openrouter"
+        or "openrouter.ai" in base
+    ):
+        return "openrouter"
+
     if (
         vendor == "minimax"
         or profile == "minimax"
@@ -750,6 +763,118 @@ def _invoke_volcengine_video_generation_sync(
         extract_status_and_url=_extract,
     )
     return _download_generated_video(video_url, prompt)
+
+
+def _normalize_openrouter_resolution(resolution: str | None) -> str | None:
+    """OpenRouter's resolution enum is lowercase ("480p"/"720p"/.../"1080p",
+    but "1K"/"2K"/"4K" keep their capital K) and case-sensitive. Designer's
+    shared 480P cost-lock (lock_clip_480p) hands every backend a DashScope-
+    style uppercase "480P" — normalize just the "<digits>P" shape, leave any
+    "1K"/"2K"/"4K"-style token untouched.
+    """
+    value = (resolution or "").strip()
+    if not value:
+        return None
+    if re.fullmatch(r"\d+P", value):
+        return value.lower()
+    return value
+
+
+def _invoke_openrouter_video_generation_sync(
+    prompt: str,
+    *,
+    api_key: str,
+    api_base: str,
+    model: str,
+    size: str | None,
+    duration: int,
+    resolution: str | None,
+    first_frame: str | None = None,
+    reference_images: list[str] | None = None,
+    audio: bool | None = None,
+) -> dict[str, Any]:
+    """OpenRouter async video generation: POST {api_base}/videos -> poll
+    polling_url until status=="completed" -> download unsigned_urls[0] (still
+    needs the same bearer auth despite the name). See
+    https://openrouter.ai/docs/guides/overview/multimodal/video-generation.
+    """
+    root = (api_base or "").strip().rstrip("/") or "https://openrouter.ai/api/v1"
+    create_url = f"{root}/videos"
+    model_name = (model or "").strip()
+    if not model_name:
+        raise ValueError("video model is required (configure models.video_gen)")
+
+    frame, refs = _split_reference_media(
+        first_frame=first_frame,
+        reference_images=reference_images,
+        force_reference_mode=False,
+    )
+    payload: dict[str, Any] = {
+        "model": model_name,
+        "prompt": str(prompt or "").strip(),
+        "aspect_ratio": _size_to_ratio(size, default="16:9"),
+    }
+    if duration:
+        payload["duration"] = int(duration)
+    normalized_resolution = _normalize_openrouter_resolution(resolution)
+    if normalized_resolution:
+        payload["resolution"] = normalized_resolution
+    # OpenRouter wants each image reference as an object, not a bare URL string
+    # (frame_images additionally needs frame_type; input_references does not).
+    if frame:
+        payload["frame_images"] = [
+            {"type": "image_url", "image_url": {"url": frame}, "frame_type": "first_frame"}
+        ]
+    if refs:
+        payload["input_references"] = [
+            {"type": "image_url", "image_url": {"url": url}} for url in refs
+        ]
+    if audio is not None:
+        payload["generate_audio"] = bool(audio)
+
+    headers = {**_REQUEST_HEADERS, "Authorization": f"Bearer {api_key}"}
+    response = _http_post(create_url, headers=headers, json=payload, timeout=60)
+    if not response.ok:
+        raise ValueError(
+            f"OpenRouter video create failed {response.status_code}: "
+            f"{_video_api_error_message(response)}"
+        )
+    body = response.json()
+    job_id = str(body.get("id") or "").strip()
+    polling_url = str(body.get("polling_url") or "").strip() or (
+        f"{root}/videos/{job_id}" if job_id else ""
+    )
+    if not polling_url:
+        raise ValueError(f"OpenRouter video response missing id/polling_url: {body}")
+
+    def _extract(data: dict[str, Any]) -> tuple[str, str | None, str | None]:
+        status = str(data.get("status") or "").strip().lower()
+        urls = data.get("unsigned_urls") if isinstance(data.get("unsigned_urls"), list) else []
+        video_url = str(urls[0]).strip() if urls else None
+        err_msg = str(data.get("error") or "").strip() or None
+        return status, video_url, err_msg
+
+    video_url = _poll_until_video_url(
+        query_url=polling_url,
+        headers=headers,
+        extract_status_and_url=_extract,
+    )
+
+    output_dir = get_agent_workspace_dir()
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    random_suffix = random.randint(1000, 9999)
+    output_path = output_dir / f"generated_{timestamp}_{random_suffix}.mp4"
+    dl_response = _http_get_resilient(video_url, headers=headers, timeout=300)
+    dl_response.raise_for_status()
+    if not dl_response.content:
+        raise ValueError("video download returned an empty file")
+    with open(output_path, "wb") as f:
+        f.write(dl_response.content)
+    return {
+        "video_path": str(output_path.absolute()),
+        "revised_prompt": prompt,
+        "original_url": video_url,
+    }
 
 
 _TASK_ID_RE = re.compile(
@@ -1290,6 +1415,20 @@ async def _invoke_model_video_generation(
                 reference_images=reference_images,
                 audio=audio,
                 force_reference_mode=force_reference_mode,
+            )
+        if backend == "openrouter":
+            return await asyncio.to_thread(
+                _invoke_openrouter_video_generation_sync,
+                prompt,
+                api_key=api_key,
+                api_base=api_base,
+                model=model,
+                size=size,
+                duration=duration,
+                resolution=resolution,
+                first_frame=first_frame,
+                reference_images=reference_images,
+                audio=audio,
             )
         return await _invoke_dashscope_video_generation(
             prompt,
