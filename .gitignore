@@ -73,6 +73,9 @@ docs/ai/
 # logs
 logs/
 
+# Designer pipeline run trajectories/reports (regenerated per local graph run)
+designer_catalog_skills_reports_trajectory/
+
 # Browser automation runtime artifacts
 .browser/
 .browser-profiles/
