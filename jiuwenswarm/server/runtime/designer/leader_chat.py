@@ -51,6 +51,15 @@ user_canvas_edits is the user's canvas log: add, remove, connect, disconnect, re
 Treat that log as fact. Do not recreate a removed node, restore a disconnected edge,
 or undo a replaced output. Do not connect an added node unless the user asked.
 connect and disconnect name node_id and peer_id. replace names the node whose output the user changed.
+recent_conversation (if present) is the last few chat turns — use it for context (e.g. a short
+follow-up like "make it brighter" refers back to whatever node you two were just discussing).
+The user's message may reference an existing node by "@Label" (the node's own label, e.g.
+"@Character 1"). When it does, that node's current output image has been attached to this request
+so you can see it — keep that same subject/style/identity when you create or refine a node in
+response, and mention the "@Label" you used for continuity in your "summary" the same way.
+Any attached images at the end of this request (from an "@Label" mention or a file the user
+uploaded) are the visual ground truth — describe new/updated node prompts in terms of what you see
+in them rather than restating a generic description.
 
 Schema:
 {
@@ -64,13 +73,26 @@ Schema:
     "remove_edge_ids": []
   },
   "prompt_updates": [{"node_id": "", "prompt": ""}],
+  "identity_updates": [{"node_id": "", "character_id": "", "description": ""}],
   "run_node_ids": []
 }
 
 Rules:
 - edit_graph: change topology. Leave run_node_ids empty unless the user asked to generate/run.
 - refine_node: update that node's config.prompt (and brief/storyboard text if asked). Put the target in run_node_ids so it regenerates.
+- A character/person node carries its real identity (what it looks like — color, costume,
+  build, etc.) in config.costume_lock and the story's cast list, NOT in config.prompt — a
+  character or appearance change (e.g. "change @Character 1's color to white") MUST also be
+  given in identity_updates (node_id, that node's config.character_id, and a short plain-fact
+  description of the NEW appearance only — no wrapper phrasing, just the visual facts, same
+  language as the existing description) or the regenerated image will keep the OLD appearance
+  no matter what prompt_updates says.
 - answer: no patch, just summary.
+- When the user is clearly building up a film step by step (character/scene design → shot list →
+  keyframes → clips → compose) and just confirmed one stage, your summary should name the natural
+  next stage (e.g. after a character design lands, suggest the scene or the shot list) rather than
+  just confirming what was done — mirror a film director walking the user through the next step,
+  not just a patch-applier.
 """
 
 
@@ -125,6 +147,56 @@ def _match_node(graph: DesignerExecutionGraph, message: str) -> DesignerGraphNod
             ranked.append((score, node))
     ranked.sort(key=lambda item: item[0], reverse=True)
     return ranked[0][1] if ranked else None
+
+
+_AT_LABEL = re.compile(r"@([^\s@][^\n]*?)(?=(?:\s@|[,，。.!！?？;；]|\s{2}|$))")
+
+_MAX_LABEL_REFERENCE_IMAGES = 3
+
+
+def resolve_label_references(graph: DesignerExecutionGraph, message: str) -> list[str]:
+    """Resolve "@Label" mentions in ``message`` to that node's output image.
+
+    Longest-label-first so e.g. "@Character 1" isn't shadowed by a shorter
+    "@Character" match. Only image-kind outputs are usable as a vision
+    reference; a mention of a text/table/video/audio node, or a node with no
+    output yet, is silently skipped rather than erroring the whole turn.
+    """
+    text = str(message or "")
+    if "@" not in text:
+        return []
+    by_label: dict[str, DesignerGraphNode] = {}
+    for node in graph.get("nodes") or []:
+        label = str(node.get("label") or "").strip()
+        if label:
+            by_label[label] = node
+    if not by_label:
+        return []
+    ordered_labels = sorted(by_label, key=len, reverse=True)
+    sources: list[str] = []
+    seen_ids: set[str] = set()
+    for match in _AT_LABEL.finditer(text):
+        candidate = match.group(1).strip()
+        label = next((lbl for lbl in ordered_labels if candidate.startswith(lbl)), None)
+        if not label:
+            continue
+        node = by_label[label]
+        node_id = str(node.get("id") or label)
+        if node_id in seen_ids:
+            continue
+        output_ref = node.get("output_ref")
+        if not isinstance(output_ref, dict):
+            continue
+        if str(output_ref.get("kind") or "") != NODE_TYPE_IMAGE:
+            continue
+        uri = str(output_ref.get("uri") or "").strip()
+        if not uri:
+            continue
+        seen_ids.add(node_id)
+        sources.append(uri)
+        if len(sources) >= _MAX_LABEL_REFERENCE_IMAGES:
+            break
+    return sources
 
 
 def _next_label(graph: DesignerExecutionGraph, node_type: str) -> str:
@@ -193,6 +265,108 @@ def _merge_prompt_updates(graph: DesignerExecutionGraph, plan: dict[str, Any]) -
     return patch
 
 
+_IDENTITY_OVERRIDE_MARKER = "USER-REQUESTED IDENTITY CHANGE (authoritative, not a stale field):"
+
+
+def _apply_identity_updates(
+    graph: DesignerExecutionGraph,
+    next_graph: DesignerExecutionGraph,
+    plan: dict[str, Any],
+) -> DesignerExecutionGraph:
+    """A character node's real look lives in config.costume_lock + the cast list in
+    graph.metadata.script_analysis, not config.prompt — leaf agents read those, so an
+    appearance change has to land there too or regeneration keeps the old look."""
+    updates = plan.get("identity_updates") or []
+    if not isinstance(updates, list) or not updates:
+        return next_graph
+    nodes_by_id = {str(n.get("id") or ""): dict(n) for n in next_graph.get("nodes") or []}
+    meta = dict(next_graph.get("metadata") or {})
+    script_analysis = dict(meta.get("script_analysis") or {})
+    characters = [dict(c) for c in (script_analysis.get("characters") or []) if isinstance(c, dict)]
+    chars_by_id = {str(c.get("id") or ""): c for c in characters if c.get("id")}
+    nodes_changed = False
+    meta_changed = False
+    for item in updates:
+        if not isinstance(item, dict):
+            continue
+        node_id = str(item.get("node_id") or "").strip()
+        description = str(item.get("description") or "").strip()
+        node = nodes_by_id.get(node_id)
+        if not node or not description:
+            continue
+        cfg = dict(node.get("config") or {})
+        name = str(cfg.get("character_name") or item.get("character_id") or "").strip()
+        costume_lock = f"{name}: {description}" if name else description
+        cfg["costume_lock"] = costume_lock
+        director_task = str(cfg.get("director_task") or "").strip()
+        if director_task and _IDENTITY_OVERRIDE_MARKER in director_task:
+            director_task = director_task.split(_IDENTITY_OVERRIDE_MARKER, 1)[0].rstrip()
+        if director_task:
+            cfg["director_task"] = (
+                f"{director_task}\n\n{_IDENTITY_OVERRIDE_MARKER} {costume_lock}\n"
+                "This is the user's deliberate, just-given instruction for THIS character, "
+                "given through chat moments ago. It outranks anything you read via read_upstream "
+                "(brief, storyboard, PRODUCTION LOCK BIBLE, other clips' costume_lock) or the "
+                "character's own name/label that still says otherwise — those have not been "
+                "regenerated yet and describe the OLD appearance. Use the appearance stated here, "
+                "not the old one, even though other sources you read still disagree with it."
+            )
+        node["config"] = cfg
+        nodes_by_id[node_id] = node
+        nodes_changed = True
+        # Prefer the node's own config.character_id (ground truth) over whatever id the
+        # LLM guessed in identity_updates — the LLM sometimes fabricates a plausible-looking
+        # id ("character_1") that doesn't match the story's real id ("char_1").
+        char_id = str(cfg.get("character_id") or item.get("character_id") or "").strip()
+        character = chars_by_id.get(char_id)
+        if character is not None:
+            character["description"] = description
+            character["costume_lock"] = costume_lock
+            attrs = character.get("identity_attrs")
+            if isinstance(attrs, dict) and "wardrobe" in attrs:
+                attrs = dict(attrs)
+                attrs["wardrobe"] = costume_lock
+                character["identity_attrs"] = attrs
+            meta_changed = True
+        if char_id:
+            # Every other node featuring this same character (other scenes/clips) carries
+            # its own copy of costume_lock too — leave those stale and a regen there (or
+            # even this one, via read_upstream) can see a conflict and side with the old
+            # majority text instead of the just-requested change.
+            for other_id, other in nodes_by_id.items():
+                if other_id == node_id:
+                    continue
+                other_cfg = other.get("config")
+                if not isinstance(other_cfg, dict):
+                    continue
+                other_char_id = str(other_cfg.get("character_id") or "").strip()
+                other_char_ids = [str(x) for x in (other_cfg.get("character_ids") or [])]
+                if char_id != other_char_id and char_id not in other_char_ids:
+                    continue
+                other_cfg = dict(other_cfg)
+                other_cfg["costume_lock"] = costume_lock
+                other["config"] = other_cfg
+                nodes_by_id[other_id] = other
+    if not nodes_changed and not meta_changed:
+        return next_graph
+    patched = dict(next_graph)
+    if nodes_changed:
+        patched["nodes"] = list(nodes_by_id.values())
+    if meta_changed:
+        script_analysis["characters"] = characters
+        if str(script_analysis.get("production_bible") or "").strip():
+            from jiuwenswarm.server.runtime.designer.pipeline.production_bible import (
+                build_production_bible,
+            )
+
+            script_analysis["production_bible"] = build_production_bible(
+                script_analysis, user_prompt=str(script_analysis.get("summary") or "")
+            )
+        meta["script_analysis"] = script_analysis
+        patched["metadata"] = meta
+    return patched
+
+
 def apply_leader_plan(
     graph: DesignerExecutionGraph,
     plan: dict[str, Any],
@@ -202,6 +376,7 @@ def apply_leader_plan(
     patch = _merge_prompt_updates(graph, plan)
     has_patch = any(patch.get(key) for key in ("upsert_nodes", "upsert_edges", "remove_node_ids", "remove_edge_ids"))
     next_graph = apply_graph_patch(graph, patch) if has_patch else graph
+    next_graph = _apply_identity_updates(graph, next_graph, plan)
     raw_run_ids = plan.get("run_node_ids") or []
     run_ids = [str(item).strip() for item in raw_run_ids if str(item).strip()]
     if intent != "refine_node":
@@ -228,12 +403,14 @@ def _sanitize_plan(plan: dict[str, Any] | None) -> dict[str, Any]:
     patch = plan.get("patch") if isinstance(plan.get("patch"), dict) else {}
     run_ids = plan.get("run_node_ids") if isinstance(plan.get("run_node_ids"), list) else []
     prompt_updates = plan.get("prompt_updates") if isinstance(plan.get("prompt_updates"), list) else []
+    identity_updates = plan.get("identity_updates") if isinstance(plan.get("identity_updates"), list) else []
     return {
         "intent": intent,
         "summary": str(plan.get("summary") or "").strip(),
         "thinking": str(plan.get("thinking") or "").strip(),
         "patch": patch,
         "prompt_updates": prompt_updates,
+        "identity_updates": identity_updates,
         "run_node_ids": [str(item).strip() for item in run_ids if str(item).strip()],
     }
 
@@ -243,6 +420,8 @@ async def _llm_leader_plan(
     message: str,
     *,
     selected_node_id: str = "",
+    history: list[dict[str, str]] | None = None,
+    images: list[str] | None = None,
 ) -> dict[str, Any]:
     from jiuwenswarm.server.runtime.designer.model_tools import (
         DesignerLlmError,
@@ -253,7 +432,7 @@ async def _llm_leader_plan(
     from jiuwenswarm.server.runtime.designer.script_analysis import _extract_json_object
 
     meta = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
-    snapshot = {
+    snapshot: dict[str, Any] = {
         "selected_node_id": selected_node_id,
         "user_canvas_edits": list(meta.get("user_canvas_edits") or [])[-20:],
         "nodes": [
@@ -272,12 +451,21 @@ async def _llm_leader_plan(
         ],
         "user": message,
     }
+    if history:
+        # Last few turns only — this is context for a short follow-up, not a
+        # transcript; keeps the snapshot small and avoids re-litigating old asks.
+        snapshot["recent_conversation"] = [
+            {"role": str(item.get("role") or "user"), "content": str(item.get("content") or "")[:600]}
+            for item in history[-8:]
+            if str(item.get("content") or "").strip()
+        ]
     try:
         result = await call_model_tool(
             prompt=json.dumps(snapshot, ensure_ascii=False),
             system=_LEADER_SYSTEM,
             optimize_for="quality",
             max_tokens=16384,
+            images=images or None,
         )
         text = model_text_or_raise(result)
     except DesignerLlmError:
@@ -305,10 +493,19 @@ async def run_leader_chat(
     selected_node_id: str = "",
     run_new_nodes: bool = False,
     progress: ProgressFn | None = None,
+    history: list[dict[str, str]] | None = None,
+    attached_images: list[str] | None = None,
 ) -> dict[str, Any]:
     text = str(message or "").strip()
     _emit(progress, ACTIVITY_KIND_THINKING, "reading the canvas and your request")
-    plan = await _llm_leader_plan(graph, text, selected_node_id=selected_node_id)
+    # "@Label" mentions (an existing node's own label) resolve to that node's
+    # output image so the model sees it, same spirit as a file the user
+    # attached directly — both just become vision references for this turn.
+    label_images = resolve_label_references(graph, text)
+    images = [*label_images, *(attached_images or [])][:_MAX_LABEL_REFERENCE_IMAGES]
+    plan = await _llm_leader_plan(
+        graph, text, selected_node_id=selected_node_id, history=history, images=images or None
+    )
     thinking = str(plan.get("thinking") or "applying graph edits")
     _emit(progress, ACTIVITY_KIND_THINKING, thinking)
     if plan.get("intent") == "edit_graph" and not message_asks_to_run(
@@ -335,7 +532,7 @@ async def run_leader_chat(
         "summary": summary,
         "graph": next_graph,
         "run_node_ids": run_ids,
-        "changed": changed or bool(plan.get("prompt_updates")),
+        "changed": changed or bool(plan.get("prompt_updates")) or bool(plan.get("identity_updates")),
         "updated_at": utc_now_ms(),
     }
     _emit(progress, ACTIVITY_KIND_STAGE, summary or "done", tool="")

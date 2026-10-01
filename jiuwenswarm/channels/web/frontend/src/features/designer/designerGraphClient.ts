@@ -64,7 +64,14 @@ export const designerGraphClient = {
       patch,
     }),
 
-  chat: (params: { graphId: string; message: string; selectedNodeId?: string; runNewNodes?: boolean }) =>
+  chat: (params: {
+    graphId: string;
+    message: string;
+    selectedNodeId?: string;
+    runNewNodes?: boolean;
+    references?: Array<Record<string, unknown>>;
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  }) =>
     webRequest<{
       graph: DesignerExecutionGraph;
       summary?: string;
@@ -78,6 +85,8 @@ export const designerGraphClient = {
         message: params.message,
         ...(params.selectedNodeId ? { selected_node_id: params.selectedNodeId } : {}),
         ...(params.runNewNodes ? { run_new_nodes: true } : {}),
+        ...(params.references?.length ? { references: params.references } : {}),
+        ...(params.history?.length ? { history: params.history } : {}),
       },
       { timeoutMs: 20 * 60 * 1000 },
     ),
