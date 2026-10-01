@@ -785,17 +785,51 @@
   padding-left: 18px;
 }
 
+.designer-chat-panel__table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 .designer-chat-panel__markdown table {
   border-collapse: collapse;
   font-size: 12px;
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
 }
 
 .designer-chat-panel__markdown th,
 .designer-chat-panel__markdown td {
   border: 1px solid var(--color-border-default);
-  padding: 4px 8px;
+  padding: 4px 6px;
   text-align: left;
+  vertical-align: top;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.designer-chat-panel__markdown th {
+  white-space: nowrap;
+}
+
+/* Bound the two long columns so the storyboard table stays a reasonable width
+   instead of stretching with every extra word of description. */
+.designer-chat-panel__markdown td:nth-child(4) {
+  max-width: 180px;
+}
+
+.designer-chat-panel__markdown td:nth-child(5) {
+  max-width: 120px;
+}
+
+/* Pin the shot number: the panel is narrower than the table, so this keeps the
+   row identity visible while the rest scrolls sideways. */
+.designer-chat-panel__markdown th:first-child,
+.designer-chat-panel__markdown td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--color-surface-shell);
 }
 
 .designer-chat-panel__markdown code {
@@ -803,6 +837,23 @@
   border-radius: 4px;
   padding: 1px 4px;
   font-size: 12px;
+}
+
+.designer-chat-panel__expand {
+  display: block;
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-action-primary, #1677ff);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.designer-chat-panel__expand:hover {
+  text-decoration: underline;
 }
 
 .designer-chat-panel__thinking {

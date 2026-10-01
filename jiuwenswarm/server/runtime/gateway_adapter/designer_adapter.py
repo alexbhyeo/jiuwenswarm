@@ -251,6 +251,47 @@ def _design_title(prompt: str) -> str:
 
 _BOOTSTRAP_STORYBOARD_MAX_CHARS = 3600
 
+_STORYBOARD_TABLE_HEADER = (
+    "| 镜头 | 时间 | 场景 | 画面与动作 | 运镜 |",
+    "| --- | --- | --- | --- | --- |",
+)
+
+
+def _md_cell(value: Any) -> str:
+    """One GFM table cell: escape pipes and flatten newlines so a value can
+    never break out of its column or row."""
+    text = str(value if value is not None else "").replace("|", "\\|")
+    return " ".join(text.split())
+
+
+def _storyboard_table_markdown(shots: list[Any]) -> str:
+    """Render the sync'd shots as a chat-friendly GFM table.
+
+    ``approved_storyboard`` is a director-style markdown doc (a heading plus
+    bullets per shot) which reads as a wall of text in the narrow assistant
+    panel; the same information already exists structured in
+    ``script_analysis.shots``, so render that as a table instead. Returns an
+    empty string when there is no usable shot, so the caller can fall back to
+    the raw storyboard markdown.
+    """
+    rows: list[str] = []
+    for index, shot in enumerate(shots, start=1):
+        if not isinstance(shot, dict):
+            continue
+        shot_no = _md_cell(shot.get("shot_index") or index) or str(index)
+        rows.append(
+            "| {no} | {timeline} | {setting} | {action} | {camera} |".format(
+                no=shot_no,
+                timeline=_md_cell(shot.get("timeline")),
+                setting=_md_cell(shot.get("setting_id")),
+                action=_md_cell(shot.get("action") or shot.get("character_action")),
+                camera=_md_cell(shot.get("camera")),
+            )
+        )
+    if not rows:
+        return ""
+    return "\n".join([*_STORYBOARD_TABLE_HEADER, *rows])
+
 
 def _bootstrap_summary_message(graph: dict[str, Any]) -> str:
     """Director's brief/storyboard LLM calls already ran inside bootstrap (see
@@ -261,7 +302,9 @@ def _bootstrap_summary_message(graph: dict[str, Any]) -> str:
     characters = [c for c in (script_analysis.get("characters") or []) if isinstance(c, dict)]
     cast_names = [str(c.get("name") or c.get("id") or "").strip() for c in characters]
     cast_names = [name for name in cast_names if name]
-    shot_count = len(script_analysis.get("shots") or [])
+    shots = [s for s in (script_analysis.get("shots") or []) if isinstance(s, dict)]
+    shot_count = len(shots)
+    storyboard_table = _storyboard_table_markdown(shots)
     storyboard_md = str(metadata.get("approved_storyboard") or "").strip()
     if len(storyboard_md) > _BOOTSTRAP_STORYBOARD_MAX_CHARS:
         storyboard_md = storyboard_md[:_BOOTSTRAP_STORYBOARD_MAX_CHARS].rstrip() + "\n\n…（画布上可查看完整分镜）"
@@ -274,7 +317,10 @@ def _bootstrap_summary_message(graph: dict[str, Any]) -> str:
         header_bits.append(f"共 {shot_count} 个镜头")
     if header_bits:
         lines.append("，".join(header_bits))
-    if storyboard_md:
+    if storyboard_table:
+        lines.append("")
+        lines.append(storyboard_table)
+    elif storyboard_md:
         lines.append("")
         lines.append(storyboard_md)
     lines.append("")

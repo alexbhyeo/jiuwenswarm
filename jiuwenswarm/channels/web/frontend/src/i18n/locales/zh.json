@@ -88,6 +88,8 @@
       "updateError": "改图失败，请稍后重试。",
       "bootstrapDone": "已为你搭建初始设计工作流。",
       "bootstrapError": "搭建工作流失败，请稍后重试。",
+      "expandMessage": "展开",
+      "collapseMessage": "收起",
       "notImplemented": "未实现",
       "send": "发送",
       "attach": "添加参考素材",

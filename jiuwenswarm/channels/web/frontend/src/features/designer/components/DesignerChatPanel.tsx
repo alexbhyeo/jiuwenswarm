@@ -1,5 +1,5 @@
 import { Loader2, Paperclip, SendHorizontal, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ComponentPropsWithoutRef, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -34,7 +34,41 @@ function detectAtToken(value: string, cursor: number): { start: number; query: s
   return { start: at, query: token };
 }
 
+/** Assistant replies (storyboards, shot lists, stage plans) can run long;
+ * collapse them past this many characters and offer an expand/collapse
+ * toggle, mirroring the Edit assistant's long-message handling. Only
+ * assistant messages collapse — the user's own prompt always stays visible. */
+const MESSAGE_EXPAND_THRESHOLD = 260;
+
+/** Content to render for a message: truncated with an ellipsis while
+ * collapsed, otherwise unchanged. Cuts on the last line boundary so a collapsed
+ * markdown table keeps whole rows — slicing mid-row would render a broken
+ * one-row table. */
+function collapsibleContent(content: string, expanded: boolean): string {
+  const text = String(content ?? '');
+  if (expanded || text.length <= MESSAGE_EXPAND_THRESHOLD) return text;
+  const sliced = text.slice(0, MESSAGE_EXPAND_THRESHOLD);
+  const lastBreak = sliced.lastIndexOf('\n');
+  // Only prefer the line boundary when it still keeps most of the preview.
+  const preview = lastBreak > MESSAGE_EXPAND_THRESHOLD * 0.6 ? sliced.slice(0, lastBreak) : sliced;
+  return `${preview}…`;
+}
+
 type SidebarTab = 'assistant' | 'assets';
+
+/** Storyboards arrive as markdown tables, which are wider than this narrow
+ * panel. Wrap them in a scroll container so columns keep their natural width
+ * and the user scrolls sideways instead of the browser breaking words
+ * mid-token. Mirrors the Edit assistant's MarkdownTable. */
+function MarkdownTable({ children }: ComponentPropsWithoutRef<'table'>) {
+  return (
+    <div className="designer-chat-panel__table-wrap" data-testid="designer-chat-panel-table-wrap">
+      <table>{children}</table>
+    </div>
+  );
+}
+
+const markdownComponents = { table: MarkdownTable };
 
 type ComposerDraft = {
   id: string;
@@ -117,6 +151,7 @@ export function DesignerChatPanel() {
   const [attachError, setAttachError] = useState('');
   const [sending, setSending] = useState(false);
   const [atMenu, setAtMenu] = useState<{ start: number; query: string; index: number } | null>(null);
+  const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // @-mention candidates: every node's own label, newest-first (most likely
@@ -157,6 +192,15 @@ export function DesignerChatPanel() {
     },
     [atMenu, draft],
   );
+
+  const toggleMessageExpanded = useCallback((messageId: string) => {
+    setExpandedMessages((prev) => {
+      const next = new Set(prev);
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
+      return next;
+    });
+  }, []);
 
   const chatBusy = bootstrapPhase === 'thinking' || bootstrapPhase === 'bootstrapping' || sending;
   const canSend = Boolean(draft.trim() || attachments.length > 0);
@@ -370,8 +414,23 @@ export function DesignerChatPanel() {
                     ) : (
                       <>
                         <div className="designer-chat-panel__markdown">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                            {collapsibleContent(message.content, expandedMessages.has(message.id))}
+                          </ReactMarkdown>
                         </div>
+                        {message.role !== 'user' && message.content.length > MESSAGE_EXPAND_THRESHOLD ? (
+                          <button
+                            type="button"
+                            className="designer-chat-panel__expand"
+                            data-testid="designer-chat-panel-expand"
+                            aria-expanded={expandedMessages.has(message.id)}
+                            onClick={() => toggleMessageExpanded(message.id)}
+                          >
+                            {expandedMessages.has(message.id)
+                              ? t('designer.chat.collapseMessage')
+                              : t('designer.chat.expandMessage')}
+                          </button>
+                        ) : null}
                         {message.references ? <ReferenceChips items={message.references} /> : null}
                       </>
                     )}

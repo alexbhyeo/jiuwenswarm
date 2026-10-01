@@ -20,6 +20,28 @@ export function isNewDesignerBrief(text: string): boolean {
 
 const BOOTSTRAP_STORYBOARD_MAX_CHARS = 3600;
 
+/** One GFM table cell: escape pipes and flatten newlines so a value can never
+ * break out of its column or row. Mirrors ``_md_cell`` on the server. */
+function mdCell(value: unknown): string {
+  return String(value ?? '')
+    .replace(/\|/g, '\\|')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Render the sync'd shots as a GFM table — the same structured data the canvas
+ * uses. Mirrors ``_storyboard_table_markdown`` on the server. */
+function storyboardTable(shots: Array<Record<string, unknown>>): string {
+  const rows = shots.map((shot, index) => {
+    const no = mdCell(shot.shot_index ?? index + 1) || String(index + 1);
+    return `| ${no} | ${mdCell(shot.timeline)} | ${mdCell(shot.setting_id)} | ${mdCell(
+      shot.action ?? shot.character_action,
+    )} | ${mdCell(shot.camera)} |`;
+  });
+  if (rows.length === 0) return '';
+  return ['| 镜头 | 时间 | 场景 | 画面与动作 | 运镜 |', '| --- | --- | --- | --- | --- |', ...rows].join('\n');
+}
+
 /** Director's brief/storyboard LLM calls already ran inside the bootstrap RPC (brief →
  * storyboard → execution graph → validate, all server-side) before this ever returns — the
  * result just wasn't being shown. Surface it in chat instead of a generic placeholder, same
@@ -33,7 +55,9 @@ function buildBootstrapSummaryMessage(graph: {
   const castNames = characters
     .map((c) => String(c?.name ?? c?.id ?? '').trim())
     .filter((name) => name.length > 0);
-  const shots = Array.isArray(scriptAnalysis.shots) ? scriptAnalysis.shots : [];
+  const shots = (Array.isArray(scriptAnalysis.shots) ? scriptAnalysis.shots : []).filter(
+    (shot): shot is Record<string, unknown> => Boolean(shot && typeof shot === 'object'),
+  );
   let storyboardMd = String(metadata.approved_storyboard ?? '').trim();
   if (storyboardMd.length > BOOTSTRAP_STORYBOARD_MAX_CHARS) {
     storyboardMd = `${storyboardMd.slice(0, BOOTSTRAP_STORYBOARD_MAX_CHARS).trimEnd()}\n\n…（画布上可查看完整分镜）`;
@@ -44,7 +68,11 @@ function buildBootstrapSummaryMessage(graph: {
   if (castNames.length > 0) headerBits.push(`角色：${castNames.join('、')}`);
   if (shots.length > 0) headerBits.push(`共 ${shots.length} 个镜头`);
   if (headerBits.length > 0) lines.push(headerBits.join('，'));
-  if (storyboardMd) {
+  const table = storyboardTable(shots);
+  if (table) {
+    lines.push('');
+    lines.push(table);
+  } else if (storyboardMd) {
     lines.push('');
     lines.push(storyboardMd);
   }

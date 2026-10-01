@@ -88,6 +88,8 @@
       "updateError": "Could not update the workflow. Please try again later.",
       "bootstrapDone": "Your initial design workflow is ready.",
       "bootstrapError": "Failed to build the workflow. Please try again later.",
+      "expandMessage": "Expand",
+      "collapseMessage": "Collapse",
       "notImplemented": "Not implemented",
       "send": "Send",
       "attach": "Add reference media",
