@@ -1,6 +1,8 @@
 import { Loader2, Paperclip, SendHorizontal, X } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { chatDesignerGraph } from '../designerEntry';
 import { isDesignerPreviewGraph } from '../designerBootstrapGraph';
 import { useDesignerStore } from '../designerStore';
@@ -16,6 +18,21 @@ import {
   type DesignerStoredReference,
 } from '../designerReferences';
 import { DesignerAssetsPanel } from './DesignerAssetsPanel';
+
+/** Finds the "@token" (if any) the cursor is currently inside, so the
+ * composer can show a node-label autocomplete menu. Mirrors Director mode's
+ * ComposerCard @-detection (duplicated rather than shared — different
+ * feature, different mention target: node labels, not named assets). */
+function detectAtToken(value: string, cursor: number): { start: number; query: string } | null {
+  const upto = value.slice(0, cursor);
+  const at = upto.lastIndexOf('@');
+  if (at === -1) return null;
+  const before = upto[at - 1];
+  if (before !== undefined && !/\s/.test(before)) return null;
+  const token = upto.slice(at + 1);
+  if (/\s/.test(token)) return null;
+  return { start: at, query: token };
+}
 
 type SidebarTab = 'assistant' | 'assets';
 
@@ -99,6 +116,47 @@ export function DesignerChatPanel() {
   const [attachments, setAttachments] = useState<ComposerDraft[]>([]);
   const [attachError, setAttachError] = useState('');
   const [sending, setSending] = useState(false);
+  const [atMenu, setAtMenu] = useState<{ start: number; query: string; index: number } | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // @-mention candidates: every node's own label, newest-first (most likely
+  // to be what the user just made and wants to refer back to).
+  const nodeLabels = useMemo(() => {
+    const labels: string[] = [];
+    const seen = new Set<string>();
+    for (const node of [...(domainGraph?.nodes ?? [])].reverse()) {
+      const label = (node.label || '').trim();
+      if (label && !seen.has(label)) {
+        seen.add(label);
+        labels.push(label);
+      }
+    }
+    return labels;
+  }, [domainGraph]);
+  const atCandidates = useMemo(() => {
+    if (!atMenu) return [];
+    const query = atMenu.query.toLowerCase();
+    return nodeLabels.filter((label) => label.toLowerCase().includes(query)).slice(0, 8);
+  }, [atMenu, nodeLabels]);
+
+  const insertAtLabel = useCallback(
+    (label: string) => {
+      if (!atMenu) return;
+      const before = draft.slice(0, atMenu.start);
+      const after = draft.slice(atMenu.start + 1 + atMenu.query.length);
+      const next = `${before}@${label} ${after}`;
+      setDraft(next);
+      setAtMenu(null);
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        const caret = before.length + label.length + 2;
+        el.focus();
+        el.setSelectionRange(caret, caret);
+      });
+    },
+    [atMenu, draft],
+  );
 
   const chatBusy = bootstrapPhase === 'thinking' || bootstrapPhase === 'bootstrapping' || sending;
   const canSend = Boolean(draft.trim() || attachments.length > 0);
@@ -205,6 +263,7 @@ export function DesignerChatPanel() {
             graphId: existingGraph.graph_id,
             prompt: content,
             selectedNodeId: selectedNodeId || undefined,
+            references: converted.refs as unknown as Array<Record<string, unknown>>,
             thinkingText: t('designer.chat.updating'),
             errorText: t('designer.chat.updateError'),
           });
@@ -217,14 +276,45 @@ export function DesignerChatPanel() {
       });
   }, [attachments, chatBusy, domainGraph, draft, selectedNodeId, t]);
 
+  const onDraftChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>) => {
+    const value = event.target.value;
+    setDraft(value);
+    const token = detectAtToken(value, event.target.selectionStart ?? value.length);
+    setAtMenu(token ? { ...token, index: 0 } : null);
+  }, []);
+
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (atMenu && atCandidates.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setAtMenu((cur) => (cur ? { ...cur, index: (cur.index + 1) % atCandidates.length } : cur));
+          return;
+        }
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setAtMenu((cur) =>
+            cur ? { ...cur, index: (cur.index - 1 + atCandidates.length) % atCandidates.length } : cur,
+          );
+          return;
+        }
+        if (event.key === 'Enter' || event.key === 'Tab') {
+          event.preventDefault();
+          insertAtLabel(atCandidates[atMenu.index]);
+          return;
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          setAtMenu(null);
+          return;
+        }
+      }
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
         handleSend();
       }
     },
-    [handleSend],
+    [atCandidates, atMenu, handleSend, insertAtLabel],
   );
 
   return (
@@ -279,7 +369,9 @@ export function DesignerChatPanel() {
                       </span>
                     ) : (
                       <>
-                        {message.content}
+                        <div className="designer-chat-panel__markdown">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+                        </div>
                         {message.references ? <ReferenceChips items={message.references} /> : null}
                       </>
                     )}
@@ -330,15 +422,37 @@ export function DesignerChatPanel() {
               >
                 <Paperclip size={16} aria-hidden />
               </button>
-              <textarea
-                className="designer-chat-panel__input"
-                placeholder={t('designer.chat.inputPlaceholder')}
-                value={draft}
-                disabled={chatBusy}
-                data-testid="designer-chat-panel-input"
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={onKeyDown}
-              />
+              <div className="designer-chat-panel__input-wrap">
+                {atMenu && atCandidates.length > 0 ? (
+                  <ul className="designer-chat-panel__at-menu" data-testid="designer-chat-panel-at-menu">
+                    {atCandidates.map((label, index) => (
+                      <li key={label}>
+                        <button
+                          type="button"
+                          className={index === atMenu.index ? 'is-active' : ''}
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            insertAtLabel(label);
+                          }}
+                          data-testid="designer-chat-panel-at-option"
+                        >
+                          {label}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <textarea
+                  ref={textareaRef}
+                  className="designer-chat-panel__input"
+                  placeholder={t('designer.chat.inputPlaceholder')}
+                  value={draft}
+                  disabled={chatBusy}
+                  data-testid="designer-chat-panel-input"
+                  onChange={onDraftChange}
+                  onKeyDown={onKeyDown}
+                />
+              </div>
               <button
                 type="button"
                 className="designer-chat-panel__send"

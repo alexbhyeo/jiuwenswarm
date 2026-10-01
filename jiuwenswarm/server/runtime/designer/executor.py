@@ -459,6 +459,65 @@ class GraphExecutor:
         }
         return self._store.save_run(run)
 
+    def create_run_from_graph_output(
+        self,
+        graph: DesignerExecutionGraph,
+        *,
+        node_id: str,
+    ) -> DesignerExecutionRun:
+        """Rerun a single node on a graph that has never been Played.
+
+        Bootstrap (the Director) and chat refine both write straight to each
+        node's own ``output_ref`` — neither goes through the run/executor
+        system, so a graph fresh off bootstrap has real content but no run
+        record marking it "completed". ``create_rerun`` needs exactly that
+        record and ``_create_scoped_rerun`` only takes this path for ComfyUI
+        nodes, so a chat-triggered refine on an un-Played graph otherwise
+        fails with "no previous run to rerun from" even though every
+        upstream node the target needs is already sitting right there on the
+        graph. This treats the graph's own current output as the baseline
+        instead of a prior run's state, then resets just ``node_id``.
+        """
+        node_ids = {node["id"] for node in graph.get("nodes", [])}
+        if node_id not in node_ids:
+            raise KeyError(f"node not found: {node_id}")
+        states: dict[str, DesignerNodeState] = {}
+        for node in graph.get("nodes", []):
+            nid = str(node.get("id") or "")
+            ref = node.get("output_ref")
+            if _usable_ref(ref):
+                states[nid] = {
+                    "status": NODE_STATUS_COMPLETED,
+                    "output_ref": ref,
+                    "output_refs": [ref],
+                }
+            else:
+                states[nid] = {"status": NODE_STATUS_PENDING}
+        for pred in execution_predecessors(graph).get(node_id, []):
+            state = states.get(pred) or {}
+            if state.get("status") != NODE_STATUS_COMPLETED:
+                raise ValueError(f"upstream not ready: {pred}")
+        previous = states.get(node_id) or {}
+        states[node_id] = {
+            "status": NODE_STATUS_PENDING,
+            "output_ref": previous.get("output_ref") if _usable_ref(previous.get("output_ref")) else None,
+            "output_refs": [ref for ref in (previous.get("output_refs") or []) if _usable_ref(ref)],
+        }
+        now = utc_now_ms()
+        run: DesignerExecutionRun = {
+            "schema_version": "designer-execution-run.v1",
+            "run_id": new_run_id(),
+            "graph_id": graph["graph_id"],
+            "project_id": graph["project_id"],
+            "status": RUN_STATUS_DRAFT,
+            "node_states": states,
+            "current_node_ids": [],
+            "created_at": now,
+            "updated_at": now,
+            "metadata": {"single_node_rerun": True, "scope_node_ids": [node_id], "baselined_from": "graph_output"},
+        }
+        return self._store.save_run(run)
+
     async def start_run(
         self,
         run_id: str,

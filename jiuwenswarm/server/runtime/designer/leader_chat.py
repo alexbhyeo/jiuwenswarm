@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-from copy import deepcopy
 from typing import Any, Callable
 
 from jiuwenswarm.common.schema.designer_graph import (
@@ -18,22 +17,10 @@ from jiuwenswarm.common.schema.designer_graph import (
     NODE_TYPE_VIDEO,
     DesignerExecutionGraph,
     DesignerGraphNode,
-    DesignerGraphValidationError,
     apply_graph_patch,
     node_pipeline,
-    node_shot_index,
     utc_now_ms,
 )
-
-from jiuwenswarm.server.runtime.designer.chat_document_sync import (
-    ChatDocument,
-    ChatDocumentConflict,
-    graph_content_changed,
-    prepare_document_update,
-    validate_shot_topology,
-)
-
-from jiuwenswarm.server.runtime.designer.chat_document_plan import plan_document_edits
 
 logger = logging.getLogger(__name__)
 
@@ -64,73 +51,53 @@ user_canvas_edits is the user's canvas log: add, remove, connect, disconnect, re
 Treat that log as fact. Do not recreate a removed node, restore a disconnected edge,
 or undo a replaced output. Do not connect an added node unless the user asked.
 connect and disconnect name node_id and peer_id. replace names the node whose output the user changed.
+recent_conversation (if present) is the last few chat turns — use it for context (e.g. a short
+follow-up like "make it brighter" refers back to whatever node you two were just discussing).
+The user's message may reference an existing node by "@Label" (the node's own label, e.g.
+"@Character 1"). When it does, that node's current output image has been attached to this request
+so you can see it — keep that same subject/style/identity when you create or refine a node in
+response, and mention the "@Label" you used for continuity in your "summary" the same way.
+Any attached images at the end of this request (from an "@Label" mention or a file the user
+uploaded) are the visual ground truth — describe new/updated node prompts in terms of what you see
+in them rather than restating a generic description.
 
 Schema:
 {
   "intent": "edit_graph" | "refine_node" | "answer",
   "summary": "short user-facing Chinese or English summary",
-  "thinking": "brief rationale: affected IDs, removed reference targets, and concrete details that must stay unchanged",
+  "thinking": "one-line peek of what you are doing",
   "patch": {
-    "description": "updated creative request, only when changed",
-    "upsert_nodes": [{"id": "affected_node_id", "config": {"prompt": "complete updated generation prompt"}}],
+    "upsert_nodes": [],
     "upsert_edges": [],
     "remove_node_ids": [],
     "remove_edge_ids": []
   },
-  "remove_shot_ids": [],
-  "prompt_updates": [],
-  "edit_documents": false,
+  "prompt_updates": [{"node_id": "", "prompt": ""}],
+  "identity_updates": [{"node_id": "", "character_id": "", "description": ""}],
   "run_node_ids": []
 }
 
 Rules:
 - edit_graph: change topology. Leave run_node_ids empty unless the user asked to generate/run.
-- refine_node: edit the existing node. Leave run_node_ids empty unless the user explicitly asks to generate/run.
-- answer: return intent, summary and thinking only. Omit patch and prompt_updates entirely; edit_documents=false. A run-only request may list run_node_ids.
-- Return ONE upsert_nodes entry per affected node, containing all its config changes. Leave prompt_updates empty. For existing nodes, config fields merge by ID. Include all required generation fields specified below even when some values stay unchanged; other unchanged fields may be omitted.
-- Input and output use the SAME config paths. The effective generation prompt is config.prompt;
-  update it there. The server also updates the execution prompt from that value. pipeline and
-  review_fields_if_action_changes describe the input; do not copy them into the output node.
-- Preserve existing node IDs and unrelated content. Renumber shot_index consecutively after inserting/deleting a shot, including its frame/clip; update each affected timeline, action, camera and prompt.
-- Set edit_documents=true for content edits, including requests that only change prose. A separate document editor will receive the original documents and the applied graph changes. Do not return text replacements in this plan.
-- Resolve the requested object before editing. Singular referents and background collections are distinct: e.g. changing one bicycle does not change other parked bicycles of the same color. Do not globally substitute color/material words in a sentence or record. In thinking, identify specific similar objects/details you will preserve.
-- For deleting an ENTIRE SHOT, put an existing clip/frame ID in remove_shot_ids. Use the
-  supplied shots inventory to resolve the target. The server removes ALL frame/clip nodes
-  belonging to that original shot and their edges. Do not rely on remove_node_ids or your
-  summary to express a whole-shot deletion. Use patch.remove_node_ids for explicit individual
-  node deletions and requested exclusive scene cleanup; never delete shared dependencies.
-  Leave remove_shot_ids empty when deleting only a scene/image/video node, keeping its shot.
-- When deleting a shot, REMOVE each continuity claim that refers to it. Do not replace its number with the previous or next surviving number. A surviving shot does not inherit the deleted shot's events or props. Renumber references only if their original target survives.
-- Keep description and brief/storyboard prompts consistent with the edited request. Do not create/remove brief/storyboard nodes unless explicitly requested; never edit output references or artifact paths.
-- Update generation prompts of affected downstream nodes when changing a character, scene or explicit dependency.
-- Generation uses the detailed config as well as prompt. Keep camera, cast_actions, blocking, scene_specs, start_state, end_state, pose_holds, spatial_lock, costume_lock, continuity_lock, relationship_lock and director_task consistent with the edit, preserving unrelated details. Nested records replace the entire field; include unchanged members.
-- Camera descriptions may name the edited subject or prop. Update those details in config.camera while preserving framing, angle, focus target and camera motion unless the user asks to change them.
-- Whenever shot_action changes, explicitly include every field in that node's review_fields_if_action_changes in upsert_nodes.config. Return each complete field with updated action/prop details, preserving unrelated members. These fields feed generation directly; do not leave hidden old action/prop details. Whenever a scene prompt or scene_specs changes, explicitly include both its complete scene_specs and updated config.prompt. For clips too, return config.prompt when it is listed.
-- Costume/identity settings merge by field like other config. Update costume_lock when the request changes clothing or accessories; otherwise omit it to keep the original value. An action or prop edit alone does not require restating unchanged clothing.
-- positioning_lock, action_lock, occupancy.cast_actions, identity_refs mirrors and scene architecture prompts are derived by the server. Do not author these copies. Only return pose_holds for custom holds; Opening hold / Opening facing entries are rebuilt from start_state.
-- Before finishing each node entry, check its review_fields_if_action_changes list against the config keys you returned. If you changed shot_action, every listed key MUST be present with its complete value, including spatial_lock. Review nested landmarks, poses and cameras for the requested object as well as the main action.
-- Pure layout/label edits use edit_documents=false. Never generate media just to edit text.
+- refine_node: update that node's config.prompt (and brief/storyboard text if asked). Put the target in run_node_ids so it regenerates.
+- A character/person node carries its real identity (what it looks like — color, costume,
+  build, etc.) in config.costume_lock and the story's cast list, NOT in config.prompt — a
+  character or appearance change (e.g. "change @Character 1's color to white") MUST also be
+  given in identity_updates (node_id, that node's config.character_id, and a short plain-fact
+  description of the NEW appearance only — no wrapper phrasing, just the visual facts, same
+  language as the existing description) or the regenerated image will keep the OLD appearance
+  no matter what prompt_updates says.
+- answer: no patch, just summary.
+- When the user is clearly building up a film step by step (character/scene design → shot list →
+  keyframes → clips → compose) and just confirmed one stage, your summary should name the natural
+  next stage (e.g. after a character design lands, suggest the scene or the shot list) rather than
+  just confirming what was done — mirror a film director walking the user through the next step,
+  not just a patch-applier.
 """
 
 
-_ACTION_DEPENDENT_FIELDS = (
-    "camera", "cast_actions", "blocking", "start_state", "end_state", "scene_specs",
-    "spatial_lock", "continuity_lock", "director_task",
-)
-
-_LEADER_CONFIG_FIELDS = {
-    "prompt", "shot_index", "shot_action", "camera", "timeline", "shot_title",
-    "character_id", "character_ids", "setting_id", "on_screen", "offscreen",
-    "cast_actions", "scene_specs", "speech_line", "continuity_lock",
-    "blocking", "start_state", "end_state", "pose_holds", "spatial_lock",
-    "costume_lock", "relationship_lock", "director_task",
-    "inputs", "character_node_ids", "scene_node_id", "identity_refs",
-    "continuity_clip_node_id", "previous_clip_node_id", "continuity_frame_node_id",
-}
-
-
 _DONT_RUN = re.compile(
-    r"(先别|(?:不要|别|不用|无需|暂不|不需要|先不)\s*(?:重新)?(?:生成|运行|重跑|跑)|without (?:running|generating)|don'?t (?:run|generate)|do not (?:run|generate))",
+    r"(先别|不要跑|不要生成|别生成|不用跑|without running|don'?t run|do not run)",
     re.I,
 )
 
@@ -182,6 +149,56 @@ def _match_node(graph: DesignerExecutionGraph, message: str) -> DesignerGraphNod
     return ranked[0][1] if ranked else None
 
 
+_AT_LABEL = re.compile(r"@([^\s@][^\n]*?)(?=(?:\s@|[,，。.!！?？;；]|\s{2}|$))")
+
+_MAX_LABEL_REFERENCE_IMAGES = 3
+
+
+def resolve_label_references(graph: DesignerExecutionGraph, message: str) -> list[str]:
+    """Resolve "@Label" mentions in ``message`` to that node's output image.
+
+    Longest-label-first so e.g. "@Character 1" isn't shadowed by a shorter
+    "@Character" match. Only image-kind outputs are usable as a vision
+    reference; a mention of a text/table/video/audio node, or a node with no
+    output yet, is silently skipped rather than erroring the whole turn.
+    """
+    text = str(message or "")
+    if "@" not in text:
+        return []
+    by_label: dict[str, DesignerGraphNode] = {}
+    for node in graph.get("nodes") or []:
+        label = str(node.get("label") or "").strip()
+        if label:
+            by_label[label] = node
+    if not by_label:
+        return []
+    ordered_labels = sorted(by_label, key=len, reverse=True)
+    sources: list[str] = []
+    seen_ids: set[str] = set()
+    for match in _AT_LABEL.finditer(text):
+        candidate = match.group(1).strip()
+        label = next((lbl for lbl in ordered_labels if candidate.startswith(lbl)), None)
+        if not label:
+            continue
+        node = by_label[label]
+        node_id = str(node.get("id") or label)
+        if node_id in seen_ids:
+            continue
+        output_ref = node.get("output_ref")
+        if not isinstance(output_ref, dict):
+            continue
+        if str(output_ref.get("kind") or "") != NODE_TYPE_IMAGE:
+            continue
+        uri = str(output_ref.get("uri") or "").strip()
+        if not uri:
+            continue
+        seen_ids.add(node_id)
+        sources.append(uri)
+        if len(sources) >= _MAX_LABEL_REFERENCE_IMAGES:
+            break
+    return sources
+
+
 def _next_label(graph: DesignerExecutionGraph, node_type: str) -> str:
     count = sum(1 for node in graph.get("nodes") or [] if str(node.get("type") or "") == node_type)
     title = node_type[:1].upper() + node_type[1:]
@@ -222,83 +239,132 @@ def _compose_or_sink_id(graph: DesignerExecutionGraph) -> str | None:
 
 
 
-def _action_review_fields(config: dict[str, Any]) -> list[str]:
-    fields = [key for key in _ACTION_DEPENDENT_FIELDS if config.get(key)]
-    if config.get("prompt") or (config.get("generate") or {}).get("prompt"):
-        fields.append("prompt")
-    return fields
-
-
-def _leader_node_context(node: DesignerGraphNode) -> dict[str, Any]:
-    """Expose the execution prompt at the same config path accepted by chat edits."""
-    config = node.get("config") or {}
-    editable_config = {key: value for key, value in config.items() if key in _LEADER_CONFIG_FIELDS}
-    prompt = (config.get("generate") or {}).get("prompt") or config.get("prompt")
-    if prompt:
-        editable_config["prompt"] = prompt
-    return {
-        "id": node["id"],
-        "type": node["type"],
-        "label": node.get("label"),
-        "pipeline": node_pipeline(node),
-        "review_fields_if_action_changes": _action_review_fields(config),
-        "config": editable_config,
-    }
-
-
 def _merge_prompt_updates(graph: DesignerExecutionGraph, plan: dict[str, Any]) -> dict[str, Any]:
-    patch = deepcopy(plan.get("patch") or {})
-    existing = {node["id"]: node for node in graph.get("nodes", [])}
-    upserts = list(patch.get("upsert_nodes") or [])
-    for update in plan.get("prompt_updates") or []:
-        node_id = update.get("node_id")
-        if node_id not in existing and not any(n.get("id") == node_id for n in upserts):
-            raise DesignerGraphValidationError(f"Unknown prompt update node: {node_id}")
-        config = {key: update[key] for key in ("prompt", "shot_index", "shot_action", "camera", "timeline") if key in update}
-        upserts.append({"id": node_id, "config": config})
-    merged: dict[str, Any] = {}
-    supplied: dict[str, set[str]] = {}
-    for update in upserts:
-        node_id = update["id"]
-        supplied.setdefault(node_id, set()).update(update.get("config") or {})
-        old = merged.get(node_id) or existing.get(node_id) or {}
-        node = {**deepcopy(old), **update}
-        config = {**deepcopy(old.get("config") or {}), **(update.get("config") or {})}
-        if "generate" in (update.get("config") or {}):
-            config["generate"] = {**(old.get("config", {}).get("generate") or {}), **config["generate"]}
-        if "prompt" in (update.get("config") or {}):
-            config["generate"] = {**(config.get("generate") or {}), "prompt": config["prompt"], "prompt_origin": "user"}
-        if node.get("output_ref") != old.get("output_ref"):
-            raise DesignerGraphValidationError("Chat plans cannot change artifact references")
-        node["config"] = config
-        merged[node_id] = node
-    for node_id, node in merged.items():
-        old_cfg = existing.get(node_id, {}).get("config") or {}
-        cfg = node["config"]
-        required = set()
-        if cfg.get("shot_action") != old_cfg.get("shot_action"):
-            required.update(_action_review_fields(old_cfg))
-        if node_pipeline(node) == "scene" and any(
-            cfg.get(key) != old_cfg.get(key) for key in ("prompt", "scene_specs")
-        ):
-            required.update(key for key in ("scene_specs", "prompt") if key in _action_review_fields(old_cfg))
-        if missing := required - supplied[node_id]:
-            raise DesignerGraphValidationError(f"Updated node {node_id} must include its generation details: {', '.join(sorted(missing))}")
-    if merged:
-        patch["upsert_nodes"] = list(merged.values())
+    patch = dict(plan.get("patch") or {})
+    updates = plan.get("prompt_updates") or []
+    if not isinstance(updates, list) or not updates:
+        return patch
+    upsert = list(patch.get("upsert_nodes") or [])
+    by_id = {str(item.get("id") or ""): dict(item) for item in upsert if isinstance(item, dict)}
+    for item in updates:
+        if not isinstance(item, dict):
+            continue
+        node_id = str(item.get("node_id") or "").strip()
+        prompt = str(item.get("prompt") or "").strip()
+        if not node_id or not prompt:
+            continue
+        node = by_id.get(node_id) or (_node_by_id(graph, node_id) and dict(_node_by_id(graph, node_id) or {}))
+        if not node:
+            continue
+        cfg = dict(node.get("config") or {})
+        cfg["prompt"] = prompt
+        node["config"] = cfg
+        by_id[node_id] = node
+    if by_id:
+        patch["upsert_nodes"] = list(by_id.values())
     return patch
 
 
-def _shot_removal_patch(graph: DesignerExecutionGraph, patch: dict[str, Any], shot_ids: list[str]) -> dict[str, Any]:
-    """Expand explicit whole-shot targets using the original stable identities."""
-    shots = {node["id"]: node_shot_index(node) for node in graph["nodes"]
-             if node_pipeline(node) in {"frame", "clip"}}
-    unknown = set(shot_ids) - shots.keys()
-    if unknown:
-        raise DesignerGraphValidationError(f"Shot deletion requires current clip/frame IDs: {sorted(unknown)}")
-    indices = {shots[node_id] for node_id in shot_ids}
-    removed = {node_id for node_id, index in shots.items() if index in indices}
-    return {**patch, "remove_node_ids": sorted(set(patch.get("remove_node_ids", [])) | removed)}
+_IDENTITY_OVERRIDE_MARKER = "USER-REQUESTED IDENTITY CHANGE (authoritative, not a stale field):"
+
+
+def _apply_identity_updates(
+    graph: DesignerExecutionGraph,
+    next_graph: DesignerExecutionGraph,
+    plan: dict[str, Any],
+) -> DesignerExecutionGraph:
+    """A character node's real look lives in config.costume_lock + the cast list in
+    graph.metadata.script_analysis, not config.prompt — leaf agents read those, so an
+    appearance change has to land there too or regeneration keeps the old look."""
+    updates = plan.get("identity_updates") or []
+    if not isinstance(updates, list) or not updates:
+        return next_graph
+    nodes_by_id = {str(n.get("id") or ""): dict(n) for n in next_graph.get("nodes") or []}
+    meta = dict(next_graph.get("metadata") or {})
+    script_analysis = dict(meta.get("script_analysis") or {})
+    characters = [dict(c) for c in (script_analysis.get("characters") or []) if isinstance(c, dict)]
+    chars_by_id = {str(c.get("id") or ""): c for c in characters if c.get("id")}
+    nodes_changed = False
+    meta_changed = False
+    for item in updates:
+        if not isinstance(item, dict):
+            continue
+        node_id = str(item.get("node_id") or "").strip()
+        description = str(item.get("description") or "").strip()
+        node = nodes_by_id.get(node_id)
+        if not node or not description:
+            continue
+        cfg = dict(node.get("config") or {})
+        name = str(cfg.get("character_name") or item.get("character_id") or "").strip()
+        costume_lock = f"{name}: {description}" if name else description
+        cfg["costume_lock"] = costume_lock
+        director_task = str(cfg.get("director_task") or "").strip()
+        if director_task and _IDENTITY_OVERRIDE_MARKER in director_task:
+            director_task = director_task.split(_IDENTITY_OVERRIDE_MARKER, 1)[0].rstrip()
+        if director_task:
+            cfg["director_task"] = (
+                f"{director_task}\n\n{_IDENTITY_OVERRIDE_MARKER} {costume_lock}\n"
+                "This is the user's deliberate, just-given instruction for THIS character, "
+                "given through chat moments ago. It outranks anything you read via read_upstream "
+                "(brief, storyboard, PRODUCTION LOCK BIBLE, other clips' costume_lock) or the "
+                "character's own name/label that still says otherwise — those have not been "
+                "regenerated yet and describe the OLD appearance. Use the appearance stated here, "
+                "not the old one, even though other sources you read still disagree with it."
+            )
+        node["config"] = cfg
+        nodes_by_id[node_id] = node
+        nodes_changed = True
+        # Prefer the node's own config.character_id (ground truth) over whatever id the
+        # LLM guessed in identity_updates — the LLM sometimes fabricates a plausible-looking
+        # id ("character_1") that doesn't match the story's real id ("char_1").
+        char_id = str(cfg.get("character_id") or item.get("character_id") or "").strip()
+        character = chars_by_id.get(char_id)
+        if character is not None:
+            character["description"] = description
+            character["costume_lock"] = costume_lock
+            attrs = character.get("identity_attrs")
+            if isinstance(attrs, dict) and "wardrobe" in attrs:
+                attrs = dict(attrs)
+                attrs["wardrobe"] = costume_lock
+                character["identity_attrs"] = attrs
+            meta_changed = True
+        if char_id:
+            # Every other node featuring this same character (other scenes/clips) carries
+            # its own copy of costume_lock too — leave those stale and a regen there (or
+            # even this one, via read_upstream) can see a conflict and side with the old
+            # majority text instead of the just-requested change.
+            for other_id, other in nodes_by_id.items():
+                if other_id == node_id:
+                    continue
+                other_cfg = other.get("config")
+                if not isinstance(other_cfg, dict):
+                    continue
+                other_char_id = str(other_cfg.get("character_id") or "").strip()
+                other_char_ids = [str(x) for x in (other_cfg.get("character_ids") or [])]
+                if char_id != other_char_id and char_id not in other_char_ids:
+                    continue
+                other_cfg = dict(other_cfg)
+                other_cfg["costume_lock"] = costume_lock
+                other["config"] = other_cfg
+                nodes_by_id[other_id] = other
+    if not nodes_changed and not meta_changed:
+        return next_graph
+    patched = dict(next_graph)
+    if nodes_changed:
+        patched["nodes"] = list(nodes_by_id.values())
+    if meta_changed:
+        script_analysis["characters"] = characters
+        if str(script_analysis.get("production_bible") or "").strip():
+            from jiuwenswarm.server.runtime.designer.pipeline.production_bible import (
+                build_production_bible,
+            )
+
+            script_analysis["production_bible"] = build_production_bible(
+                script_analysis, user_prompt=str(script_analysis.get("summary") or "")
+            )
+        meta["script_analysis"] = script_analysis
+        patched["metadata"] = meta
+    return patched
 
 
 def apply_leader_plan(
@@ -308,12 +374,14 @@ def apply_leader_plan(
     intent = str(plan.get("intent") or "answer").strip() or "answer"
     summary = str(plan.get("summary") or "").strip()
     patch = _merge_prompt_updates(graph, plan)
-    if plan.get("remove_shot_ids"):
-        patch = _shot_removal_patch(graph, patch, plan["remove_shot_ids"])
-    has_patch = bool(patch)
+    has_patch = any(patch.get(key) for key in ("upsert_nodes", "upsert_edges", "remove_node_ids", "remove_edge_ids"))
     next_graph = apply_graph_patch(graph, patch) if has_patch else graph
+    next_graph = _apply_identity_updates(graph, next_graph, plan)
     raw_run_ids = plan.get("run_node_ids") or []
     run_ids = [str(item).strip() for item in raw_run_ids if str(item).strip()]
+    if intent != "refine_node":
+        # Topology edits only run when the plan explicitly listed ids.
+        run_ids = run_ids
     known = {str(node.get("id") or "") for node in next_graph.get("nodes") or []}
     run_ids = [item for item in run_ids if item in known]
     if not summary:
@@ -327,34 +395,22 @@ def apply_leader_plan(
 
 
 def _sanitize_plan(plan: dict[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(plan, dict) or plan.get("intent") not in {"edit_graph", "refine_node", "answer"}:
-        raise DesignerGraphValidationError("Leader returned an invalid editing plan; please retry")
-    for key, kind in (("patch", dict), ("prompt_updates", list), ("run_node_ids", list), ("edit_documents", bool)):
-        if key in plan and not isinstance(plan[key], kind):
-            raise DesignerGraphValidationError(f"Leader returned invalid {key}")
-    shot_ids = plan.get("remove_shot_ids", [])
-    if not isinstance(shot_ids, list) or any(not isinstance(item, str) or not item.strip() for item in shot_ids):
-        raise DesignerGraphValidationError("remove_shot_ids must be an array of current clip/frame IDs")
+    if not isinstance(plan, dict):
+        return {"intent": "answer", "summary": "Could not understand that request.", "patch": {}, "run_node_ids": []}
     intent = str(plan.get("intent") or "answer").strip()
     if intent not in {"edit_graph", "refine_node", "answer"}:
         intent = "answer"
-    patch = {
-        key: value for key, value in plan.get("patch", {}).items()
-        if key not in {"upsert_nodes", "upsert_edges", "remove_node_ids", "remove_edge_ids"} or value != []
-    }
-    # Some models fill optional schema slots with empty values even for an answer.
-    if intent == "answer" and patch.get("description") == "":
-        patch.pop("description")
+    patch = plan.get("patch") if isinstance(plan.get("patch"), dict) else {}
     run_ids = plan.get("run_node_ids") if isinstance(plan.get("run_node_ids"), list) else []
     prompt_updates = plan.get("prompt_updates") if isinstance(plan.get("prompt_updates"), list) else []
+    identity_updates = plan.get("identity_updates") if isinstance(plan.get("identity_updates"), list) else []
     return {
         "intent": intent,
         "summary": str(plan.get("summary") or "").strip(),
         "thinking": str(plan.get("thinking") or "").strip(),
         "patch": patch,
-        "remove_shot_ids": shot_ids,
         "prompt_updates": prompt_updates,
-        "edit_documents": plan.get("edit_documents", False),
+        "identity_updates": identity_updates,
         "run_node_ids": [str(item).strip() for item in run_ids if str(item).strip()],
     }
 
@@ -364,7 +420,8 @@ async def _llm_leader_plan(
     message: str,
     *,
     selected_node_id: str = "",
-    documents: dict[str, ChatDocument],
+    history: list[dict[str, str]] | None = None,
+    images: list[str] | None = None,
 ) -> dict[str, Any]:
     from jiuwenswarm.server.runtime.designer.model_tools import (
         DesignerLlmError,
@@ -375,30 +432,40 @@ async def _llm_leader_plan(
     from jiuwenswarm.server.runtime.designer.script_analysis import _extract_json_object
 
     meta = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
-    snapshot = {
+    snapshot: dict[str, Any] = {
         "selected_node_id": selected_node_id,
         "user_canvas_edits": list(meta.get("user_canvas_edits") or [])[-20:],
-        "description": graph.get("description", ""),
-        "documents": [{"node_id": doc.node_id, "pipeline": doc.pipeline, "text": doc.text} for doc in documents.values()],
-        "shots": [
-            {"index": index, "node_ids": [node["id"] for node in graph["nodes"]
-                                        if node_pipeline(node) in {"frame", "clip"} and node_shot_index(node) == index]}
-            for index in sorted({node_shot_index(node) for node in graph["nodes"]
-                                 if node_pipeline(node) in {"frame", "clip"}})
+        "nodes": [
+            {
+                "id": node.get("id"),
+                "type": node.get("type"),
+                "label": node.get("label"),
+                "pipeline": node_pipeline(node),
+                "prompt": str((node.get("config") or {}).get("prompt") or "")[:240],
+            }
+            for node in graph.get("nodes") or []
         ],
-        "nodes": [_leader_node_context(node) for node in graph["nodes"]],
         "edges": [
             {"id": edge.get("id"), "source": edge.get("source"), "target": edge.get("target")}
             for edge in graph.get("edges") or []
         ],
         "user": message,
     }
+    if history:
+        # Last few turns only — this is context for a short follow-up, not a
+        # transcript; keeps the snapshot small and avoids re-litigating old asks.
+        snapshot["recent_conversation"] = [
+            {"role": str(item.get("role") or "user"), "content": str(item.get("content") or "")[:600]}
+            for item in history[-8:]
+            if str(item.get("content") or "").strip()
+        ]
     try:
         result = await call_model_tool(
             prompt=json.dumps(snapshot, ensure_ascii=False),
             system=_LEADER_SYSTEM,
             optimize_for="quality",
             max_tokens=16384,
+            images=images or None,
         )
         text = model_text_or_raise(result)
     except DesignerLlmError:
@@ -423,49 +490,50 @@ async def run_leader_chat(
     graph: DesignerExecutionGraph,
     message: str,
     *,
-    documents: dict[str, ChatDocument],
     selected_node_id: str = "",
     run_new_nodes: bool = False,
     progress: ProgressFn | None = None,
-    pending_documents: bool = False,
+    history: list[dict[str, str]] | None = None,
+    attached_images: list[str] | None = None,
 ) -> dict[str, Any]:
     text = str(message or "").strip()
-    _emit(progress, ACTIVITY_KIND_THINKING, "reading the canvas and current documents")
-    plan = await _llm_leader_plan(graph, text, selected_node_id=selected_node_id, documents=documents)
-    _emit(progress, ACTIVITY_KIND_THINKING, plan.get("thinking") or "preparing workflow edits")
-    if not message_asks_to_run(text, run_new_nodes=run_new_nodes):
-        plan["run_node_ids"] = []
-    if plan.get("intent") == "answer" and any(plan.get(key) for key in ("patch", "remove_shot_ids", "prompt_updates", "edit_documents")):
-        raise DesignerGraphValidationError("An answer cannot also modify the workflow")
-
-    patch = plan.get("patch") or {}
-    if pending_documents and (
-        plan["edit_documents"] or plan["prompt_updates"] or plan.get("remove_shot_ids")
-        or "description" in patch
-        or any(patch.get(key) for key in ("remove_node_ids", "remove_edge_ids", "upsert_edges"))
-        or any(set(node) - {"id", "label", "layout"} for node in patch.get("upsert_nodes", []))
+    _emit(progress, ACTIVITY_KIND_THINKING, "reading the canvas and your request")
+    # "@Label" mentions (an existing node's own label) resolve to that node's
+    # output image so the model sees it, same spirit as a file the user
+    # attached directly — both just become vision references for this turn.
+    label_images = resolve_label_references(graph, text)
+    images = [*label_images, *(attached_images or [])][:_MAX_LABEL_REFERENCE_IMAGES]
+    plan = await _llm_leader_plan(
+        graph, text, selected_node_id=selected_node_id, history=history, images=images or None
+    )
+    thinking = str(plan.get("thinking") or "applying graph edits")
+    _emit(progress, ACTIVITY_KIND_THINKING, thinking)
+    if plan.get("intent") == "edit_graph" and not message_asks_to_run(
+        text, run_new_nodes=run_new_nodes
     ):
-        raise ChatDocumentConflict("大纲或分镜有待选择版本，请先保留原版或采用新版，再重试编辑。")
-    next_graph, run_ids, summary = apply_leader_plan(deepcopy(graph), plan)
-    text_edits = []
-    if plan["edit_documents"] or graph_content_changed(graph, next_graph):
-        validate_shot_topology(next_graph)
-        remaining_ids = {node["id"] for node in next_graph["nodes"]}
-        remaining_documents = {
-            key: doc for key, doc in documents.items() if key in remaining_ids and doc.text
-        }
-        if remaining_documents:
-            _emit(progress, ACTIVITY_KIND_STAGE, "synchronizing the complete brief and storyboard")
-            next_graph, text_edits = await plan_document_edits(graph, next_graph, remaining_documents, text)
-    next_graph, texts, changed = prepare_document_update(graph, next_graph, documents, text_edits)
-    if changed:
-        _emit(progress, ACTIVITY_KIND_TOOL_CALL, "validated workflow edits; preparing to save", tool="designer_graph_patch")
-    return {
-        "intent": plan["intent"],
+        plan["run_node_ids"] = []
+    if plan.get("intent") == "refine_node" and not plan.get("run_node_ids") and selected_node_id:
+        plan["run_node_ids"] = [selected_node_id]
+    if plan.get("intent") == "edit_graph" and not message_asks_to_run(
+        text, run_new_nodes=run_new_nodes
+    ):
+        plan["run_node_ids"] = []
+
+    _emit(progress, ACTIVITY_KIND_TOOL_CALL, "designer_graph_patch", tool="designer_graph_patch")
+    next_graph, run_ids, summary = apply_leader_plan(graph, plan)
+    changed = next_graph is not graph and next_graph.get("updated_at") != graph.get("updated_at")
+    if not changed:
+        # apply_graph_patch always writes updated_at; compare node/edge identity.
+        changed = (next_graph.get("nodes") != graph.get("nodes")) or (
+            next_graph.get("edges") != graph.get("edges")
+        )
+    result = {
+        "intent": plan.get("intent"),
         "summary": summary,
         "graph": next_graph,
-        "texts": texts,
         "run_node_ids": run_ids,
-        "changed": changed,
+        "changed": changed or bool(plan.get("prompt_updates")) or bool(plan.get("identity_updates")),
         "updated_at": utc_now_ms(),
     }
+    _emit(progress, ACTIVITY_KIND_STAGE, summary or "done", tool="")
+    return result
