@@ -1932,7 +1932,7 @@
 .chat-picker-panel__tabs>span,
 .chat-picker-panel__tabs>button {
   position: relative;
-  padding: 0 2px 8px;
+  padding: 0 0 8px;
   white-space: nowrap;
 }
 
