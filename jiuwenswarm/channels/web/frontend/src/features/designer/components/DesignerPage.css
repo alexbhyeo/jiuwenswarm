@@ -856,6 +856,24 @@
   text-decoration: underline;
 }
 
+.designer-chat-panel__media {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.designer-chat-panel__media img,
+.designer-chat-panel__media video {
+  display: block;
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--color-border-default);
+  background: var(--color-surface-sunken, rgba(0, 0, 0, 0.06));
+}
+
 .designer-chat-panel__thinking {
   display: inline-flex;
   align-items: center;

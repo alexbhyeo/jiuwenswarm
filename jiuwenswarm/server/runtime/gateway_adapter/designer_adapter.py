@@ -342,6 +342,7 @@ def _design_workspace_messages(session_id: str) -> list[dict[str, Any]]:
         content = str(record.get("content") or "")
         if not content and event_type != "design.graph_updated":
             continue
+        media = _chat_media_from_record(record.get("media"))
         messages.append(
             {
                 "id": str(record.get("id") or uuid.uuid4()),
@@ -356,9 +357,37 @@ def _design_workspace_messages(session_id: str) -> list[dict[str, Any]]:
                     if isinstance(record.get("references"), list)
                     else {}
                 ),
+                **({"media": media} if media else {}),
             }
         )
     return messages
+
+
+def _chat_media_from_record(raw: Any) -> list[dict[str, str]]:
+    """Rebuild a reply's inline media from what was persisted with the history
+    record (snake_case on disk, camelCase on the wire)."""
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        node_id = str(item.get("node_id") or "").strip()
+        uri = str(item.get("uri") or "").strip()
+        if not node_id or not uri:
+            continue
+        label = str(item.get("label") or "").strip()
+        out.append(
+            {
+                "nodeId": node_id,
+                "uri": uri,
+                "kind": str(item.get("kind") or "image"),
+                **({"label": label} if label else {}),
+            }
+        )
+        if len(out) >= _CHAT_MEDIA_MAX_ITEMS:
+            break
+    return out
 
 
 def _get_design_workspace(
@@ -451,13 +480,13 @@ async def _create_design_workspace_once(
     try:
         Path(project_dir).mkdir(parents=True, exist_ok=False)
         try:
-            project, _ = project_store.create_project_checked(
+            project, _ = project_store.create_or_restore_project(
                 title,
                 project_dir,
                 DESIGN_WORK_MODE,
             )
         except project_store.ProjectNameConflict:
-            project, _ = project_store.create_project_checked(
+            project, _ = project_store.create_or_restore_project(
                 f"{title}-{short_id}",
                 project_dir,
                 DESIGN_WORK_MODE,
@@ -924,7 +953,7 @@ def _bootstrap_graph(
             except OSError as exc:
                 return None, f"failed to create project directory: {exc}", "INTERNAL_ERROR"
         try:
-            project, restored = project_store.create_project_checked(
+            project, restored = project_store.create_or_restore_project(
                 name,
                 project_dir,
                 work_mode,
@@ -1138,12 +1167,6 @@ def _start_run(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | Non
             except KeyError:
                 return None, "node not found", "NOT_FOUND"
             run_id = run["run_id"]
-        elif (existing.get("metadata") or {}).get("target_node_id"):
-            # The workflow Continue action explicitly leaves single-node scope.
-            if _executor.has_active_tasks(existing["graph_id"]):
-                return None, "任务正在运行或停止，请稍后继续工作流", "BAD_REQUEST"
-            existing["metadata"].pop("target_node_id")
-            _store.save_run(existing)
     elif graph is not None and node_id:
         source = _store.get_latest_run_for_graph(graph["graph_id"])
         # A ComfyUI node runs on its own, so it needs no earlier Play.
@@ -1158,7 +1181,15 @@ def _start_run(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | Non
             try:
                 run = _executor.create_run_from_graph_output(graph, node_id=node_id)
             except ValueError:
-                return None, "no previous run to rerun from", "BAD_REQUEST"
+                # Nothing on this graph carries an output_ref yet (bootstrap
+                # writes the brief/storyboard text to graph metadata), so no
+                # upstream looks "completed" and the single-node baseline above
+                # cannot be built. Drive the node's ancestor chain instead of
+                # refusing: the requested node then really generates.
+                try:
+                    run = _executor.create_scoped_run_for_node(graph, node_id=node_id)
+                except (ValueError, KeyError):
+                    return None, "no previous run to rerun from", "BAD_REQUEST"
             except KeyError:
                 return None, "node not found", "NOT_FOUND"
             run_id = run["run_id"]
@@ -1292,13 +1323,44 @@ def _chat_attachment_images(raw_references: Any) -> list[str]:
     return sources
 
 
+_CHAT_MEDIA_MAX_ITEMS = 8
+
+
+def _chat_media_refs(graph: dict[str, Any], node_ids: list[str]) -> list[dict[str, str]]:
+    """Outputs this chat turn generated, so the reply can show the image/video
+    inline and a reload can rebuild it from the persisted history record.
+
+    Reads each node's ``output_ref`` (the run merges completed states back onto
+    the graph before this is called) and skips placeholders, which are not real
+    files.
+    """
+    by_id = {str(node.get("id") or ""): node for node in (graph.get("nodes") or []) if isinstance(node, dict)}
+    refs: list[dict[str, str]] = []
+    for node_id in node_ids:
+        node = by_id.get(str(node_id))
+        if node is None:
+            continue
+        ref = node.get("output_ref")
+        if not isinstance(ref, dict):
+            continue
+        uri = str(ref.get("uri") or "").strip()
+        if not uri or uri.startswith("designer://"):
+            continue
+        refs.append(
+            {
+                "node_id": str(node_id),
+                "uri": uri,
+                "kind": str(ref.get("kind") or node.get("type") or "image"),
+                "label": str(node.get("label") or ""),
+            }
+        )
+        if len(refs) >= _CHAT_MEDIA_MAX_ITEMS:
+            break
+    return refs
+
+
 async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None, str | None]:
     from jiuwenswarm.server.runtime.designer.leader_chat import run_leader_chat
-    from jiuwenswarm.server.runtime.designer.chat_document_sync import (
-        ChatDocumentConflict,
-        read_chat_documents,
-        save_document_update,
-    )
     from jiuwenswarm.server.runtime.designer.model_tools import (
         DesignerLlmError,
         require_llm,
@@ -1314,6 +1376,7 @@ async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[di
     graph = _store.get_graph(graph_id)
     if graph is None:
         return None, "graph not found", "NOT_FOUND"
+    graph = _executor.reconcile_loaded_graph(graph)
     selected_node_id = str(params.get("selected_node_id") or params.get("node_id") or "").strip()
     run_new_nodes = bool(params.get("run_new_nodes") or params.get("runNewNodes"))
     progress = _leader_progress_callback(request)
@@ -1321,81 +1384,46 @@ async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[di
     attached_images = _chat_attachment_images(params.get("references"))
     try:
         require_llm()
-        run = _store.get_latest_run_for_graph(graph_id)
-        documents = read_chat_documents(graph, run)
-        pending_documents = any(
-            state.get("candidate_output_ref") or state.get("candidate_output_refs")
-            for node_id, state in ((run or {}).get("node_states") or {}).items() if node_id in documents
-        )
-        was_active = _executor.has_active_tasks(graph_id)
         preferred_model = str((graph.get("metadata") or {}).get("model_name") or "")
         with use_preferred_designer_model(preferred_model):
             result = await run_leader_chat(
                 graph,
                 message,
-                documents=documents,
-                pending_documents=pending_documents,
                 selected_node_id=selected_node_id,
                 run_new_nodes=run_new_nodes,
                 progress=progress,
                 history=history,
                 attached_images=attached_images,
             )
-        updated_text_uris = []
-        saved = graph
-        if result.get("changed") or result.get("run_node_ids"):
-            if was_active or _executor.has_active_tasks(graph_id):
-                return None, "工作流任务尚未结束；运行中请先停止，任务正在停止时请稍后重试。", "CONFLICT"
-            current_graph = _store.get_graph(graph_id)
-            current_run = _store.get_latest_run_for_graph(graph_id)
-            if (current_graph != graph or current_run != run
-                    or read_chat_documents(current_graph, current_run) != documents):
-                return None, "工作流或文本已在本次请求期间发生变化，请重新提交。", "CONFLICT"
-        if result.get("changed"):
-            saved, run, updated_text_uris = save_document_update(
-                _store, result["graph"], run, documents, result["texts"]
-            )
-        progress("stage", str(result.get("summary") or "done"))
     except DesignerLlmError as exc:
         return None, exc.user_message, exc.code
-    except ChatDocumentConflict as exc:
-        return None, str(exc), "CONFLICT"
     except DesignerGraphValidationError as exc:
         return None, str(exc), "BAD_REQUEST"
     except Exception as exc:  # noqa: BLE001
         logger.warning("[DesignerAdapter] graph chat failed: %s", exc)
         return None, str(exc), "INTERNAL_ERROR"
 
+    next_graph = result.get("graph") or graph
+    saved = _store.save_graph(next_graph) if result.get("changed") else graph
     summary = str(result.get("summary") or "")
     session_id = str((saved.get("metadata") or {}).get("session_id") or "").strip()
+    history_request_id = request.request_id or str(uuid.uuid4())
+    history_now = time.time()
     if session_id:
         from jiuwenswarm.server.runtime.session.session_history import append_history_record
 
-        now = time.time()
-        history_request_id = request.request_id or str(uuid.uuid4())
         append_history_record(
             session_id=session_id,
             request_id=history_request_id,
             channel_id=request.channel_id or "web",
             role="user",
             content=message,
-            timestamp=now,
+            timestamp=history_now,
             event_type="design.user",
             extra={"design_kind": "user", "graph_id": graph_id},
             mode="designer",
         )
-        append_history_record(
-            session_id=session_id,
-            request_id=history_request_id,
-            channel_id=request.channel_id or "web",
-            role="assistant",
-            content=summary or "Updated the workflow.",
-            timestamp=now + 0.001,
-            event_type="design.graph_updated",
-            extra={"design_kind": "chat_ack", "graph_id": graph_id},
-            mode="designer",
-        )
-    run_payload = dict(run) if run is not None and result.get("changed") else None
+    run_payload = None
     run_ids = list(result.get("run_node_ids") or [])
     if run_ids:
         start_params: dict[str, Any] = {"graph_id": saved["graph_id"], "node_id": run_ids[0]}
@@ -1456,9 +1484,29 @@ async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[di
         elif error:
             result["summary"] = f"{result.get('summary') or ''} ({error})".strip()
             summary = str(result["summary"])
+    if session_id:
+        from jiuwenswarm.server.runtime.session.session_history import append_history_record
+
+        # Appended after the run so the persisted reply carries the finished
+        # outputs — the chat shows the generated image inline, and a reload
+        # (which rebuilds messages from history) can render it again.
+        append_history_record(
+            session_id=session_id,
+            request_id=history_request_id,
+            channel_id=request.channel_id or "web",
+            role="assistant",
+            content=summary or "Updated the workflow.",
+            timestamp=history_now + 0.001,
+            event_type="design.graph_updated",
+            extra={
+                "design_kind": "chat_ack",
+                "graph_id": graph_id,
+                "media": _chat_media_refs(saved, run_ids),
+            },
+            mode="designer",
+        )
     return {
         "graph": dict(saved),
-        "updated_text_uris": updated_text_uris,
         "summary": summary,
         "intent": result.get("intent") or "answer",
         "run_node_ids": run_ids,
@@ -1559,21 +1607,9 @@ async def _bootstrap_graph_with_director_impl(
         if callable(on_progress):
             on_progress("thinking", "Supervisor · Reading reference images")
         reads = await classify_reference_images(prompt, image_refs)
-        if not reads:
-            return (
-                None,
-                "Attached stills could not be assigned a reference role.",
-                "LLM_API_ERROR",
-            )
-        from jiuwenswarm.server.runtime.designer.pipeline.reference_led import (
-            ReferenceIntentError,
-            stamp_creative_intent,
-        )
-
-        try:
-            analysis = stamp_creative_intent(analysis, reads, image_refs)
-        except ReferenceIntentError as exc:
-            return None, str(exc), "LLM_API_ERROR"
+        if reads:
+            analysis = dict(analysis)
+            analysis["reference_reads"] = reads
 
     payload, error, code = await asyncio.to_thread(
         _bootstrap_graph,

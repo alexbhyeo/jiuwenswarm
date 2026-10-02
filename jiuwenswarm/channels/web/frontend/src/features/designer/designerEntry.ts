@@ -1,8 +1,9 @@
 import { useWorkspaceStore } from '../../stores';
 import { useDesignerStore } from './designerStore';
-import { useDesignerChatStore } from './designerChatStore';
+import { useDesignerChatStore, type DesignerChatMedia } from './designerChatStore';
+import { isPlaceholderAsset } from './designerAssetUrl';
+import type { DesignerExecutionGraph } from './executionGraphTypes';
 import { designerGraphClient } from './designerGraphClient';
-import { DESIGNER_MATERIAL_SAVED_EVENT } from './designerMaterials';
 import { useDesignerRunStore } from './designerRunStore';
 import type { DesignerBootstrapReference, DesignerStoredReference } from './designerReferences';
 
@@ -224,6 +225,32 @@ function recentChatHistory(limit = 8): Array<{ role: 'user' | 'assistant'; conte
   return kept.slice(-limit);
 }
 
+/** Outputs produced by this turn's run, so the reply can show the generated
+ * image/video inline — the same one-turn "ask → see the result" behaviour the
+ * Edit assistant has. The run has already finished by the time the chat RPC
+ * returns, and the adapter merged each completed node's output_ref back onto
+ * the graph, so the graph is the source of these URIs. */
+function collectGeneratedMedia(
+  graph: DesignerExecutionGraph | undefined,
+  runNodeIds: string[] | undefined,
+): DesignerChatMedia[] {
+  if (!graph || !runNodeIds || runNodeIds.length === 0) return [];
+  const byId = new Map((graph.nodes || []).map((node) => [node.id, node]));
+  const media: DesignerChatMedia[] = [];
+  for (const nodeId of runNodeIds) {
+    const node = byId.get(nodeId);
+    const uri = node?.output_ref?.uri;
+    if (!node || !uri || isPlaceholderAsset(uri)) continue;
+    media.push({
+      nodeId,
+      uri,
+      kind: String(node.output_ref?.kind || node.type || 'image'),
+      ...(node.label ? { label: node.label } : {}),
+    });
+  }
+  return media;
+}
+
 export async function chatDesignerGraph(params: {
   graphId: string;
   prompt: string;
@@ -264,13 +291,12 @@ export async function chatDesignerGraph(params: {
     if (result.run) {
       useDesignerRunStore.getState().applyRun(result.run);
     }
-    for (const uri of new Set(result.updated_text_uris ?? [])) {
-      window.dispatchEvent(new CustomEvent(DESIGNER_MATERIAL_SAVED_EVENT, { detail: { uri } }));
-    }
+    const media = collectGeneratedMedia(result.graph, result.run_node_ids);
     chatStore.appendMessage({
       role: 'assistant',
       content: String(result.summary || 'Updated the workflow.').trim(),
       kind: 'chat_ack',
+      ...(media.length > 0 ? { media } : {}),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
