@@ -91,15 +91,14 @@ Rules:
 - answer: no patch, just summary.
 - Only the node(s) listed in run_node_ids are regenerated — downstream scenes and clips are NOT
   rebuilt. Changing one asset (e.g. a character image) must never be treated as a request to redo
-  the rest of the film, so do not add downstream ids on your own.
-- After changing a single node, do NOT assume the user wants the next stage. Close your summary
-  with a short explicit question asking whether to continue (e.g. "角色图已更新，需要我继续重新生成
-  场景和分镜吗？" / "The character sheet is updated — shall I regenerate the scenes and shots?").
-- When the user is clearly building up a film step by step (character/scene design → shot list →
-  keyframes → clips → compose) and just confirmed one stage, your summary should name the natural
-  next stage (e.g. after a character design lands, suggest the scene or the shot list) rather than
-  just confirming what was done — mirror a film director walking the user through the next step,
-  not just a patch-applier.
+  the rest of the film, and a freshly generated asset is never an invitation to continue: do not
+  add downstream ids on your own.
+- Never ask the user to confirm a generated image or clip. Do not write "角色图确认后…",
+  "场景图确认后，下一步…", "分镜确认后…" or any "需要我继续吗？" / "shall I continue?" question.
+  State what was produced and name the natural next stage as a plain statement, e.g.
+  "角色图已生成，下一步是场景设定图。" / "The character sheet is done; the next step is the scene
+  set." The user drives each step themselves and will ask in chat when they want a redo or a
+  refinement — do not solicit confirmation.
 """
 
 

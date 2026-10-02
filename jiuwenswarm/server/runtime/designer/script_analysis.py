@@ -1052,7 +1052,11 @@ def _normalize_llm_analysis(parsed: dict[str, Any], base: dict[str, Any]) -> dic
     characters = parsed.get("characters") if isinstance(parsed.get("characters"), list) else []
     scenes = parsed.get("scenes") if isinstance(parsed.get("scenes"), list) else []
     shots = parsed.get("shots") if isinstance(parsed.get("shots"), list) else []
-    if len(characters) < 1 or len(shots) < 1:
+    # Shots are what a film cannot do without. A cast is optional: a car, a
+    # landscape or an abstract product spot has no humans, and the analysis
+    # prompt asks only for named humans, so the model correctly returns an empty
+    # characters[]. Requiring one here rejected every such brief.
+    if len(shots) < 1:
         return None
     norm_chars: list[dict[str, Any]] = []
     for i, ch in enumerate(characters[:_MAX_CHARS], start=1):
@@ -1067,7 +1071,8 @@ def _normalize_llm_analysis(parsed: dict[str, Any], base: dict[str, Any]) -> dic
             "match_terms": _match_terms_for_character(name, desc),
         }
         norm_chars.append(entry)
-    if not norm_chars:
+    if characters and not norm_chars:
+        # A declared cast that produced no usable entry is a malformed reply.
         return None
     valid_ids, by_name = _cast_id_maps(norm_chars)
     norm_scenes: list[dict[str, str]] = []
@@ -1452,15 +1457,30 @@ async def analyze_creative_brief(
                 )
                 return None
             chars = parsed.get("characters") if isinstance(parsed.get("characters"), list) else []
+            shots = parsed.get("shots") if isinstance(parsed.get("shots"), list) else []
+            placeholder_values = {"", "...", "…", "string", "name"}
             placeholder = False
             for ch in chars:
                 if not isinstance(ch, dict):
                     continue
-                name = str(ch.get("name") or "").strip()
-                if name in {"", "...", "…", "string", "name"}:
+                if str(ch.get("name") or "").strip() in placeholder_values:
                     placeholder = True
                     break
-            if placeholder or not chars:
+            if not placeholder:
+                for shot in shots:
+                    if not isinstance(shot, dict):
+                        continue
+                    if str(shot.get("action") or "").strip() in placeholder_values:
+                        placeholder = True
+                        break
+            # An empty characters[] is legitimate. A car, a landscape or a product
+            # spot has no cast at all, and the system prompt's "extract EVERY named
+            # human" correctly yields none — so requiring a non-empty cast rejected
+            # every such brief and surfaced "Chat model did not return a usable
+            # cast/shot analysis." Only a reply with nothing usable (neither cast
+            # nor shots), or one echoing the schema's placeholder text, is a real
+            # schema echo.
+            if placeholder or not (chars or shots):
                 logger.info("LLM script analysis looked like schema echo; soft-fail")
                 return None
             if short_clip:
