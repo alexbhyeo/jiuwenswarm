@@ -120,7 +120,7 @@ export const designerGraphClient = {
       { timeoutMs: 20 * 60 * 1000 },
     ),
 
-  startRun: (params: { graphId?: string; runId?: string; nodeId?: string }) =>
+  startRun: (params: { graphId?: string; runId?: string; nodeId?: string; clearScope?: boolean }) =>
     webRequest<{
       run: DesignerExecutionRun;
       warning?: string | null;
@@ -129,6 +129,9 @@ export const designerGraphClient = {
       ...(params.graphId ? { graph_id: params.graphId } : {}),
       ...(params.runId ? { run_id: params.runId } : {}),
       ...(params.nodeId ? { node_id: params.nodeId } : {}),
+      // The canvas drives the whole remaining pipeline; a run the chat scoped to
+      // a single node must not narrow what Execute builds.
+      ...(params.clearScope ? { clear_scope: true } : {}),
     }),
 
   getRun: (params: { runId?: string; graphId?: string }) =>

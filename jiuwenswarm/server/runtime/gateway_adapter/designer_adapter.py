@@ -390,6 +390,93 @@ def _chat_media_from_record(raw: Any) -> list[dict[str, str]]:
     return out
 
 
+def _scope_chat_run_to_nodes(run_id: str, node_ids: list[str]) -> None:
+    """Restrict a chat-triggered rerun to the nodes the plan actually named.
+
+    The generic rerun path deliberately leaves every node the source run did not
+    cover at ``pending`` (``states.setdefault(..., pending)``) and its run
+    metadata carries no ``scope_node_ids``, so it goes through the *wave*
+    scheduler. On a partially generated graph that means a "modify the character
+    image" request sweeps in the whole downstream pipeline — scene, every clip,
+    compose. Stamping the scope keeps the turn to the named nodes, and the
+    frontend already refuses to auto-continue a scoped run, so the user decides
+    whether to move on.
+    """
+    ids = [str(item).strip() for item in node_ids if str(item).strip()]
+    if not ids:
+        return
+    run = _store.get_run(run_id)
+    if run is None:
+        return
+    meta = dict(run.get("metadata") or {})
+    if meta.get("scope_node_ids"):
+        return
+    meta["scope_node_ids"] = ids
+    run["metadata"] = meta
+    _store.save_run(run)
+
+
+# The web client allows 20 minutes for designer.graph.chat; stay just inside that
+# so a slow compose still comes back with its own result instead of silence.
+_CHAT_RUN_WAIT_SECONDS = 18 * 60
+
+
+async def _await_run_completion(run_id: str) -> bool:
+    """Wait for a chat-started run to stop. False if it is still going.
+
+    ``start_run`` only schedules execution (``asyncio.create_task``) and returns
+    immediately with status "running", so the node has not finished generating at
+    that point. A compose of several clips easily outlives a short fixed cap, and
+    when that fired the chat replied with the "starting…" text and no media while
+    the run kept going unnoticed in the background — no progress shown, and no
+    reply carrying the finished clip.
+    """
+    task = None
+    try:
+        task = _executor._tasks.get(run_id)
+    except Exception:  # noqa: BLE001
+        task = None
+    if task is not None and not task.done():
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(task), timeout=_CHAT_RUN_WAIT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            return False
+        except Exception:  # noqa: BLE001
+            pass
+    # The task handle can be gone (a different code path scheduled the run), so
+    # confirm against the stored run before calling it finished.
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        run = _store.get_run(run_id)
+        if run is None or str(run.get("status") or "") != "running":
+            return True
+        await asyncio.sleep(0.5)
+    return False
+
+
+def _clear_run_scope(run_id: str) -> None:
+    """Drop a single-node chat scope so a canvas-driven run covers the canvas.
+
+    The chat stamps ``scope_node_ids`` so one changed asset is regenerated on its
+    own (see :func:`_scope_chat_run_to_nodes`). Execute on the canvas means "build
+    whatever is still missing", so when the frontend asks for an unscoped start
+    on that same run the scope has to go before the executor reads it —
+    otherwise the run stays pinned to the chat's node and Execute would rebuild
+    or skip the wrong things.
+    """
+    run = _store.get_run(run_id)
+    if run is None:
+        return
+    meta = dict(run.get("metadata") or {})
+    if not meta.get("scope_node_ids"):
+        return
+    meta.pop("scope_node_ids", None)
+    run["metadata"] = meta
+    _store.save_run(run)
+
+
 def _chat_media_from_params(raw: Any) -> list[dict[str, str]]:
     """Inline media the client sent for this turn (camelCase on the wire),
     normalised to the snake_case shape stored in the history record — so a
@@ -1166,6 +1253,18 @@ def _start_run(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | Non
     graph_id = str(params.get("graph_id") or "").strip()
     run_id = str(params.get("run_id") or "").strip()
     node_id = str(params.get("node_id") or "").strip()
+    # A plan can name several nodes (e.g. all three clips). node_ids carries the
+    # whole list so the rerun and its scope cover every one of them.
+    node_ids = [
+        str(item).strip() for item in (params.get("node_ids") or []) if str(item).strip()
+    ]
+    if not node_ids and node_id:
+        node_ids = [node_id]
+    if not node_id and node_ids:
+        node_id = node_ids[0]
+    # Canvas "Execute" opts out of any single-node scope the chat pinned on the
+    # run it is continuing (see _clear_run_scope).
+    clear_scope = params.get("clear_scope") in (True, 1, "1", "true", "True")
     graph = _store.get_graph(graph_id) if graph_id else None
     contribution_warning = ""
     if graph is not None and not (node_id and _is_comfyui_target(graph, node_id)):
@@ -1189,7 +1288,9 @@ def _start_run(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | Non
             if graph is None:
                 return None, "graph not found", "NOT_FOUND"
             try:
-                run = _executor.create_rerun(graph, source_run=existing, node_id=node_id)
+                run = _executor.create_rerun(
+                    graph, source_run=existing, node_id=node_id, node_ids=node_ids
+                )
             except ValueError as exc:
                 return None, _rerun_error_message(graph, node_id, exc), "BAD_REQUEST"
             except KeyError:
@@ -1223,7 +1324,9 @@ def _start_run(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | Non
             run_id = run["run_id"]
         else:
             try:
-                run = _executor.create_rerun(graph, source_run=source, node_id=node_id)
+                run = _executor.create_rerun(
+                    graph, source_run=source, node_id=node_id, node_ids=node_ids
+                )
             except ValueError as exc:
                 return None, _rerun_error_message(graph, node_id, exc), "BAD_REQUEST"
             except KeyError:
@@ -1236,6 +1339,14 @@ def _start_run(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | Non
         return None, "graph_id or run_id is required", "BAD_REQUEST"
     if graph is None:
         return None, "graph not found", "NOT_FOUND"
+    # A run the chat scoped to one node must not narrow a canvas-driven start.
+    # Only applies when the caller reuses that run without naming a node — a
+    # node-specific start builds its own fresh, legitimately scoped record.
+    if clear_scope and run_id and not node_id:
+        try:
+            _clear_run_scope(run_id)
+        except Exception:
+            logger.debug("Failed to clear run scope", exc_info=True)
     # Stamp warning onto the run record so the UI can show it without blocking.
     if contribution_warning:
         try:
@@ -1458,13 +1569,21 @@ async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[di
     run_payload = None
     run_ids = list(result.get("run_node_ids") or [])
     if run_ids:
-        start_params: dict[str, Any] = {"graph_id": saved["graph_id"], "node_id": run_ids[0]}
+        start_params: dict[str, Any] = {
+            "graph_id": saved["graph_id"],
+            "node_id": run_ids[0],
+            "node_ids": list(run_ids),
+        }
         latest = _store.get_latest_run_for_graph(saved["graph_id"])
         if latest is not None:
             start_params["run_id"] = str(latest.get("run_id") or "")
         payload, error, code = _start_run(start_params)
         if error is None and payload is not None:
             run_id = str(payload["run_id"])
+            # A chat refine regenerates only the nodes it names; without this the
+            # unscoped rerun would also build every not-yet-generated downstream
+            # scene/clip/compose node.
+            _scope_chat_run_to_nodes(run_id, [str(item) for item in run_ids])
             run = await _executor.start_run(
                 run_id,
                 on_update=_run_update_callback(request),
@@ -1472,17 +1591,16 @@ async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[di
             )
             # start_run only schedules execution (asyncio.create_task) and
             # returns immediately with status "running" -- the node hasn't
-            # actually finished generating yet at this point. Wait for the
-            # background task itself so the merge below (and the chat reply)
-            # reflect the real, finished output instead of racing it.
-            task = _executor._tasks.get(run_id)
-            if task is not None and not task.done():
-                try:
-                    await asyncio.wait_for(asyncio.shield(task), timeout=180)
-                except asyncio.TimeoutError:
-                    pass
-                except Exception:  # noqa: BLE001
-                    pass
+            # actually finished generating yet at this point. Follow the run
+            # instead of guessing a cap, so the merge below and the chat reply
+            # carry the real, finished output.
+            finished = await _await_run_completion(run_id)
+            if not finished:
+                summary = (
+                    f"{summary}（仍在生成中 / still generating — "
+                    "the canvas updates when it finishes）"
+                ).strip()
+                result["summary"] = summary
             run = _store.get_run(run_id) or run
             run_payload = dict(run)
             await _push_designer_event(

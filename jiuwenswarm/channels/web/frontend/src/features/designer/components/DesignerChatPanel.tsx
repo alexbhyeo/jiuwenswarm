@@ -18,7 +18,7 @@ import {
   type DesignerStoredReference,
 } from '../designerReferences';
 import { DesignerAssetsPanel } from './DesignerAssetsPanel';
-import { designerAssetPreviewUrl } from '../designerAssetUrl';
+import { designerAssetPreviewUrl, isPreviewableMediaKind } from '../designerAssetUrl';
 
 /** Finds the "@token" (if any) the cursor is currently inside, so the
  * composer can show a node-label autocomplete menu. Mirrors Director mode's
@@ -424,6 +424,11 @@ export function DesignerChatPanel() {
                         {message.media && message.media.length > 0 ? (
                           <div className="designer-chat-panel__media" data-testid="designer-chat-panel-media">
                             {message.media.map((item) => {
+                              // A reference with no image of its own (a text or
+                              // table output such as the storyboard) has nothing
+                              // to preview — it must not get an <img>, which only
+                              // ever rendered as a broken image.
+                              if (!isPreviewableMediaKind(item.kind)) return null;
                               const src = designerAssetPreviewUrl(item.uri);
                               if (!src) return null;
                               return (
@@ -488,12 +493,16 @@ export function DesignerChatPanel() {
             ) : null}
             {draftReferences.length > 0 ? (
               <ReferenceChips
-                items={draftReferences.map((item) => ({
-                  id: item.nodeId,
-                  kind: (item.kind === 'video' ? 'video' : 'image') as DesignerReferenceKind,
-                  filename: item.label || item.nodeId,
-                  previewUrl: designerAssetPreviewUrl(item.uri),
-                }))}
+                items={draftReferences
+                  // Only references that have an image/video of their own get a
+                  // thumbnail chip; "@Story Board" and friends resolve to text.
+                  .filter((item) => isPreviewableMediaKind(item.kind))
+                  .map((item) => ({
+                    id: item.nodeId,
+                    kind: (item.kind === 'video' ? 'video' : 'image') as DesignerReferenceKind,
+                    filename: item.label || item.nodeId,
+                    previewUrl: designerAssetPreviewUrl(item.uri),
+                  }))}
               />
             ) : null}
             {attachError ? (

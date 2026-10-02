@@ -304,59 +304,72 @@ class GraphExecutor:
         *,
         source_run: DesignerExecutionRun | None,
         node_id: str,
+        node_ids: list[str] | None = None,
     ) -> DesignerExecutionRun:
-        """Copy a finished run and reset one node so only that node executes again."""
-        node_ids = {node["id"] for node in graph.get("nodes", [])}
-        if node_id not in node_ids:
-            raise KeyError(f"node not found: {node_id}")
-        if is_comfyui_node(_node_by_id(graph, node_id)):
+        """Copy a finished run and reset the target node(s) so only they run again.
+
+        ``node_ids`` covers a plan that named several nodes (e.g. all three
+        clips). Passing only ``node_id`` silently regenerated just the first of
+        them while the reply listed every one as freshly generated.
+        """
+        targets = [str(item).strip() for item in (node_ids or []) if str(item).strip()]
+        if not targets:
+            targets = [node_id]
+        graph_node_ids = {node["id"] for node in graph.get("nodes", [])}
+        for target in targets:
+            if target not in graph_node_ids:
+                raise KeyError(f"node not found: {target}")
+        node_id = targets[0]
+        if len(targets) == 1 and is_comfyui_node(_node_by_id(graph, node_id)):
             return self._create_scoped_rerun(graph, source_run=source_run, node_id=node_id)
         if source_run is None:
             raise ValueError("no previous run to rerun from")
         incoming = execution_predecessors(graph)
         groups = sync_groups(graph)
         source_states = source_run.get("node_states") or {}
-        for pred in incoming.get(node_id, []):
-            members = groups.get(pred, frozenset({pred}))
-            for member in members:
-                if (source_states.get(member) or {}).get("status") != NODE_STATUS_COMPLETED:
-                    raise ValueError(f"upstream not ready: {member}")
+        for target in targets:
+            for pred in incoming.get(target, []):
+                members = groups.get(pred, frozenset({pred}))
+                for member in members:
+                    if (source_states.get(member) or {}).get("status") != NODE_STATUS_COMPLETED:
+                        raise ValueError(f"upstream not ready: {member}")
         now = utc_now_ms()
         states = deepcopy(source_states)
         for node in graph.get("nodes", []):
             states.setdefault(node["id"], {"status": NODE_STATUS_PENDING})
         for nid, state in list(states.items()):
-            if nid == node_id or not isinstance(state, dict):
+            if nid in targets or not isinstance(state, dict):
                 continue
             if state.get("status") != NODE_STATUS_RUNNING:
                 continue
             # Orphaned running snapshots are not scheduled again (_is_ready
             # only accepts pending). Park them so Continue can resume.
             states[nid] = _parked_node_state(state)
-        previous = states.get(node_id) or {}
-        kept_ref = previous.get("output_ref") if _usable_ref(previous.get("output_ref")) else None
-        kept_refs = [
-            ref for ref in (previous.get("output_refs") or []) if _usable_ref(ref)
-        ]
-        if kept_ref is not None and not kept_refs:
-            kept_refs = [kept_ref]
-        target_node = _node_by_id(graph, node_id)
-        target_type = str(target_node.get("type") or "")
-        if (
-            target_type in {NODE_TYPE_IMAGE, NODE_TYPE_VIDEO}
-            and _is_fallback_text_ref(kept_ref)
-        ) or node_pipeline(target_node) == NODE_ROLE_COMPOSE:
-            kept_ref = None
-            kept_refs = []
-        states[node_id] = {
-            "status": NODE_STATUS_PENDING,
-            "started_at": None,
-            "completed_at": None,
-            "output_ref": kept_ref,
-            "output_refs": kept_refs,
-            "error": None,
-            "blocked_by": [],
-        }
+        for target in targets:
+            previous = states.get(target) or {}
+            kept_ref = previous.get("output_ref") if _usable_ref(previous.get("output_ref")) else None
+            kept_refs = [
+                ref for ref in (previous.get("output_refs") or []) if _usable_ref(ref)
+            ]
+            if kept_ref is not None and not kept_refs:
+                kept_refs = [kept_ref]
+            target_node = _node_by_id(graph, target)
+            target_type = str(target_node.get("type") or "")
+            if (
+                target_type in {NODE_TYPE_IMAGE, NODE_TYPE_VIDEO}
+                and _is_fallback_text_ref(kept_ref)
+            ) or node_pipeline(target_node) == NODE_ROLE_COMPOSE:
+                kept_ref = None
+                kept_refs = []
+            states[target] = {
+                "status": NODE_STATUS_PENDING,
+                "started_at": None,
+                "completed_at": None,
+                "output_ref": kept_ref,
+                "output_refs": kept_refs,
+                "error": None,
+                "blocked_by": [],
+            }
         run: DesignerExecutionRun = {
             "schema_version": "designer-execution-run.v1",
             "run_id": new_run_id(),
