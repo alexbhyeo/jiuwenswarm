@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 ProgressFn = Callable[..., None]
 
 _RUN_HINT = re.compile(
-    r"(生成|重跑|重生成|运行|run\b|generate|rerun|regenerate)",
+    r"(生成|重跑|重生成|运行|合成|拼接|剪成|成片|出片|run\b|generate|rerun|regenerate"
+    r"|compose|stitch|concatenate|final cut)",
     re.I,
 )
 _REFINE_HINT = re.compile(
@@ -88,6 +89,12 @@ Rules:
   language as the existing description) or the regenerated image will keep the OLD appearance
   no matter what prompt_updates says.
 - answer: no patch, just summary.
+- Only the node(s) listed in run_node_ids are regenerated — downstream scenes and clips are NOT
+  rebuilt. Changing one asset (e.g. a character image) must never be treated as a request to redo
+  the rest of the film, so do not add downstream ids on your own.
+- After changing a single node, do NOT assume the user wants the next stage. Close your summary
+  with a short explicit question asking whether to continue (e.g. "角色图已更新，需要我继续重新生成
+  场景和分镜吗？" / "The character sheet is updated — shall I regenerate the scenes and shots?").
 - When the user is clearly building up a film step by step (character/scene design → shot list →
   keyframes → clips → compose) and just confirmed one stage, your summary should name the natural
   next stage (e.g. after a character design lands, suggest the scene or the shot list) rather than
@@ -508,16 +515,15 @@ async def run_leader_chat(
     )
     thinking = str(plan.get("thinking") or "applying graph edits")
     _emit(progress, ACTIVITY_KIND_THINKING, thinking)
+    # An edit_graph plan may only execute nodes when the message asked to run;
+    # "继续合成" resolves through _RUN_HINT, so a compose request keeps its
+    # run_node_ids instead of being silently emptied into a no-op.
     if plan.get("intent") == "edit_graph" and not message_asks_to_run(
         text, run_new_nodes=run_new_nodes
     ):
         plan["run_node_ids"] = []
     if plan.get("intent") == "refine_node" and not plan.get("run_node_ids") and selected_node_id:
         plan["run_node_ids"] = [selected_node_id]
-    if plan.get("intent") == "edit_graph" and not message_asks_to_run(
-        text, run_new_nodes=run_new_nodes
-    ):
-        plan["run_node_ids"] = []
 
     _emit(progress, ACTIVITY_KIND_TOOL_CALL, "designer_graph_patch", tool="designer_graph_patch")
     next_graph, run_ids, summary = apply_leader_plan(graph, plan)

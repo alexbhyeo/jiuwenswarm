@@ -119,7 +119,8 @@
       "running": "Running…",
       "moreActions": "More run actions",
       "restart": "Rerun workflow",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "allDone": "Every node already has an output — use “Rerun workflow” to rebuild from scratch"
     },
     "subtitle": "Creation execution canvas",
     "toolbar": {
