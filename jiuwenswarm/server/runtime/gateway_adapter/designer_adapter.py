@@ -416,9 +416,14 @@ def _scope_chat_run_to_nodes(run_id: str, node_ids: list[str]) -> None:
     _store.save_run(run)
 
 
-# The web client allows 20 minutes for designer.graph.chat; stay just inside that
-# so a slow compose still comes back with its own result instead of silence.
-_CHAT_RUN_WAIT_SECONDS = 18 * 60
+# Gateway -> AgentServer unary requests are cut at
+# agent_client.AGENT_REQUEST_TIMEOUT_SECONDS (600s), so waiting longer does not
+# extend the reply — it destroys it: the caller sees "AgentServer request timed
+# out" and the finished media never reaches the conversation. Stay inside that
+# ceiling with room for the reply to travel; three clips regenerating
+# concurrently take roughly five minutes in practice. Anything slower falls back
+# to the "still generating" note below rather than being cut off.
+_CHAT_RUN_WAIT_SECONDS = 8 * 60
 
 
 async def _await_run_completion(run_id: str) -> bool:
