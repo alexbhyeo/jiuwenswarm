@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { chatDesignerGraph } from '../designerEntry';
+import { chatDesignerGraph, collectReferencedMedia } from '../designerEntry';
 import { isDesignerPreviewGraph } from '../designerBootstrapGraph';
 import { useDesignerStore } from '../designerStore';
 import { designerActivityText } from '../designerActivity';
@@ -202,6 +202,13 @@ export function DesignerChatPanel() {
       return next;
     });
   }, []);
+
+  /** Nodes the current draft points at with "@Label" — shown above the input as
+   * image + name chips, the way the Edit assistant previews its references. */
+  const draftReferences = useMemo(
+    () => collectReferencedMedia(domainGraph, draft),
+    [domainGraph, draft],
+  );
 
   const chatBusy = bootstrapPhase === 'thinking' || bootstrapPhase === 'bootstrapping' || sending;
   const canSend = Boolean(draft.trim() || attachments.length > 0);
@@ -419,17 +426,23 @@ export function DesignerChatPanel() {
                             {message.media.map((item) => {
                               const src = designerAssetPreviewUrl(item.uri);
                               if (!src) return null;
-                              return item.kind === 'video' ? (
-                                <video
-                                  key={item.nodeId}
-                                  src={src}
-                                  controls
-                                  playsInline
-                                  preload="metadata"
-                                  title={item.label || ''}
-                                />
-                              ) : (
-                                <img key={item.nodeId} src={src} alt={item.label || ''} title={item.label || ''} />
+                              return (
+                                <figure key={item.nodeId} className="designer-chat-panel__media-item">
+                                  {item.kind === 'video' ? (
+                                    <video src={src} controls playsInline preload="metadata" />
+                                  ) : (
+                                    <img src={src} alt={item.label || ''} />
+                                  )}
+                                  {item.label ? (
+                                    <figcaption
+                                      className="designer-chat-panel__media-name"
+                                      data-testid="designer-chat-panel-media-name"
+                                      title={item.label}
+                                    >
+                                      {item.label}
+                                    </figcaption>
+                                  ) : null}
+                                </figure>
                               );
                             })}
                           </div>
@@ -471,6 +484,16 @@ export function DesignerChatPanel() {
                 }))}
                 onRemove={removeAttachment}
                 removeLabel={t('designer.chat.removeAttachment')}
+              />
+            ) : null}
+            {draftReferences.length > 0 ? (
+              <ReferenceChips
+                items={draftReferences.map((item) => ({
+                  id: item.nodeId,
+                  kind: (item.kind === 'video' ? 'video' : 'image') as DesignerReferenceKind,
+                  filename: item.label || item.nodeId,
+                  previewUrl: designerAssetPreviewUrl(item.uri),
+                }))}
               />
             ) : null}
             {attachError ? (

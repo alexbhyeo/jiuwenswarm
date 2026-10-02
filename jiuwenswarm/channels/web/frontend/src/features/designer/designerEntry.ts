@@ -251,6 +251,40 @@ function collectGeneratedMedia(
   return media;
 }
 
+/** Node outputs the user pointed at with "@Label" in this message, so the
+ * bubble can show the image being referred to. Mirrors the server's
+ * ``resolve_label_references``, which feeds the same images to the model as
+ * vision references. */
+export function collectReferencedMedia(
+  graph: DesignerExecutionGraph | null | undefined,
+  text: string,
+): DesignerChatMedia[] {
+  if (!graph || !text.includes('@')) return [];
+  const byLabel = new Map<string, DesignerExecutionGraph['nodes'][number]>();
+  for (const node of graph.nodes || []) {
+    const label = String(node.label || '').trim();
+    if (label) byLabel.set(label, node);
+  }
+  const matched: string[] = [];
+  const media: DesignerChatMedia[] = [];
+  // Longest label first so "@Character 1" is not shadowed by "@Character".
+  for (const label of [...byLabel.keys()].sort((a, b) => b.length - a.length)) {
+    if (!text.includes(`@${label}`)) continue;
+    if (matched.some((longer) => longer.startsWith(label))) continue;
+    matched.push(label);
+    const node = byLabel.get(label);
+    const uri = node?.output_ref?.uri;
+    if (!node || !uri || isPlaceholderAsset(uri)) continue;
+    media.push({
+      nodeId: node.id,
+      uri,
+      kind: String(node.output_ref?.kind || node.type || 'image'),
+      label,
+    });
+  }
+  return media;
+}
+
 export async function chatDesignerGraph(params: {
   graphId: string;
   prompt: string;
@@ -263,7 +297,15 @@ export async function chatDesignerGraph(params: {
   if (!prompt) return;
   const chatStore = useDesignerChatStore.getState();
   const history = recentChatHistory();
-  chatStore.appendMessage({ role: 'user', content: prompt, kind: 'user' });
+  // "@Label" mentions resolve to that node's current output, so the user's own
+  // bubble can show the image they referred to.
+  const referenced = collectReferencedMedia(useDesignerStore.getState().domainGraph, prompt);
+  chatStore.appendMessage({
+    role: 'user',
+    content: prompt,
+    kind: 'user',
+    ...(referenced.length > 0 ? { media: referenced } : {}),
+  });
   const thinkingId = chatStore.appendMessage({
     role: 'assistant',
     content: params.thinkingText || 'Updating the workflow…',
@@ -282,6 +324,7 @@ export async function chatDesignerGraph(params: {
       selectedNodeId: params.selectedNodeId,
       references: params.references,
       history,
+      media: referenced,
     });
     chatStore.removeMessage(thinkingId);
     useDesignerRunStore.getState().applyLeaderActivity(null);
