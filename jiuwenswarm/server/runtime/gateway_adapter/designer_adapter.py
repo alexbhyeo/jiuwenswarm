@@ -364,7 +364,7 @@ def _design_workspace_messages(session_id: str) -> list[dict[str, Any]]:
 
 
 def _chat_media_from_record(raw: Any) -> list[dict[str, str]]:
-    """Rebuild a reply's inline media from what was persisted with the history
+    """Rebuild a message's inline media from what was persisted with the history
     record (snake_case on disk, camelCase on the wire)."""
     if not isinstance(raw, list):
         return []
@@ -380,6 +380,34 @@ def _chat_media_from_record(raw: Any) -> list[dict[str, str]]:
         out.append(
             {
                 "nodeId": node_id,
+                "uri": uri,
+                "kind": str(item.get("kind") or "image"),
+                **({"label": label} if label else {}),
+            }
+        )
+        if len(out) >= _CHAT_MEDIA_MAX_ITEMS:
+            break
+    return out
+
+
+def _chat_media_from_params(raw: Any) -> list[dict[str, str]]:
+    """Inline media the client sent for this turn (camelCase on the wire),
+    normalised to the snake_case shape stored in the history record — so a
+    message that refers to a generated image shows it again after a reload."""
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        node_id = str(item.get("nodeId") or item.get("node_id") or "").strip()
+        uri = str(item.get("uri") or "").strip()
+        if not node_id or not uri:
+            continue
+        label = str(item.get("label") or "").strip()
+        out.append(
+            {
+                "node_id": node_id,
                 "uri": uri,
                 "kind": str(item.get("kind") or "image"),
                 **({"label": label} if label else {}),
@@ -1382,6 +1410,10 @@ async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[di
     progress = _leader_progress_callback(request)
     history = _chat_history_from_params(params)
     attached_images = _chat_attachment_images(params.get("references"))
+    # Outputs this turn's "@Label" mentions point at (resolved client-side from
+    # the canvas), persisted so the user's bubble shows them again after a
+    # reload — the server resolves the same labels for the model's vision.
+    user_media = _chat_media_from_params(params.get("media"))
     try:
         require_llm()
         preferred_model = str((graph.get("metadata") or {}).get("model_name") or "")
@@ -1420,7 +1452,7 @@ async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[di
             content=message,
             timestamp=history_now,
             event_type="design.user",
-            extra={"design_kind": "user", "graph_id": graph_id},
+            extra={"design_kind": "user", "graph_id": graph_id, "media": user_media},
             mode="designer",
         )
     run_payload = None

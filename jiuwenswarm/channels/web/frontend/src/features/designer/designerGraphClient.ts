@@ -6,7 +6,7 @@ import type {
   DesignerGraphPatch,
   DesignerGraphSummary,
 } from './executionGraphTypes';
-import type { DesignerChatMessage } from './designerChatStore';
+import type { DesignerChatMessage, DesignerChatMedia } from './designerChatStore';
 
 export type DesignerWorkspace = {
   project: {
@@ -71,6 +71,9 @@ export const designerGraphClient = {
     runNewNodes?: boolean;
     references?: Array<Record<string, unknown>>;
     history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+    /** Outputs the message refers to with "@Label"; persisted with the turn so
+     * the bubble can show them again after a reload. */
+    media?: DesignerChatMedia[];
   }) =>
     webRequest<{
       graph: DesignerExecutionGraph;
@@ -88,6 +91,7 @@ export const designerGraphClient = {
         ...(params.runNewNodes ? { run_new_nodes: true } : {}),
         ...(params.references?.length ? { references: params.references } : {}),
         ...(params.history?.length ? { history: params.history } : {}),
+        ...(params.media?.length ? { media: params.media } : {}),
       },
       { timeoutMs: 20 * 60 * 1000 },
     ),

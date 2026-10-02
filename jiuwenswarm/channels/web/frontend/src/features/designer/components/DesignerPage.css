@@ -859,12 +859,20 @@
 .designer-chat-panel__media {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   margin-bottom: 6px;
 }
 
-.designer-chat-panel__media img,
-.designer-chat-panel__media video {
+.designer-chat-panel__media-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 96px;
+  margin: 0;
+}
+
+.designer-chat-panel__media-item img,
+.designer-chat-panel__media-item video {
   display: block;
   width: 96px;
   height: 96px;
@@ -872,6 +880,18 @@
   border-radius: 8px;
   border: 1px solid var(--color-border-default);
   background: var(--color-surface-sunken, rgba(0, 0, 0, 0.06));
+}
+
+/* The name of the node/output the image came from, shown with the thumbnail. */
+.designer-chat-panel__media-name {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
 }
 
 .designer-chat-panel__thinking {
