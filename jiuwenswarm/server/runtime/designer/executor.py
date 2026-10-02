@@ -510,6 +510,64 @@ class GraphExecutor:
         }
         return self._store.save_run(run)
 
+    def create_scoped_run_for_node(
+        self,
+        graph: DesignerExecutionGraph,
+        *,
+        node_id: str,
+    ) -> DesignerExecutionRun:
+        """Run ``node_id`` plus its ancestor chain, in dependency order.
+
+        Bootstrap authors the brief/storyboard text into *graph metadata*
+        rather than each node's ``output_ref``, so a graph that has never been
+        Played has no "completed" upstream node for
+        ``create_run_from_graph_output`` to baseline from — a chat "generate the
+        character" was refused even though the storyboard was right there in the
+        metadata. Running the ancestors first materialises them (their handlers
+        already read that metadata) and then produces the requested node,
+        without pulling in siblings such as every clip and compose.
+        """
+        node_ids = {str(node.get("id") or "") for node in graph.get("nodes", [])}
+        if node_id not in node_ids:
+            raise KeyError(f"node not found: {node_id}")
+        incoming = execution_predecessors(graph)
+        ordered: list[str] = []
+        seen: set[str] = set()
+
+        def _visit(current: str) -> None:
+            if current in seen or current not in node_ids:
+                return
+            seen.add(current)
+            for pred in incoming.get(current, []):
+                _visit(str(pred))
+            ordered.append(current)
+
+        _visit(node_id)
+        if not ordered:
+            raise ValueError(f"nothing to run for node: {node_id}")
+        now = utc_now_ms()
+        states: dict[str, DesignerNodeState] = {
+            nid: {"status": NODE_STATUS_PENDING, "output_ref": None, "output_refs": []}
+            for nid in ordered
+        }
+        run: DesignerExecutionRun = {
+            "schema_version": "designer-execution-run.v1",
+            "run_id": new_run_id(),
+            "graph_id": graph["graph_id"],
+            "project_id": graph["project_id"],
+            "status": RUN_STATUS_DRAFT,
+            "node_states": states,
+            "current_node_ids": [],
+            "created_at": now,
+            "updated_at": now,
+            "metadata": {
+                "single_node_rerun": True,
+                "scope_node_ids": ordered,
+                "baselined_from": "ancestor_chain",
+            },
+        }
+        return self._store.save_run(run)
+
     async def start_run(
         self,
         run_id: str,

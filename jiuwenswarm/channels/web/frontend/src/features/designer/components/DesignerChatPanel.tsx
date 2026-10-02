@@ -18,6 +18,7 @@ import {
   type DesignerStoredReference,
 } from '../designerReferences';
 import { DesignerAssetsPanel } from './DesignerAssetsPanel';
+import { designerAssetPreviewUrl } from '../designerAssetUrl';
 
 /** Finds the "@token" (if any) the cursor is currently inside, so the
  * composer can show a node-label autocomplete menu. Mirrors Director mode's
@@ -413,6 +414,26 @@ export function DesignerChatPanel() {
                       </span>
                     ) : (
                       <>
+                        {message.media && message.media.length > 0 ? (
+                          <div className="designer-chat-panel__media" data-testid="designer-chat-panel-media">
+                            {message.media.map((item) => {
+                              const src = designerAssetPreviewUrl(item.uri);
+                              if (!src) return null;
+                              return item.kind === 'video' ? (
+                                <video
+                                  key={item.nodeId}
+                                  src={src}
+                                  controls
+                                  playsInline
+                                  preload="metadata"
+                                  title={item.label || ''}
+                                />
+                              ) : (
+                                <img key={item.nodeId} src={src} alt={item.label || ''} title={item.label || ''} />
+                              );
+                            })}
+                          </div>
+                        ) : null}
                         <div className="designer-chat-panel__markdown">
                           <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                             {collapsibleContent(message.content, expandedMessages.has(message.id))}

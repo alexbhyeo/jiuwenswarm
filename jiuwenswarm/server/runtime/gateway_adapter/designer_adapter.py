@@ -342,6 +342,7 @@ def _design_workspace_messages(session_id: str) -> list[dict[str, Any]]:
         content = str(record.get("content") or "")
         if not content and event_type != "design.graph_updated":
             continue
+        media = _chat_media_from_record(record.get("media"))
         messages.append(
             {
                 "id": str(record.get("id") or uuid.uuid4()),
@@ -356,9 +357,37 @@ def _design_workspace_messages(session_id: str) -> list[dict[str, Any]]:
                     if isinstance(record.get("references"), list)
                     else {}
                 ),
+                **({"media": media} if media else {}),
             }
         )
     return messages
+
+
+def _chat_media_from_record(raw: Any) -> list[dict[str, str]]:
+    """Rebuild a reply's inline media from what was persisted with the history
+    record (snake_case on disk, camelCase on the wire)."""
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        node_id = str(item.get("node_id") or "").strip()
+        uri = str(item.get("uri") or "").strip()
+        if not node_id or not uri:
+            continue
+        label = str(item.get("label") or "").strip()
+        out.append(
+            {
+                "nodeId": node_id,
+                "uri": uri,
+                "kind": str(item.get("kind") or "image"),
+                **({"label": label} if label else {}),
+            }
+        )
+        if len(out) >= _CHAT_MEDIA_MAX_ITEMS:
+            break
+    return out
 
 
 def _get_design_workspace(
@@ -1152,7 +1181,15 @@ def _start_run(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | Non
             try:
                 run = _executor.create_run_from_graph_output(graph, node_id=node_id)
             except ValueError:
-                return None, "no previous run to rerun from", "BAD_REQUEST"
+                # Nothing on this graph carries an output_ref yet (bootstrap
+                # writes the brief/storyboard text to graph metadata), so no
+                # upstream looks "completed" and the single-node baseline above
+                # cannot be built. Drive the node's ancestor chain instead of
+                # refusing: the requested node then really generates.
+                try:
+                    run = _executor.create_scoped_run_for_node(graph, node_id=node_id)
+                except (ValueError, KeyError):
+                    return None, "no previous run to rerun from", "BAD_REQUEST"
             except KeyError:
                 return None, "node not found", "NOT_FOUND"
             run_id = run["run_id"]
@@ -1286,6 +1323,42 @@ def _chat_attachment_images(raw_references: Any) -> list[str]:
     return sources
 
 
+_CHAT_MEDIA_MAX_ITEMS = 8
+
+
+def _chat_media_refs(graph: dict[str, Any], node_ids: list[str]) -> list[dict[str, str]]:
+    """Outputs this chat turn generated, so the reply can show the image/video
+    inline and a reload can rebuild it from the persisted history record.
+
+    Reads each node's ``output_ref`` (the run merges completed states back onto
+    the graph before this is called) and skips placeholders, which are not real
+    files.
+    """
+    by_id = {str(node.get("id") or ""): node for node in (graph.get("nodes") or []) if isinstance(node, dict)}
+    refs: list[dict[str, str]] = []
+    for node_id in node_ids:
+        node = by_id.get(str(node_id))
+        if node is None:
+            continue
+        ref = node.get("output_ref")
+        if not isinstance(ref, dict):
+            continue
+        uri = str(ref.get("uri") or "").strip()
+        if not uri or uri.startswith("designer://"):
+            continue
+        refs.append(
+            {
+                "node_id": str(node_id),
+                "uri": uri,
+                "kind": str(ref.get("kind") or node.get("type") or "image"),
+                "label": str(node.get("label") or ""),
+            }
+        )
+        if len(refs) >= _CHAT_MEDIA_MAX_ITEMS:
+            break
+    return refs
+
+
 async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None, str | None]:
     from jiuwenswarm.server.runtime.designer.leader_chat import run_leader_chat
     from jiuwenswarm.server.runtime.designer.model_tools import (
@@ -1334,31 +1407,20 @@ async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[di
     saved = _store.save_graph(next_graph) if result.get("changed") else graph
     summary = str(result.get("summary") or "")
     session_id = str((saved.get("metadata") or {}).get("session_id") or "").strip()
+    history_request_id = request.request_id or str(uuid.uuid4())
+    history_now = time.time()
     if session_id:
         from jiuwenswarm.server.runtime.session.session_history import append_history_record
 
-        now = time.time()
-        history_request_id = request.request_id or str(uuid.uuid4())
         append_history_record(
             session_id=session_id,
             request_id=history_request_id,
             channel_id=request.channel_id or "web",
             role="user",
             content=message,
-            timestamp=now,
+            timestamp=history_now,
             event_type="design.user",
             extra={"design_kind": "user", "graph_id": graph_id},
-            mode="designer",
-        )
-        append_history_record(
-            session_id=session_id,
-            request_id=history_request_id,
-            channel_id=request.channel_id or "web",
-            role="assistant",
-            content=summary or "Updated the workflow.",
-            timestamp=now + 0.001,
-            event_type="design.graph_updated",
-            extra={"design_kind": "chat_ack", "graph_id": graph_id},
             mode="designer",
         )
     run_payload = None
@@ -1422,6 +1484,27 @@ async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[di
         elif error:
             result["summary"] = f"{result.get('summary') or ''} ({error})".strip()
             summary = str(result["summary"])
+    if session_id:
+        from jiuwenswarm.server.runtime.session.session_history import append_history_record
+
+        # Appended after the run so the persisted reply carries the finished
+        # outputs — the chat shows the generated image inline, and a reload
+        # (which rebuilds messages from history) can render it again.
+        append_history_record(
+            session_id=session_id,
+            request_id=history_request_id,
+            channel_id=request.channel_id or "web",
+            role="assistant",
+            content=summary or "Updated the workflow.",
+            timestamp=history_now + 0.001,
+            event_type="design.graph_updated",
+            extra={
+                "design_kind": "chat_ack",
+                "graph_id": graph_id,
+                "media": _chat_media_refs(saved, run_ids),
+            },
+            mode="designer",
+        )
     return {
         "graph": dict(saved),
         "summary": summary,
