@@ -81,6 +81,10 @@ Schema:
 Rules:
 - edit_graph: change topology. Leave run_node_ids empty unless the user asked to generate/run.
 - refine_node: update that node's config.prompt (and brief/storyboard text if asked). Put the target in run_node_ids so it regenerates.
+- Generate in the same turn: when the user asks you to make something new (e.g. "generate the
+  keyframe for shot 1", "生成 Shot 1 的关键帧"), both upsert the node AND put its id in
+  run_node_ids. Never leave a freshly created node as an empty placeholder and tell the user it is
+  "queued" for them to ask again — the node and its asset are produced together in this one turn.
 - A character/person node carries its real identity (what it looks like — color, costume,
   build, etc.) in config.costume_lock and the story's cast list, NOT in config.prompt — a
   character or appearance change (e.g. "change @Character 1's color to white") MUST also be
@@ -376,6 +380,8 @@ def _apply_identity_updates(
 def apply_leader_plan(
     graph: DesignerExecutionGraph,
     plan: dict[str, Any],
+    *,
+    include_new_nodes: bool = False,
 ) -> tuple[DesignerExecutionGraph, list[str], str]:
     intent = str(plan.get("intent") or "answer").strip() or "answer"
     summary = str(plan.get("summary") or "").strip()
@@ -390,6 +396,17 @@ def apply_leader_plan(
         run_ids = run_ids
     known = {str(node.get("id") or "") for node in next_graph.get("nodes") or []}
     run_ids = [item for item in run_ids if item in known]
+    if include_new_nodes:
+        # "generate the keyframe for shot 1" both creates the node and should
+        # build it. run_node_ids usually names only nodes that already existed,
+        # so a brand-new keyframe/clip landed as an empty placeholder and the
+        # user had to ask a second time to get the actual asset. Since the turn
+        # explicitly asked to generate, run the nodes this patch just added.
+        before_ids = {str(node.get("id") or "") for node in graph.get("nodes") or []}
+        for node in next_graph.get("nodes") or []:
+            node_id = str(node.get("id") or "")
+            if node_id and node_id not in before_ids and node_id not in run_ids:
+                run_ids.append(node_id)
     if not summary:
         if intent == "refine_node":
             summary = "Updated the selected node."
@@ -525,7 +542,12 @@ async def run_leader_chat(
         plan["run_node_ids"] = [selected_node_id]
 
     _emit(progress, ACTIVITY_KIND_TOOL_CALL, "designer_graph_patch", tool="designer_graph_patch")
-    next_graph, run_ids, summary = apply_leader_plan(graph, plan)
+    next_graph, run_ids, summary = apply_leader_plan(
+        graph,
+        plan,
+        # A turn that asked to generate must also build the nodes it just added.
+        include_new_nodes=message_asks_to_run(text, run_new_nodes=run_new_nodes),
+    )
     changed = next_graph is not graph and next_graph.get("updated_at") != graph.get("updated_at")
     if not changed:
         # apply_graph_patch always writes updated_at; compare node/edge identity.
