@@ -26,9 +26,14 @@ logger = logging.getLogger(__name__)
 
 ProgressFn = Callable[..., None]
 
+# A bare "确认" / "好的" / "OK" answers a proposed next stage, so it authorises
+# running it. Without these the edit_graph guard below saw no run intent and
+# wiped the plan's run_node_ids, so confirming generated nothing at all.
 _RUN_HINT = re.compile(
-    r"(生成|重跑|重生成|运行|合成|拼接|剪成|成片|出片|run\b|generate|rerun|regenerate"
-    r"|compose|stitch|concatenate|final cut)",
+    r"(生成|重跑|重生成|运行|合成|拼接|剪成|成片|出片"
+    r"|确认|确定|同意|没问题|开始|继续|就这样|好的|可以|下一步|下个步骤"
+    r"|run\b|generate|rerun|regenerate|compose|stitch|concatenate|final cut"
+    r"|\bconfirm(?:ed)?\b|\bok\b|\bokay\b|proceed|go ahead|looks good|\byes\b)",
     re.I,
 )
 _REFINE_HINT = re.compile(
@@ -40,6 +45,12 @@ _ADD_HINT = re.compile(
     re.I,
 )
 _CONNECT_HINT = re.compile(r"(接到|连到|connect(?:\s+to)?)", re.I)
+# "完成下一步" / "next step" asks for the stage the leader just proposed, whatever
+# it happens to be — so the graph, not the model, decides which nodes run.
+_NEXT_STEP_HINT = re.compile(
+    r"(下一步|下个步骤|下個步驟|下一个|接下来|next step|go ahead with the next)",
+    re.I,
+)
 _VIDEO_HINT = re.compile(r"(视频|镜头|clip|video)", re.I)
 
 _LEADER_SYSTEM = """You are the invisible Designer Leader. Reply with a JSON object only.
@@ -85,6 +96,11 @@ Rules:
   keyframe for shot 1", "生成 Shot 1 的关键帧"), both upsert the node AND put its id in
   run_node_ids. Never leave a freshly created node as an empty placeholder and tell the user it is
   "queued" for them to ask again — the node and its asset are produced together in this one turn.
+- A confirmation is a go-ahead, never a mere acknowledgement. When the user replies "确认", "好的",
+  "可以", "OK" to the next stage you just proposed, actually start that stage this turn: put its
+  exact node ids in run_node_ids (for example after a storyboard lands and you offered the
+  character sheet and scene set, run those node ids). Do not answer with a sentence saying
+  generation has begun while returning no run_node_ids.
 - A character/person node carries its real identity (what it looks like — color, costume,
   build, etc.) in config.costume_lock and the story's cast list, NOT in config.prompt — a
   character or appearance change (e.g. "change @Character 1's color to white") MUST also be
@@ -99,10 +115,16 @@ Rules:
   add downstream ids on your own.
 - Never ask the user to confirm a generated image or clip. Do not write "角色图确认后…",
   "场景图确认后，下一步…", "分镜确认后…" or any "需要我继续吗？" / "shall I continue?" question.
-  State what was produced and name the natural next stage as a plain statement, e.g.
-  "角色图已生成，下一步是场景设定图。" / "The character sheet is done; the next step is the scene
-  set." The user drives each step themselves and will ask in chat when they want a redo or a
-  refinement — do not solicit confirmation.
+  The user drives each step themselves and will ask in chat when they want a redo or a refinement —
+  do not solicit confirmation.
+- Always close by naming the next step. Every reply that produced or changed an asset must end with
+  one short line naming the natural next stage of the film pipeline (角色设定 → 场景设定 →
+  分镜/关键帧 → 镜头视频 → 合成成片), phrased as a plain statement rather than a question — for
+  example "角色图已生成，下一步是场景设定图。" / "The character sheet is done; the next step is the
+  scene set." Work out the stage from what already has an output: if the character sheet and the
+  scene are done, the next step is the storyboard/keyframes, then the shot videos, then the compose.
+  If the whole film is finished, say so and name the finished asset. Never end on a bare report of
+  what was just done.
 """
 
 
@@ -248,6 +270,135 @@ def _compose_or_sink_id(graph: DesignerExecutionGraph) -> str | None:
     return None
 
 
+# Film pipeline order, used to work out the next stage from what is already built.
+_STAGE_ORDER: tuple[str, ...] = (
+    "brief",
+    "storyboard",
+    "character_design",
+    "scene",
+    "frame",
+    "clip",
+    "compose",
+)
+_STAGE_LABELS: dict[str, tuple[str, str]] = {
+    "brief": ("创意大纲", "the creative brief"),
+    "storyboard": ("分镜脚本", "the storyboard"),
+    "character_design": ("角色设定图", "the character sheet"),
+    "scene": ("场景设定图", "the scene set"),
+    "frame": ("关键帧", "the keyframes"),
+    "clip": ("镜头视频", "the shot videos"),
+    "compose": ("成片合成", "the final compose"),
+}
+
+
+def looks_chinese(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", str(text or "")))
+
+
+def _looks_chinese(text: str) -> bool:
+    return looks_chinese(text)
+
+
+def _node_built(node: dict[str, Any]) -> bool:
+    """Whether this node already carries a real (non-placeholder) output."""
+    ref = node.get("output_ref") if isinstance(node.get("output_ref"), dict) else {}
+    uri = str((ref or {}).get("uri") or "").strip()
+    return bool(uri) and not uri.startswith("designer://")
+
+
+def _unbuilt_stages(graph: DesignerExecutionGraph) -> dict[str, list[str]]:
+    """Pipeline stage -> ids of its nodes that have nothing built yet."""
+    unbuilt: dict[str, list[str]] = {}
+    for node in graph.get("nodes") or []:
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        pipeline = str((config or {}).get("pipeline") or "").strip()
+        node_id = str(node.get("id") or "")
+        if pipeline not in _STAGE_ORDER or not node_id or _node_built(node):
+            continue
+        unbuilt.setdefault(pipeline, []).append(node_id)
+    return unbuilt
+
+
+def _next_unbuilt_stage(graph: DesignerExecutionGraph) -> str | None:
+    unbuilt = _unbuilt_stages(graph)
+    if not unbuilt:
+        return None
+    return min(unbuilt, key=_STAGE_ORDER.index)
+
+
+def next_stage_nodes(graph: DesignerExecutionGraph) -> list[str]:
+    """Ids of the nodes in the earliest pipeline stage that has nothing built."""
+    stage = _next_unbuilt_stage(graph)
+    if stage is None:
+        return []
+    return _unbuilt_stages(graph).get(stage, [])
+
+
+def next_stage_hint(graph: DesignerExecutionGraph, *, chinese: bool) -> str:
+    """Name the earliest pipeline stage that still has nothing built."""
+    stage = _next_unbuilt_stage(graph)
+    if stage is not None:
+        zh, en = _STAGE_LABELS[stage]
+        return f"下一步是{zh}。" if chinese else f"The next step is {en}."
+    staged = [
+        node
+        for node in graph.get("nodes") or []
+        if str(((node.get("config") or {}).get("pipeline") or "")).strip() in _STAGE_ORDER
+    ]
+    if staged and all(_node_built(node) for node in staged):
+        return "全部阶段均已完成，影片已生成。" if chinese else "Every stage is built; the film is complete."
+    return ""
+
+
+_NEXT_STEP_MARKERS = ("下一步", "下个步骤", "Next step", "next step")
+
+
+def replace_next_step(summary: str, graph: DesignerExecutionGraph, *, chinese: bool) -> str:
+    """Rewrite the closing next-step line from a *finished* graph.
+
+    The leader writes its summary before the run executes, so on a turn that
+    builds the last shots it still declared 下一步是镜头视频 — the clips were
+    unbuilt when it wrote that line and built by the time the user read it. This
+    is called after the run has landed, so it reports the stage that is genuinely
+    next.
+    """
+    head = summary or ""
+    for marker in _NEXT_STEP_MARKERS:
+        index = head.find(marker)
+        if index != -1:
+            head = head[:index]
+    head = head.rstrip(" \t　。．.,，;；:：、-—")
+    if head and head[-1] not in "。．.!！?？":
+        head = f"{head}{'。' if chinese else '.'}"
+    hint = next_stage_hint(graph, chinese=chinese)
+    if not hint:
+        return head or (summary or "")
+    return f"{head} {hint}".strip() if head else hint
+
+
+def with_next_step(
+    summary: str,
+    graph: DesignerExecutionGraph,
+    *,
+    instruction: str,
+    intent: str,
+) -> str:
+    """Guarantee the reply ends by naming the next step.
+
+    The system prompt asks for it, but a terse summary regularly drops it and
+    leaves the user with a report and no idea what to do next. The graph already
+    knows the answer, so append it deterministically when the model omitted it.
+    """
+    if intent == "answer":
+        return summary
+    if "下一步" in summary or "next step" in summary.lower():
+        return summary
+    hint = next_stage_hint(graph, chinese=_looks_chinese(instruction))
+    if not hint:
+        return summary
+    return f"{summary} {hint}".strip() if summary else hint
+
+
 
 def _merge_prompt_updates(graph: DesignerExecutionGraph, plan: dict[str, Any]) -> dict[str, Any]:
     patch = dict(plan.get("patch") or {})
@@ -382,6 +533,7 @@ def apply_leader_plan(
     plan: dict[str, Any],
     *,
     include_new_nodes: bool = False,
+    include_next_stage: bool = False,
 ) -> tuple[DesignerExecutionGraph, list[str], str]:
     intent = str(plan.get("intent") or "answer").strip() or "answer"
     summary = str(plan.get("summary") or "").strip()
@@ -407,6 +559,21 @@ def apply_leader_plan(
             node_id = str(node.get("id") or "")
             if node_id and node_id not in before_ids and node_id not in run_ids:
                 run_ids.append(node_id)
+    if include_next_stage:
+        # "完成下一步" asks for the next *unbuilt* stage, so resolve it from the
+        # graph and use exactly those nodes. Extending instead let the model's
+        # over-broad list through — asking for the next step re-generated all
+        # three shots when only the third was still missing.
+        staged_next = next_stage_nodes(next_graph)
+        if staged_next:
+            run_ids = [node_id for node_id in staged_next if node_id in known]
+    if include_new_nodes or include_next_stage:
+        # Run in graph order so upstream nodes build before their consumers.
+        order = {
+            str(node.get("id") or ""): index
+            for index, node in enumerate(next_graph.get("nodes") or [])
+        }
+        run_ids.sort(key=lambda nid: order.get(nid, 1 << 30))
     if not summary:
         if intent == "refine_node":
             summary = "Updated the selected node."
@@ -547,6 +714,14 @@ async def run_leader_chat(
         plan,
         # A turn that asked to generate must also build the nodes it just added.
         include_new_nodes=message_asks_to_run(text, run_new_nodes=run_new_nodes),
+        # "完成下一步" must actually run the next stage, not just describe it.
+        include_next_stage=bool(_NEXT_STEP_HINT.search(text)),
+    )
+    summary = with_next_step(
+        summary,
+        next_graph,
+        instruction=text,
+        intent=str(plan.get("intent") or ""),
     )
     changed = next_graph is not graph and next_graph.get("updated_at") != graph.get("updated_at")
     if not changed:

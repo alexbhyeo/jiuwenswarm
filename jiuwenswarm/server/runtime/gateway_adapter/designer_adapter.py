@@ -1321,7 +1321,9 @@ def _start_run(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | Non
                 # cannot be built. Drive the node's ancestor chain instead of
                 # refusing: the requested node then really generates.
                 try:
-                    run = _executor.create_scoped_run_for_node(graph, node_id=node_id)
+                    run = _executor.create_scoped_run_for_node(
+                        graph, node_id=node_id, node_ids=node_ids
+                    )
                 except (ValueError, KeyError):
                     return None, "no previous run to rerun from", "BAD_REQUEST"
             except KeyError:
@@ -1639,6 +1641,18 @@ async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[di
         elif error:
             result["summary"] = f"{result.get('summary') or ''} ({error})".strip()
             summary = str(result["summary"])
+    # The leader writes its summary before the run executes, so a turn that built
+    # the last shots still closed with "下一步是镜头视频" — true when it was written,
+    # wrong by the time the user read it. Re-resolve the closing line from the
+    # graph that now carries the finished outputs, so the next step is the compose
+    # once every shot exists.
+    from jiuwenswarm.server.runtime.designer.leader_chat import (
+        looks_chinese,
+        replace_next_step,
+    )
+
+    summary = replace_next_step(summary, saved, chinese=looks_chinese(str(message)))
+    result["summary"] = summary
     if session_id:
         from jiuwenswarm.server.runtime.session.session_history import append_history_record
 
