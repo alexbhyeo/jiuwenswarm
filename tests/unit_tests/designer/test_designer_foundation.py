@@ -660,6 +660,37 @@ async def test_running_status_is_saved_before_handler_returns(
             await task
 
 
+def test_create_scoped_run_for_node_covers_every_named_node(
+    designer_store: DesignerGraphStore,
+) -> None:
+    """A plan naming several nodes must get all their chains, not just the first.
+
+    Regression: a confirmation turn that asked for the character sheet AND the
+    scene set built only the first id's ancestor chain, while the reply announced
+    both stages — the scene stayed ungenerated until the user asked again.
+    """
+    graph = designer_store.save_graph(
+        _handler_graph(build_bootstrap_graph(project_id="proj_scoped_multi", prompt="multi")),
+    )
+    executor = GraphExecutor(designer_store)
+    ids = [str(node.get("id") or "") for node in graph["nodes"]]
+    character = next(item for item in ids if "character" in item)
+    scene = next(item for item in ids if "scene" in item)
+
+    single = executor.create_scoped_run_for_node(graph, node_id=character)
+    single_scope = list(single["metadata"]["scope_node_ids"])
+    assert scene not in single_scope, single_scope
+
+    multi = executor.create_scoped_run_for_node(
+        graph, node_id=character, node_ids=[character, scene]
+    )
+    multi_scope = list(multi["metadata"]["scope_node_ids"])
+    assert character in multi_scope
+    assert scene in multi_scope, multi_scope
+    # The run only carries the nodes it will actually build.
+    assert set(multi["node_states"]) == set(multi_scope)
+
+
 def test_create_rerun_parks_orphaned_running_and_marks_single_node(
     designer_store: DesignerGraphStore,
 ) -> None:

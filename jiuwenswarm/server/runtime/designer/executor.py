@@ -528,8 +528,9 @@ class GraphExecutor:
         graph: DesignerExecutionGraph,
         *,
         node_id: str,
+        node_ids: list[str] | None = None,
     ) -> DesignerExecutionRun:
-        """Run ``node_id`` plus its ancestor chain, in dependency order.
+        """Run ``node_id`` (or every id in ``node_ids``) plus their ancestor chains.
 
         Bootstrap authors the brief/storyboard text into *graph metadata*
         rather than each node's ``output_ref``, so a graph that has never been
@@ -539,23 +540,33 @@ class GraphExecutor:
         metadata. Running the ancestors first materialises them (their handlers
         already read that metadata) and then produces the requested node,
         without pulling in siblings such as every clip and compose.
+
+        ``node_ids`` unions the chains: a plan that asked for the character
+        sheet, the scene set and the first shot must get all three, not just
+        whichever id came first — otherwise the reply announces every stage
+        while only one is built.
         """
-        node_ids = {str(node.get("id") or "") for node in graph.get("nodes", [])}
-        if node_id not in node_ids:
-            raise KeyError(f"node not found: {node_id}")
+        targets = [str(item).strip() for item in (node_ids or []) if str(item).strip()]
+        if not targets:
+            targets = [node_id]
+        graph_node_ids = {str(node.get("id") or "") for node in graph.get("nodes", [])}
+        for target in targets:
+            if target not in graph_node_ids:
+                raise KeyError(f"node not found: {target}")
         incoming = execution_predecessors(graph)
         ordered: list[str] = []
         seen: set[str] = set()
 
         def _visit(current: str) -> None:
-            if current in seen or current not in node_ids:
+            if current in seen or current not in graph_node_ids:
                 return
             seen.add(current)
             for pred in incoming.get(current, []):
                 _visit(str(pred))
             ordered.append(current)
 
-        _visit(node_id)
+        for target in targets:
+            _visit(target)
         if not ordered:
             raise ValueError(f"nothing to run for node: {node_id}")
         now = utc_now_ms()
