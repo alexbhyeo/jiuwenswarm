@@ -519,6 +519,7 @@
       "videoConfigTitle": "Configure video understanding model",
       "videoGenConfigTitle": "Configure video generation model",
       "visualGenConfigTitle": "Configure visual generation model",
+      "audioGenConfigTitle": "Configure audio generation model",
       "editChatConfigTitle": "Configure Edit chat model",
       "toggleCapability": "Toggle {{name}} capability",
       "saveAndEnable": "Save and enable",
@@ -779,6 +780,22 @@
       "visual_gen_enabled": {
         "title": "Visual generation",
         "description": "Enable image generation tools (text-to-image); disabling it keeps the saved model configuration."
+      },
+      "audio_gen_api_base": {
+        "title": "API URL",
+        "placeholder": "e.g. https://openrouter.ai/api/v1"
+      },
+      "audio_gen_api_key": {
+        "title": "API key",
+        "placeholder": "e.g. sk-..."
+      },
+      "audio_gen_model": {
+        "title": "Model name",
+        "placeholder": "e.g. google/gemini-3.8-flash-lite-tts"
+      },
+      "audio_gen_enabled": {
+        "title": "Audio generation",
+        "description": "Enable the text-to-speech tool; disabling it keeps the saved model configuration."
       },
       "edit_chat_provider": {
         "title": "Model provider"

@@ -481,6 +481,11 @@ from jiuwenswarm.agents.harness.common.tools.video_gen_tools import (
     video_gen_configured,
     video_gen_enabled,
 )
+from jiuwenswarm.agents.harness.common.tools.audio_gen_tools import (
+    audio_gen_configured,
+    audio_gen_enabled,
+    generate_audio,
+)
 from jiuwenswarm.agents.harness.common.tools.visual_gen_tools import (
     generate_visual,
     visual_gen_configured,
@@ -1915,6 +1920,7 @@ class JiuWenSwarmDeepAdapter:
         self._image_gen_tool_registered: bool = False
         self._video_gen_tool_registered: bool = False
         self._visual_gen_tool_registered: bool = False
+        self._audio_gen_tool_registered: bool = False
         self._model: Model | None = None
         self._model_client_config: ModelClientConfig | None = None
         self._model_request_config: ModelRequestConfig | None = None
@@ -2027,6 +2033,7 @@ class JiuWenSwarmDeepAdapter:
         self._video_model_config: bool = False
         self._image_gen_model_config: bool = False
         self._video_gen_model_config: bool = False
+        self._audio_gen_model_config: bool = False
         self._visual_gen_model_config: bool = False
         self._vision_tools: list[Any] = []
         self._audio_tools: list[Any] = []
@@ -5620,6 +5627,20 @@ class JiuWenSwarmDeepAdapter:
             return False
         return True
 
+    @staticmethod
+    def _build_audio_gen_model_config(
+        config_base: dict[str, Any],
+    ) -> bool:
+        """Build DeepAgent text-to-speech config from service config/env mapping."""
+        _ = config_base
+        if not audio_gen_enabled():
+            logger.info("[JiuWenSwarmDeepAdapter] audio_gen tool skipped: Audio generation disabled")
+            return False
+        if not audio_gen_configured():
+            logger.info("[JiuWenSwarmDeepAdapter] audio_gen tool skipped: Audio generation config incomplete")
+            return False
+        return True
+
     def _iter_runtime_audio_tools(self, agent_id: str | None) -> list[Any]:
         """Return audio tools only while the audio capability is enabled."""
         if self._audio_model_config is None:
@@ -5643,6 +5664,7 @@ class JiuWenSwarmDeepAdapter:
         self._image_gen_model_config = self._build_image_gen_model_config(config_base)
         self._video_gen_model_config = self._build_video_gen_model_config(config_base)
         self._visual_gen_model_config = self._build_visual_gen_model_config(config_base)
+        self._audio_gen_model_config = self._build_audio_gen_model_config(config_base)
 
         for tool in self._vision_tools:
             tool.vision_model_config = self._vision_model_config
@@ -6130,6 +6152,14 @@ class JiuWenSwarmDeepAdapter:
             enabled=bool(self._image_gen_model_config),
             create_fn=lambda: mark_stateless([generate_image]),
             warn_label="generate_image tool",
+        )
+
+        _, self._audio_gen_tool_registered = self._sync_tool_group(
+            current_tools=mark_stateless([generate_audio]),
+            registered=self._audio_gen_tool_registered,
+            enabled=bool(self._audio_gen_model_config),
+            create_fn=lambda: mark_stateless([generate_audio]),
+            warn_label="generate_audio tool",
         )
 
         _, self._video_gen_tool_registered = self._sync_tool_group(
@@ -10299,6 +10329,19 @@ class JiuWenSwarmDeepAdapter:
             except Exception as exc:
                 logger.warning(
                     "[JiuWenSwarmDeepAdapter] generate_video tools registration failed: %s",
+                    exc,
+                )
+
+        # generate_audio tool: dedicated audio_gen model config (text-to-speech)
+        self._audio_gen_tool_registered = False
+        if self._audio_gen_model_config:
+            try:
+                self._register_shared_tool(generate_audio)
+                tool_cards.append(generate_audio.card)
+                self._audio_gen_tool_registered = True
+            except Exception as exc:
+                logger.warning(
+                    "[JiuWenSwarmDeepAdapter] generate_audio tool registration failed: %s",
                     exc,
                 )
 

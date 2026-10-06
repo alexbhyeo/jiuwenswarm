@@ -13,6 +13,7 @@ elements, each self-gated by the config source and filtered against the swarm
 * ``swarm.image_gen`` — the image-generation tool (``IMAGE_GEN_API_KEY`` gated).
 * ``swarm.video_gen`` — the video-generation tools (``models.video`` gated).
 * ``swarm.visual_gen`` — the image-generation tool (Visual processing config gated).
+* ``swarm.audio_gen`` — the text-to-speech tool (Audio generation config gated).
 * ``swarm.xiaoyi_phone`` — the xiaoyi phone tools (channel-switch gated).
 * ``swarm.code_extra_tools`` — code-mode-exclusive ``acp_chat``.
 
@@ -37,6 +38,11 @@ from openjiuwen.agent_teams.harness.manifest import (
     ElementKind,
     harness_element,
     param_field,
+)
+from jiuwenswarm.agents.harness.common.tools.audio_gen_tools import (
+    audio_gen_configured,
+    audio_gen_enabled,
+    generate_audio,
 )
 from jiuwenswarm.agents.harness.common.tools.image_tools import generate_image
 from jiuwenswarm.agents.harness.common.tools.multimodal_config import (
@@ -114,6 +120,7 @@ VIDEO = "swarm.video"
 IMAGE_GEN = "swarm.image_gen"
 VIDEO_GEN = "swarm.video_gen"
 VISUAL_GEN = "swarm.visual_gen"
+AUDIO_GEN = "swarm.audio_gen"
 XIAOYI_PHONE = "swarm.xiaoyi_phone"
 SYMPHONY_TOOLKIT = "swarm.symphony_toolkit"
 CODE_EXTRA_TOOLS = "swarm.code_extra_tools"
@@ -458,6 +465,16 @@ def _build_visual_gen_tools(ctx: SwarmBuildContext) -> list[Any]:
     return _mark_stateless([generate_visual])
 
 
+def _build_audio_gen_tools(ctx: SwarmBuildContext) -> list[Any]:
+    """Build the text-to-speech tool when enabled and the Audio generation config is complete."""
+    _ = ctx
+    if not audio_gen_enabled():
+        return []
+    if not audio_gen_configured():
+        return []
+    return _mark_stateless([generate_audio])
+
+
 def _build_xiaoyi_phone_tools(ctx: SwarmBuildContext) -> list[Any]:
     """Build xiaoyi phone tools when ``channels.xiaoyi.phone_tools_enabled``."""
     config = ctx.config or {}
@@ -573,6 +590,16 @@ def build_image_gen_tools(params: dict[str, Any], ctx: SwarmBuildContext) -> lis
 def build_video_gen_tools(params: dict[str, Any], ctx: SwarmBuildContext) -> list[Any]:
     """Build the whitelist-filtered video-generation tools."""
     return _filter_whitelist(_build_video_gen_tools(ctx))
+
+
+@harness_element(
+    kind=ElementKind.TOOL,
+    name=AUDIO_GEN,
+    description="Text-to-speech tool (built only when the Audio generation config is complete).",
+)
+def build_audio_gen_tools(params: dict[str, Any], ctx: SwarmBuildContext) -> list[Any]:
+    """Build the whitelist-filtered text-to-speech tool."""
+    return _filter_whitelist(_build_audio_gen_tools(ctx))
 
 
 @harness_element(

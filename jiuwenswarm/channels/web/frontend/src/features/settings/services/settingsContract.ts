@@ -126,6 +126,13 @@ export const SETTINGS_CONFIG_FIELDS: readonly ConfigFieldContract[] = [
   envField('visual_gen_protocol', 'agent', 'text', 'VISUAL_GEN_PROTOCOL'),
   envField('visual_gen_context_window_tokens', 'agent', 'text', 'VISUAL_GEN_CONTEXT_WINDOW_TOKENS'),
   envField('visual_gen_enabled', 'agent', 'boolean', 'VISUAL_GEN_ENABLED'),
+  // Audio processing (text-to-speech generation) - dedicated slot, separate
+  // from the audio-understanding AUDIO_* fields above. No provider/protocol:
+  // OpenRouter's TTS endpoint has a single request shape.
+  envField('audio_gen_api_base', 'agent', 'text', 'AUDIO_GEN_API_BASE'),
+  envField('audio_gen_api_key', 'agent', 'text', 'AUDIO_GEN_API_KEY'),
+  envField('audio_gen_model', 'agent', 'text', 'AUDIO_GEN_MODEL_NAME'),
+  envField('audio_gen_enabled', 'agent', 'boolean', 'AUDIO_GEN_ENABLED'),
   // Edit chat (导演模式 · 剪辑 tab conversational assistant) - dedicated
   // slot, independent of the generation slots above: a model tuned for
   // image/video generation isn't necessarily a good fit for open-ended

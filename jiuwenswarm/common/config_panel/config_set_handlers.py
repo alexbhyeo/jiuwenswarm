@@ -154,6 +154,10 @@ MULTIMODAL_RELOAD_ENV_KEYS = {
     "VISUAL_GEN_PROVIDER",
     "VISUAL_GEN_PROTOCOL",
     "VISUAL_GEN_CONTEXT_WINDOW_TOKENS",
+    "AUDIO_GEN_ENABLED",
+    "AUDIO_GEN_API_BASE",
+    "AUDIO_GEN_API_KEY",
+    "AUDIO_GEN_MODEL_NAME",
     "EDIT_CHAT_ENABLED",
     "EDIT_CHAT_API_BASE",
     "EDIT_CHAT_API_KEY",
@@ -281,6 +285,14 @@ CONFIG_SET_ENV_MAP = {
     "visual_gen_protocol": "VISUAL_GEN_PROTOCOL",
     "visual_gen_context_window_tokens": "VISUAL_GEN_CONTEXT_WINDOW_TOKENS",
     "visual_gen_enabled": "VISUAL_GEN_ENABLED",
+    # audio processing (text-to-speech generation) - dedicated slot, separate
+    # from the audio-understanding fields (audio_tools.py / AUDIO_*) above.
+    # No provider/protocol/context-window entries: OpenRouter's TTS endpoint
+    # has one request shape, so there is no vendor backend to dispatch to.
+    "audio_gen_api_base": "AUDIO_GEN_API_BASE",
+    "audio_gen_api_key": "AUDIO_GEN_API_KEY",
+    "audio_gen_model": "AUDIO_GEN_MODEL_NAME",
+    "audio_gen_enabled": "AUDIO_GEN_ENABLED",
     # 剪辑对话（导演模式 · 剪辑）- 独立的模型配置槽，与上面的 video_gen/visual_gen 无关，
     # 没有 context_window_tokens 字段。
     "edit_chat_api_base": "EDIT_CHAT_API_BASE",

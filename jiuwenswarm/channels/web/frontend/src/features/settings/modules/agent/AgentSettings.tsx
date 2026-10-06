@@ -52,6 +52,11 @@ const editChatFields = [
   'edit_chat_model',
 ] as const;
 const visualGenContextWindowField = 'visual_gen_context_window_tokens';
+const audioGenFields = [
+  'audio_gen_api_base',
+  'audio_gen_api_key',
+  'audio_gen_model',
+] as const;
 
 type SaveConfig = (updates: Record<string, string>, operation: string) => Promise<unknown>;
 
@@ -604,6 +609,122 @@ export function VisualGenSettings({ disabled }: SettingsCustomItemProps) {
           save={
             dialog.enableOnSave
               ? (updates, operation) => saveConfig({ ...updates, visual_gen_enabled: toConfigBoolean(true) }, operation)
+              : saveConfig
+          }
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+      <SettingsConfirmDialog
+        open={deleteTarget}
+        title={t('settingsPanel.agent.deleteModelTitle')}
+        message={t('settingsPanel.agent.deleteModelConfirm', { name })}
+        confirming={deleting}
+        error={deleteError}
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => {
+          if (!deleting) setDeleteTarget(false);
+        }}
+      />
+    </>
+  );
+}
+
+export function AudioGenSettings({ disabled }: SettingsCustomItemProps) {
+  const { t } = useTranslation();
+  const { isConnected } = useSettingsServices();
+  const { values, savingKeys, save } = useSettingsSource();
+  const [dialog, setDialog] = useState<{ enableOnSave: boolean } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const saveConfig: SaveConfig = (updates, operation) => save(updates, operation);
+
+  const configured = audioGenFields.every((name) => String(values[name] ?? '').trim());
+  const enabled = configured && parseConfigBoolean(values.audio_gen_enabled);
+  const busy = [...audioGenFields, 'audio_gen_enabled'].some((field) => savingKeys.has(field));
+  const name = t('settingsPanel.fields.audio_gen_enabled.title');
+
+  const toggle = async (nextEnabled: boolean) => {
+    if (nextEnabled && !configured) {
+      setDialog({ enableOnSave: true });
+      return;
+    }
+    try {
+      await saveConfig({ audio_gen_enabled: toConfigBoolean(nextEnabled) }, 'settingsPanel.fields.audio_gen_enabled.title');
+    } catch {
+      // Surfaced via savingKeys/isConnected state already; nothing further to do here.
+    }
+  };
+
+  const confirmDelete = async () => {
+    const updates: Record<string, string> = Object.fromEntries(audioGenFields.map((field) => [field, '']));
+    if (parseConfigBoolean(values.audio_gen_enabled)) {
+      updates.audio_gen_enabled = toConfigBoolean(false);
+    }
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await saveConfig(updates, 'settingsPanel.fields.audio_gen_enabled.title');
+      setDeleteTarget(false);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : t('settingsPanel.feedback.saveFailed'));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <>
+      <SettingRow
+        className="settings-agent-media__row"
+        title={name}
+        description={t('settingsPanel.fields.audio_gen_enabled.description')}
+        subSettings={
+          configured ? (
+            <div className="settings-agent-media__model-card">
+              <strong className="settings-agent-media__model-name">{String(values.audio_gen_model)}</strong>
+              <div className="settings-agent-media__actions">
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  icon={<settingsActionIcons.edit aria-hidden />}
+                  title={t('common.modify')}
+                  aria-label={`${t('common.modify')} ${name}`}
+                  disabled={disabled || !isConnected || busy}
+                  onClick={() => setDialog({ enableOnSave: false })}
+                />
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  icon={<settingsActionIcons.delete aria-hidden />}
+                  title={t('common.delete')}
+                  aria-label={`${t('common.delete')} ${name}`}
+                  disabled={disabled || !isConnected || busy}
+                  onClick={() => {
+                    setDeleteError('');
+                    setDeleteTarget(true);
+                  }}
+                />
+              </div>
+            </div>
+          ) : null
+        }
+      >
+        <Switch
+          checked={enabled}
+          disabled={disabled || !isConnected || busy}
+          aria-label={t('settingsPanel.agent.toggleCapability', { name })}
+          onChange={(nextEnabled) => void toggle(nextEnabled)}
+        />
+      </SettingRow>
+      {dialog ? (
+        <AgentConfigDialog
+          titleKey="settingsPanel.agent.audioGenConfigTitle"
+          fields={audioGenFields}
+          config={values}
+          save={
+            dialog.enableOnSave
+              ? (updates, operation) => saveConfig({ ...updates, audio_gen_enabled: toConfigBoolean(true) }, operation)
               : saveConfig
           }
           onClose={() => setDialog(null)}
