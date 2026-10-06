@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import secrets
 import shutil
@@ -25,6 +26,11 @@ from jiuwenswarm.agents.harness.common.tools.audio_gen_tools import (
     audio_gen_enabled,
     generate_audio,
 )
+from jiuwenswarm.agents.harness.common.tools.multimodal_config import (
+    apply_video_model_config_from_yaml,
+)
+from jiuwenswarm.agents.harness.common.tools.video_tools import video_understanding
+from jiuwenswarm.common.config import get_config
 from jiuwenswarm.agents.harness.common.tools.video_gen_tools import (
     check_video_status,
     generate_video,
@@ -53,10 +59,35 @@ from jiuwenswarm.server.runtime.director.director_store import (
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_MODES = ("video", "image", "audio", "character")
+_SUPPORTED_MODES = ("video", "image", "audio", "video2audio", "character")
 
 _RE_STILL_RUNNING_JOB_ID = re.compile(r"^Video job (\S+) submitted and still")
 _RE_SAVED_TO = re.compile(r"Saved to:\s*(.+)")
+
+# 视频生音频的第一步：让视频理解模型把画面写成“可直接朗读”的解说文案。
+# 明确要求只输出旁白正文，避免把标题/分镜/时间码/markdown 一起念出来。
+_NARRATION_PROMPT = (
+    "观看这段视频，为它写一段中文解说旁白：内容贴合画面，语气自然连贯，"
+    "长度适合这段视频的时长。只输出旁白正文本身，不要标题、分镜说明、"
+    "时间码、markdown 标记或任何解释性文字。"
+)
+
+
+def _video_understanding_configured() -> bool:
+    """视频理解是否可用——视频生音频的第一步要用它写解说文案。
+
+    与 ``video_tools.video_understanding`` 自己的取配置顺序保持一致：先把
+    config.yaml 的 models.video 映射进环境变量，再看 key/base 是否齐全；
+    不先做这一步，就会在“config.yaml 里配了、.env 里没写”时误报未配置。
+    """
+    try:
+        apply_video_model_config_from_yaml(get_config())
+    except Exception:  # noqa: BLE001 - 读配置失败按“未配置”处理，由上层给出明确提示
+        logger.warning("[DirectorManager] video model config refresh failed", exc_info=True)
+    return bool(
+        os.environ.get("VIDEO_API_KEY", "").strip()
+        and os.environ.get("VIDEO_API_BASE", "").strip()
+    )
 
 _EDIT_CHAT_SYSTEM_PROMPT = (
     "你是「导演模式 · 剪辑」里的视频创作助手，帮用户把一个故事构想变成可以"
@@ -408,7 +439,16 @@ class DirectorManager:
             if isinstance(raw_reference_asset_ids, list)
             else []
         )
-        has_explicit_reference = bool(first_frame_asset_id or last_frame_asset_id or reference_asset_ids)
+        input_video_asset_id = str(params.get("input_video_asset_id") or "").strip()
+        # 显式连线本身就是一次完整的请求——视频生音频只连了一路视频、没写
+        # 任何文案时同样如此（解说文案由视频理解自己写出来），所以输入视频
+        # 也要算进“有显式引用”，不能被下面的空提示词校验拦住。
+        has_explicit_reference = bool(
+            first_frame_asset_id
+            or last_frame_asset_id
+            or reference_asset_ids
+            or input_video_asset_id
+        )
 
         if not project_id:
             raise DirectorRpcError("INVALID_PARAMS", "缺少 project_id")
@@ -493,6 +533,61 @@ class DirectorManager:
                 voice=voice,
                 save_dir=save_dir,
             )
+        elif mode == "video2audio":
+            # 视频生音频 = 串两步现有能力：视频理解写解说文案 → TTS 配音。
+            # 两步各有自己的配置槽位，缺哪个就明确说缺哪个，而不是丢一个
+            # 笼统的失败。
+            if not (audio_gen_enabled() and audio_gen_configured()):
+                raise DirectorRpcError("NOT_CONFIGURED", "语音生成未配置，请先在设置中配置「语音生成」")
+            if not _video_understanding_configured():
+                raise DirectorRpcError(
+                    "NOT_CONFIGURED",
+                    "视频理解未配置，请先在设置中配置「视频理解」（视频生音频需要它来写解说文案）",
+                )
+            video_asset = next(
+                (
+                    a
+                    for a in project.assets
+                    if a.asset_id == input_video_asset_id
+                    and a.type == "video"
+                    and a.status == "ready"
+                    and a.file_path
+                ),
+                None,
+            )
+            if video_asset is None:
+                raise DirectorRpcError("INVALID_PARAMS", "视频生音频需要先连接一个已就绪的视频素材")
+            # 文本节点里写的额外要求（比如“活泼一点、适合短视频”）拼进解说
+            # 提示词；没连文本节点就是纯自动解说。
+            narration_prompt = (
+                f"{_NARRATION_PROMPT}\n\n用户对这段解说的额外要求：{prompt}"
+                if prompt
+                else _NARRATION_PROMPT
+            )
+            script = (
+                await video_understanding._func(
+                    {"query": narration_prompt, "video_path": video_asset.file_path}
+                )
+                or ""
+            ).strip()
+            if not script or script.startswith("[ERROR]:"):
+                raise DirectorRpcError("GENERATION_FAILED", script or "视频理解没有返回解说文案")
+            voice = str(params.get("voice") or "").strip()
+            # 把生成的解说文案一并存进 params：文案与音频是一一对应的，
+            # 事后想改文案重新配音时不必再理解一遍视频。input_video_path 同时
+            # 供前端 buildFlowFromChat 还原依赖连线用（与 first_frame_path /
+            # reference_image_paths 同一套路子）。
+            gen_params = {
+                "script": script,
+                "input_video_asset_id": video_asset.asset_id,
+                "input_video_path": video_asset.file_path,
+            }
+            if voice:
+                gen_params["voice"] = voice
+            # 资产 prompt 字段的回退值（见下方 prompt or cleaned_prompt）：用户
+            # 没写额外要求时，展示生成出来的解说文案比展示空字符串有用。
+            cleaned_prompt = script
+            result_str = await generate_audio._func(text=script, voice=voice, save_dir=save_dir)
         else:
             if not (visual_gen_enabled() and visual_gen_configured()):
                 raise DirectorRpcError("NOT_CONFIGURED", "图片生成未配置，请先在设置中配置「图片处理」")
@@ -528,9 +623,13 @@ class DirectorManager:
         if parsed["status"] == "failed":
             raise DirectorRpcError("GENERATION_FAILED", parsed.get("error") or result_str)
 
+        # video2audio 的产物是一段语音：mode 说的是"怎么生成的"，asset.type
+        # 说的是"生成出来的是什么"。前端按 video/image/audio/character 四类
+        # 分栏展示，asset_counts 也只统计这四类，所以必须归到 audio。
+        asset_type = "audio" if mode == "video2audio" else mode
         asset = DirectorAsset(
             asset_id=f"asset_{secrets.token_hex(4)}",
-            type=mode,
+            type=asset_type,
             status=parsed["status"],
             prompt=prompt or cleaned_prompt,
             params=gen_params,

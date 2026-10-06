@@ -232,3 +232,31 @@ async def test_audio_mode_without_voice_leaves_params_empty(
 
     assert _asset_of(result)["params"] == {}
     assert tool.calls[0]["voice"] == ""
+
+
+async def test_audio_mode_ignores_visual_params_sent_by_the_lab(
+    manager: DirectorManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every Lab process card sends aspect/resolution/duration; the audio branch
+    must ignore them instead of choking on unexpected keys."""
+    _configure_audio(monkeypatch)
+    project_id = await _create_project(manager)
+    tool = _stub_tool(monkeypatch, "Audio generated successfully!\nSaved to: /tmp/x.wav")
+
+    result = await manager.handle_director_generate(
+        {
+            "project_id": project_id,
+            "mode": "audio",
+            "prompt": "游过平静的海面",
+            "voice": "Leda",
+            "aspect_ratio": "16:9",
+            "resolution": "720p",
+            "duration_seconds": 15,
+        }
+    )
+
+    asset = _asset_of(result)
+    assert asset["type"] == "audio"
+    # Only the voice is meaningful for TTS - no visual params leak into the asset.
+    assert asset["params"] == {"voice": "Leda"}
+    assert tool.calls[0]["text"] == "游过平静的海面"

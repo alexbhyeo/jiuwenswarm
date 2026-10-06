@@ -287,12 +287,18 @@ duplicated server-side.
 
 Lab process card kinds (`labTypes.ts`):
 
-| `ProcessKind` | Mode | Image ports | Notes |
-|---------------|------|-------------|-------|
-| `text2image` | image | 0 | |
-| `text2video` | video | 0 | |
-| `image2video` | video | 2 | Distinct first/last-frame slots; one edge each. |
-| `imageRef` | image | 1 | The single port accepts **multiple** edges (multi-reference). |
+| `ProcessKind` | Mode | Image ports | Video ports | Notes |
+|---------------|------|-------------|-------------|-------|
+| `text2image` | image | 0 | 0 | |
+| `text2video` | video | 0 | 0 | |
+| `image2video` | video | 2 | 0 | Distinct first/last-frame slots; one edge each. |
+| `imageRef` | image | 1 | 0 | The single port accepts **multiple** edges (multi-reference). |
+| `text2audio` | audio | 0 | 0 | Text-to-speech (`generate_audio`). Text-only: no reference ports, and the params popover swaps aspect/resolution/duration for a voice picker. Its output node is an `audio` node wrapping `<audio controls>`. |
+| `video2audio` | audio | 0 | 1 | 视频生音频: chains two existing capabilities — `video_understanding` writes a narration script from the connected video, then `generate_audio` speaks it. The `video1` port accepts video nodes only, and the optional text node's content is appended to the narration prompt as extra requirements. Its persisted asset is an **`audio`** asset (not `video2audio`) whose `params` carry `script` / `input_video_path`; `buildFlowFromChat` uses `input_video_path` to redraw the dependency edge. Needs **both** the 语音生成 and 视频理解 slots configured. |
+
+Port capacity is declared by `PROCESS_KIND_MAX_IMAGES` / `PROCESS_KIND_MAX_VIDEOS`,
+so adding a port to a new kind is a one-line change plus the matching `<Handle>`
+row in `ProcessNode.tsx`.
 
 ---
 

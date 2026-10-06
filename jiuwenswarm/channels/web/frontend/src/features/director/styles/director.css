@@ -2170,6 +2170,22 @@
   display: block;
 }
 
+/* 音频输出卡片没有画面：4:3 的视频画框对播放器毫无意义，压到一行播放器
+   的高度，并让 <audio> 撑满宽度（上面 img/video 的规则不覆盖 audio）。 */
+.lab-node-media--audio {
+  aspect-ratio: auto;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  box-sizing: border-box;
+}
+
+.lab-node-media--audio audio {
+  width: 100%;
+  display: block;
+}
+
 .lab-node-media-actions {
   position: absolute;
   top: 6px;

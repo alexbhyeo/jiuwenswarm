@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useDirectorStore } from '../directorStore';
 import { ModeSegmentedControl } from './ModeSegmentedControl';
 import { ParamPillDropdown } from './ParamPillDropdown';
+import { AUDIO_VOICE_OPTIONS } from '../audioVoices';
 
 const attachIcon = (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
@@ -46,38 +47,8 @@ const CHARACTER_STYLE_OPTIONS = [
   '油画',
 ];
 
-/** 音频（语音合成）模式的音色。Gemini TTS 系列公开的音色名，直接作为请求里
- *  的 voice 字段值传给服务商；不在列表里的音色仍可手动输入，服务商会对
- *  不支持的音色返回明确错误。 */
-const AUDIO_VOICE_OPTIONS = [
-  'Zephyr',
-  'Puck',
-  'Charon',
-  'Kore',
-  'Fenrir',
-  'Leda',
-  'Orus',
-  'Aoede',
-  'Callirrhoe',
-  'Autonoe',
-  'Enceladus',
-  'Iapetus',
-  'Umbriel',
-  'Algieba',
-  'Despina',
-  'Erinome',
-  'Algenib',
-  'Rasalgethi',
-  'Laomedeia',
-  'Achernar',
-  'Alnilam',
-  'Schedar',
-  'Gacrux',
-  'Pulcherrima',
-  'Achird',
-  'Zubenelgenubi',
-  'Vindemiatrix',
-];
+// 音色列表见 ../audioVoices——和实验室的文生音频卡片共用一份，避免两处
+// 清单各自维护后分叉。
 
 interface AtMenuState {
   start: number;

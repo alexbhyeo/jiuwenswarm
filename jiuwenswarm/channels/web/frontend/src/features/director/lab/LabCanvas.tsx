@@ -22,14 +22,17 @@ import type { DirectorAsset, DirectorAssetDragPayload, GenerateParams } from '..
 import { LabActionsProvider, type ResolvedGenerateInput } from './LabActionsContext';
 import { ImageNode } from './nodes/ImageNode';
 import { VideoNode } from './nodes/VideoNode';
+import { AudioNode } from './nodes/AudioNode';
 import { TextNode } from './nodes/TextNode';
 import { ProcessNode } from './nodes/ProcessNode';
-import type { ImageNodeData, ProcessKind, ProcessNodeData } from './labTypes';
+import { DEFAULT_AUDIO_VOICE } from '../audioVoices';
+import type { ImageNodeData, ProcessKind, ProcessMode, ProcessNodeData } from './labTypes';
 import { PROCESS_KIND_MODE, PROCESS_KIND_MULTI_REF } from './labTypes';
 
 const nodeTypes: NodeTypes = {
   image: ImageNode,
   video: VideoNode,
+  audio: AudioNode,
   text: TextNode,
   process: ProcessNode,
 };
@@ -50,6 +53,7 @@ function timerKey(nodeId: string, slotIndex: number): string {
 
 const IMAGE_PROCESS_KINDS: ProcessKind[] = ['text2image', 'imageRef'];
 const VIDEO_PROCESS_KINDS: ProcessKind[] = ['text2video', 'image2video'];
+const AUDIO_PROCESS_KINDS: ProcessKind[] = ['text2audio', 'video2audio'];
 
 // director.generate 的客户端超时（GENERATE_TIMEOUT_MS，见 directorApi.ts）
 // 只是前端等不下去了主动放弃——WS 请求本身没有取消机制，后端那次
@@ -83,7 +87,15 @@ const videoGroupIcon = (
   </svg>
 );
 
-type ToolrailMenu = 'image' | 'video' | null;
+const audioGroupIcon = (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M9 18V6l10-2v12" />
+    <circle cx="6.5" cy="18" r="2.5" />
+    <circle cx="16.5" cy="16" r="2.5" />
+  </svg>
+);
+
+type ToolrailMenu = 'image' | 'video' | 'audio' | null;
 
 // 画布持久化的 debounce 间隔：节点拖拽/连线时会连续触发多次
 // onNodesChange/onEdgesChange，等操作停下来一小段时间再落盘一次，避免
@@ -167,6 +179,8 @@ function LabCanvasInner() {
       if (connection.targetHandle === 'image1' || connection.targetHandle === 'image2') {
         return sourceNode.type === 'image';
       }
+      // 视频生音频的输入视频端口：只接受视频输出节点。
+      if (connection.targetHandle === 'video1') return sourceNode.type === 'video';
       return true;
     },
     [nodes]
@@ -265,6 +279,8 @@ function LabCanvasInner() {
         aspectRatio: '16:9',
         resolution: mode === 'video' ? '720p' : '512',
         durationSeconds: 5,
+        // 仅 text2audio（文生音频）会读取；图片/视频卡片忽略它。
+        voice: DEFAULT_AUDIO_VOICE,
         outputCount: 1,
       };
       addNode({ id, type: 'process', position, data });
@@ -349,7 +365,10 @@ function LabCanvasInner() {
   // 超时里"捞回"迟到结果的路径，都要做这同一件事，所以抽成共享函数。
   const applyGenerateResult = useCallback(
     (nodeId: string, node: Node, outputAsset: DirectorAsset | undefined, slotIndex: number): string => {
-      const outputType = outputAsset?.type === 'video' ? 'video' : 'image';
+      // 产物类型决定输出节点用哪个渲染器：视频/音频各有自己的播放器，
+      // 其余（图片、角色）都走图片节点。
+      const outputType =
+        outputAsset?.type === 'video' ? 'video' : outputAsset?.type === 'audio' ? 'audio' : 'image';
 
       // 按"这个节点自己记的 slotIndex 是否等于我要找的槽位号"查找，不能用
       // 排序后数组的下标当槽位号——并发时各槽位落定的先后顺序是任意的
@@ -435,7 +454,7 @@ function LabCanvasInner() {
       node: Node,
       projectId: string,
       priorAssetIds: Set<string>,
-      mode: 'video' | 'image',
+      mode: ProcessMode,
       slotIndex: number,
       attempt = 0
     ) => {
@@ -493,7 +512,7 @@ function LabCanvasInner() {
       nodeId: string,
       node: Node,
       data: ProcessNodeData,
-      mode: 'video' | 'image',
+      mode: ProcessMode,
       prompt: string,
       resolved: ResolvedGenerateInput,
       projectId: string,
@@ -510,7 +529,12 @@ function LabCanvasInner() {
           resolution: data.resolution,
           durationSeconds: data.durationSeconds,
         };
-        if (mode === 'video') {
+        if (mode === 'audio') {
+          // 文生音频只吃文本 + 音色；视频生音频（连了 video1）在后端会先用
+          // 视频理解写解说文案再配音，这里只要把输入视频和音色带上。
+          params.voice = data.voice || DEFAULT_AUDIO_VOICE;
+          if (resolved.video1?.assetId) params.inputVideoAssetId = resolved.video1.assetId;
+        } else if (mode === 'video') {
           if (resolved.image1?.assetId) params.firstFrameAssetId = resolved.image1.assetId;
           if (resolved.image2?.assetId) params.lastFrameAssetId = resolved.image2.assetId;
         } else {
@@ -699,7 +723,7 @@ function LabCanvasInner() {
       firstFramePath: string | null;
       lastFramePath: string | null;
       kind: ProcessKind;
-      mode: 'image' | 'video';
+      mode: ProcessMode;
       /** 这个素材实际依赖的其它素材 id（不管是这次新摆的还是已经在画布上
        *  的老素材），按引用顺序去重。 */
       depAssetIds: string[];
@@ -720,20 +744,28 @@ function LabCanvasInner() {
           : [];
       const firstFramePath = typeof params.first_frame_path === 'string' ? params.first_frame_path : null;
       const lastFramePath = typeof params.last_frame_path === 'string' ? params.last_frame_path : null;
+      // 视频生音频把自己的输入视频路径也存进了 params，这里照旧还原成一条
+      // 依赖连线（与首帧/尾帧/参考图同一套路子）。
+      const inputVideoPath = typeof params.input_video_path === 'string' ? params.input_video_path : null;
 
+      const isAudio = asset.type === 'audio';
       const isVideo = asset.type === 'video';
-      const kind: ProcessKind = isVideo
-        ? firstFramePath || lastFramePath
-          ? 'image2video'
-          : 'text2video'
-        : referenceImagePaths.length > 0
-          ? 'imageRef'
-          : 'text2image';
+      const kind: ProcessKind = isAudio
+        ? inputVideoPath
+          ? 'video2audio'
+          : 'text2audio'
+        : isVideo
+          ? firstFramePath || lastFramePath
+            ? 'image2video'
+            : 'text2video'
+          : referenceImagePaths.length > 0
+            ? 'imageRef'
+            : 'text2image';
       const mode = PROCESS_KIND_MODE[kind];
 
       const depAssetIds = Array.from(
         new Set(
-          [...referenceImagePaths, firstFramePath, lastFramePath]
+          [...referenceImagePaths, firstFramePath, lastFramePath, inputVideoPath]
             .filter((p): p is string => !!p)
             .map((p) => assetIdByFilePath.get(p))
             .filter((id): id is string => !!id && id !== assetId)
@@ -1062,6 +1094,26 @@ function LabCanvasInner() {
             {openMenu === 'video' && (
               <div className="lab-add-menu lab-add-menu--side">
                 {VIDEO_PROCESS_KINDS.map((kind) => (
+                  <button type="button" key={kind} onClick={() => handleAddProcess(kind)}>
+                    {t(`director.lab.process.${kind}`)}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="lab-toolrail-item">
+            <button
+              type="button"
+              className={`lab-toolrail-btn ${openMenu === 'audio' ? 'lab-toolrail-btn--active' : ''}`}
+              title={t('director.lab.audioGroup')}
+              onClick={() => setOpenMenu((v) => (v === 'audio' ? null : 'audio'))}
+            >
+              {audioGroupIcon}
+            </button>
+            {openMenu === 'audio' && (
+              <div className="lab-add-menu lab-add-menu--side">
+                {AUDIO_PROCESS_KINDS.map((kind) => (
                   <button type="button" key={kind} onClick={() => handleAddProcess(kind)}>
                     {t(`director.lab.process.${kind}`)}
                   </button>

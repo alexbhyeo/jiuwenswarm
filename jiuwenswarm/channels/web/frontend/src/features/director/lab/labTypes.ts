@@ -3,13 +3,19 @@
 // 快照随 DirectorProject.lab_nodes/lab_edges 一起持久化（见 LabCanvas.tsx
 // 的 debounce 保存），切换 tab 或刷新页面都不会丢。
 
-export type ProcessKind = 'text2image' | 'text2video' | 'image2video' | 'imageRef';
+export type ProcessKind = 'text2image' | 'text2video' | 'image2video' | 'imageRef' | 'text2audio' | 'video2audio';
 
-export const PROCESS_KIND_MODE: Record<ProcessKind, 'image' | 'video'> = {
+/** 处理节点的产物类型。audio 走 generate_audio（文生音频）：与 image/video
+ *  一样是一张处理卡片 + 一张输出节点，只是输出节点渲染成音频播放器。 */
+export type ProcessMode = 'image' | 'video' | 'audio';
+
+export const PROCESS_KIND_MODE: Record<ProcessKind, ProcessMode> = {
   text2image: 'image',
   text2video: 'video',
   image2video: 'video',
   imageRef: 'image',
+  text2audio: 'audio',
+  video2audio: 'audio',
 };
 
 /** 每种处理节点渲染几个不同的图片输入端口——与后端 generate_video（首帧+
@@ -21,6 +27,22 @@ export const PROCESS_KIND_MAX_IMAGES: Record<ProcessKind, number> = {
   text2video: 0,
   image2video: 2,
   imageRef: 1,
+  // 语音合成只吃文本（见 audio_gen_tools.generate_audio），没有参考图端口。
+  text2audio: 0,
+  // 视频生音频的输入是视频不是图（见 PROCESS_KIND_MAX_VIDEOS）。
+  video2audio: 0,
+};
+
+/** 每种处理节点渲染几个视频输入端口。目前只有 video2audio（视频生音频）
+ *  需要一路输入视频（先用视频理解写成解说文案，再用 TTS 配音），其余
+ *  卡片都不吃视频。 */
+export const PROCESS_KIND_MAX_VIDEOS: Record<ProcessKind, number> = {
+  text2image: 0,
+  text2video: 0,
+  image2video: 0,
+  imageRef: 0,
+  text2audio: 0,
+  video2audio: 1,
 };
 
 /** 哪些处理节点的 image1 端口允许同时接多条连线——imageRef（"图片参考"）
@@ -52,6 +74,16 @@ export interface VideoNodeData {
   slotIndex?: number;
 }
 
+/** 音频输出节点（文生音频的产物）。字段与 VideoNodeData 一致——两者都只是
+ *  “一个可播放的产物 + 名字”，渲染成 <audio> 还是 <video> 由节点类型决定。 */
+export interface AudioNodeData {
+  [key: string]: unknown;
+  assetId: string | null;
+  filePath: string;
+  name: string;
+  slotIndex?: number;
+}
+
 export interface TextNodeData {
   [key: string]: unknown;
   text: string;
@@ -69,6 +101,9 @@ export interface ProcessNodeData {
   aspectRatio: string;
   resolution: string;
   durationSeconds: number;
+  /** 仅 text2audio（文生音频）使用：TTS 音色名。旧数据没有这个字段时按
+   *  DEFAULT_AUDIO_VOICE 处理。 */
+  voice?: string;
   /** 一次"生成"要产出几份独立结果（1-5），每份各自成一个输出节点，从
    *  同一个 "out" 端口扇出多条连线——不是同一份结果的多个帧，而是同样的
    *  提示词/参数各自独立生成 N 次，供用户挑选。旧数据没有这个字段时按 1

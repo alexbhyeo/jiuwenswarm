@@ -141,6 +141,7 @@
       "addText": "添加问题节点",
       "imageGroup": "图片生成",
       "videoGroup": "视频生成",
+      "audioGroup": "音频生成",
       "dragHint": "也可以从左侧「素材」面板拖拽图片或视频到画布",
       "firstFrame": "首帧图片",
       "lastFrame": "尾帧图片",
@@ -149,6 +150,8 @@
       "aspectRatioLabel": "宽高比",
       "resolutionLabel": "分辨率",
       "durationLabel": "时长",
+      "voiceLabel": "音色",
+      "inputVideo": "输入视频",
       "outputCountLabel": "输出数量",
       "buildFlowFromChat": "生成实验室流程图",
       "buildFlowFromChatEmpty": "对话里还没有可以摆成流程图的生成结果",
@@ -156,7 +159,9 @@
         "text2image": "文生图",
         "text2video": "文生视频",
         "image2video": "图生视频",
-        "imageRef": "图生图"
+        "imageRef": "图生图",
+        "text2audio": "文生音频",
+        "video2audio": "视频生音频"
       }
     },
     "edit": {

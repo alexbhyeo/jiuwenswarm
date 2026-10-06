@@ -3,6 +3,7 @@
 
 import { create } from 'zustand';
 import i18n from '../../i18n';
+import { DEFAULT_AUDIO_VOICE } from './audioVoices';
 import type {
   ComposerMode,
   ComposerParams,
@@ -17,7 +18,7 @@ const DEFAULT_COMPOSER_PARAMS: ComposerParams = {
   resolution: '720p',
   durationSeconds: 15,
   generateAudio: false,
-  voice: 'Kore',
+  voice: DEFAULT_AUDIO_VOICE,
   characterStyle: '写实摄影',
 };
 

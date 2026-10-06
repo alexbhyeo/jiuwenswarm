@@ -78,6 +78,8 @@ export interface GenerateParams {
   generateAudio?: boolean;
   /** 仅 音频 模式使用：TTS 音色名。 */
   voice?: string;
+  /** 仅 video2audio（视频生音频）使用：用作解说素材的输入视频素材 id。 */
+  inputVideoAssetId?: string;
   /** 实验室节点画布：连线的显式引用（asset_id），绕开 composer 的
    *  "@名称" 文本解析。video 模式下最多首帧+尾帧两个；image 模式下可以是
    *  "图片参考" 卡片上连的一张或多张参考图（多参考图合成）。 */

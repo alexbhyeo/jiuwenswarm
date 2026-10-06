@@ -14,6 +14,9 @@ export interface ResolvedGenerateInput {
    *  顺序排列，可以是一张或多张（见 PROCESS_KIND_MULTI_REF）。其它处理
    *  卡片这里始终是空数组，仍然只用上面的 image1/image2。 */
   images: { assetId: string | null; filePath: string }[];
+  /** video2audio（视频生音频）处理卡片：video1 端口上连的那路输入视频。
+   *  其它处理卡片这里始终为 null。 */
+  video1: { assetId: string | null; filePath: string } | null;
 }
 
 export interface LabActions {
