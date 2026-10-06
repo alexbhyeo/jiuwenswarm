@@ -46,6 +46,39 @@ const CHARACTER_STYLE_OPTIONS = [
   '油画',
 ];
 
+/** 音频（语音合成）模式的音色。Gemini TTS 系列公开的音色名，直接作为请求里
+ *  的 voice 字段值传给服务商；不在列表里的音色仍可手动输入，服务商会对
+ *  不支持的音色返回明确错误。 */
+const AUDIO_VOICE_OPTIONS = [
+  'Zephyr',
+  'Puck',
+  'Charon',
+  'Kore',
+  'Fenrir',
+  'Leda',
+  'Orus',
+  'Aoede',
+  'Callirrhoe',
+  'Autonoe',
+  'Enceladus',
+  'Iapetus',
+  'Umbriel',
+  'Algieba',
+  'Despina',
+  'Erinome',
+  'Algenib',
+  'Rasalgethi',
+  'Laomedeia',
+  'Achernar',
+  'Alnilam',
+  'Schedar',
+  'Gacrux',
+  'Pulcherrima',
+  'Achird',
+  'Zubenelgenubi',
+  'Vindemiatrix',
+];
+
 interface AtMenuState {
   start: number;
   query: string;
@@ -166,7 +199,9 @@ export function ComposerCard() {
               ? t('director.composer.placeholderVideo')
               : composerMode === 'character'
                 ? t('director.composer.placeholderCharacter')
-                : t('director.composer.placeholderImage')
+                : composerMode === 'audio'
+                  ? t('director.composer.placeholderAudio')
+                  : t('director.composer.placeholderImage')
           }
           value={composerPrompt}
           onChange={handleTextareaChange}
@@ -203,18 +238,32 @@ export function ComposerCard() {
             {attachIcon}
           </button>
           <div className="director-toolbar-divider" />
-          <ParamPillDropdown
-            value={composerParams.aspectRatio}
-            label={composerParams.aspectRatio}
-            options={ASPECT_OPTIONS.map((v) => ({ value: v, label: v }))}
-            onChange={(v) => patchComposerParams({ aspectRatio: v })}
-          />
-          <ParamPillDropdown
-            value={composerParams.resolution}
-            label={composerParams.resolution}
-            options={resolutionOptions.map((v) => ({ value: v, label: v }))}
-            onChange={(v) => patchComposerParams({ resolution: v })}
-          />
+          {/* 音频模式没有画面宽高比/分辨率可选（它们是视频/图片专有参数），
+              改用音色下拉。 */}
+          {composerMode !== 'audio' && (
+            <>
+              <ParamPillDropdown
+                value={composerParams.aspectRatio}
+                label={composerParams.aspectRatio}
+                options={ASPECT_OPTIONS.map((v) => ({ value: v, label: v }))}
+                onChange={(v) => patchComposerParams({ aspectRatio: v })}
+              />
+              <ParamPillDropdown
+                value={composerParams.resolution}
+                label={composerParams.resolution}
+                options={resolutionOptions.map((v) => ({ value: v, label: v }))}
+                onChange={(v) => patchComposerParams({ resolution: v })}
+              />
+            </>
+          )}
+          {composerMode === 'audio' && (
+            <ParamPillDropdown
+              value={composerParams.voice}
+              label={composerParams.voice}
+              options={AUDIO_VOICE_OPTIONS.map((v) => ({ value: v, label: v }))}
+              onChange={(v) => patchComposerParams({ voice: v })}
+            />
+          )}
           {composerMode === 'video' && (
             <ParamPillDropdown
               value={String(composerParams.durationSeconds)}

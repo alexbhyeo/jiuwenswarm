@@ -4,7 +4,7 @@
 > frontend feature `jiuwenswarm/channels/web/frontend/src/features/director/`
 > and its backend counterparts (`director.*` RPC in AgentServer, the
 > `jiuwenswarm/server/runtime/director` package, and the `video_gen_tools` /
-> `visual_gen_tools` / `edit_chat_tools` tool functions).
+> `visual_gen_tools` / `audio_gen_tools` / `edit_chat_tools` tool functions).
 
 Director Mode is a **project / asset / canvas** workspace for AI media
 production. Unlike Design mode (agentic graph execution), Director Mode calls
@@ -33,7 +33,7 @@ flowchart TB
     Routes["_DIRECTOR_ROUTES<br/>interface.py"]
     Mgr["DirectorManager"]
     Store2["DirectorStore<br/>director_state.json"]
-    Tools["generate_video · check_video_status<br/>generate_visual · call_edit_chat_completion"]
+    Tools["generate_video · check_video_status<br/>generate_visual · generate_audio<br/>call_edit_chat_completion"]
     Http["director_multipart_http<br/>/file-api/director/upload"]
   end
 
@@ -148,7 +148,8 @@ Two fields exist specifically to avoid remount races:
 | `video` | ✅ `generate_video` | Optional first/last frame references. |
 | `image` | ✅ `generate_visual` | Optional multi-reference composition. |
 | `character` | ✅ `generate_visual` | Prompt is `"名称: 描述"`; the parsed name becomes the asset name so it can be referenced as `@名称`. |
-| `audio`, `world` | ❌ | Placeholders ("coming soon"); `ENABLED_COMPOSER_MODES` gates the UI and the backend rejects them with `NOT_SUPPORTED`. |
+| `audio` | ✅ `generate_audio` | Text-to-speech. No aspect/resolution pills and no `@名称` references — the prompt is spoken verbatim and a voice is picked from the toolbar. |
+| `world` | ❌ | Placeholder ("coming soon"); `ENABLED_COMPOSER_MODES` gates the UI and the backend rejects it with `NOT_SUPPORTED`. |
 
 ---
 
@@ -163,7 +164,7 @@ Two fields exist specifically to avoid remount races:
 | `director.projects.get` | `handle_director_projects_get` | Load one project. |
 | `director.projects.rename` | `handle_director_projects_rename` | Rename project. |
 | `director.projects.delete` | `handle_director_projects_delete` | Delete project (+ assets). |
-| `director.generate` | `handle_director_generate` | Direct generation for `video` / `image` / `character`. |
+| `director.generate` | `handle_director_generate` | Direct generation for `video` / `image` / `audio` / `character`. |
 | `director.generate.check_status` | `handle_director_generate_check_status` | Poll an async video job. |
 | `director.asset.rename` | `handle_director_asset_rename` | Rename asset (enables `@name` references). |
 | `director.asset.delete` | `handle_director_asset_delete` | Delete asset. |
@@ -186,7 +187,7 @@ Plus one non-RPC endpoint:
 | Code | Meaning |
 |------|---------|
 | `INVALID_PARAMS` | Missing/blank field, length/content violation. |
-| `NOT_SUPPORTED` | Mode not yet implemented (`audio`, `world`). |
+| `NOT_SUPPORTED` | Mode not yet implemented (`world`). |
 | `NOT_CONFIGURED` | The required model is not enabled/configured in settings. |
 | `PROJECT_NOT_FOUND` | Unknown `project_id`. |
 | `ASSET_NOT_FOUND` | Unknown `asset_id`. |
@@ -203,6 +204,7 @@ Plus one non-RPC endpoint:
 | `server/runtime/director/director_multipart_http.py` | Multipart upload handler for asset files. |
 | `agents/harness/common/tools/video_gen_tools.py` | `generate_video`, `check_video_status`, `video_gen_enabled/configured`. |
 | `agents/harness/common/tools/visual_gen_tools.py` | `generate_visual`, `visual_gen_enabled/configured`. |
+| `agents/harness/common/tools/audio_gen_tools.py` | `generate_audio`, `audio_gen_enabled/configured` (text-to-speech; PCM responses are wrapped into WAV). |
 | `agents/harness/common/tools/edit_chat_tools.py` | `call_edit_chat_completion`, `build_multimodal_user_message`, `edit_chat_enabled/configured`. |
 
 ### 5.1 `@名称` reference resolution
@@ -268,7 +270,7 @@ DirectorProject {
 }
 
 DirectorAsset {
-  asset_id, type: 'video' | 'image' | 'character'
+  asset_id, type: 'video' | 'image' | 'audio' | 'character'
   status: 'ready' | 'pending' | 'failed'
   prompt, params, file_path, job_id, error
   name            // user/parsed name; enables "@name" references

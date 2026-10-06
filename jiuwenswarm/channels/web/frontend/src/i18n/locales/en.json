@@ -62,10 +62,11 @@
     "projectsSection": "Projects",
     "assetsEmpty": "No assets yet",
     "comingSoon": "Coming soon",
-    "poweredBy": "Powered by generate_video / generate_visual",
+    "poweredBy": "Powered by generate_video / generate_visual / generate_audio",
     "categories": {
       "video": "Video",
       "image": "Image",
+      "audio": "Audio",
       "character": "Character"
     },
     "tabs": {
@@ -77,6 +78,7 @@
       "placeholderVideo": "What kind of video do you need? Describe the scene, camera movement, mood, or type @name to reference a named image as the first/last frame (up to 2)…",
       "placeholderImage": "What kind of image do you need? Describe the scene, style, composition, or type @name to reference a named image…",
       "placeholderCharacter": "Describe this character as \"name: description\" — e.g. \"Beauty Vlogger: a highly personable Asian female beauty influencer who narrates throughout\"…",
+      "placeholderAudio": "What should the voice say? Enter the exact text to be spoken aloud, and pick a voice from the toolbar…",
       "durationLabel": "{{seconds}}s",
       "send": "Generate",
       "modes": {

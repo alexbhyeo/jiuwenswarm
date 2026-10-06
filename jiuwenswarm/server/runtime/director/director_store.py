@@ -39,7 +39,7 @@ _STATE_VERSION = 1
 @dataclass
 class DirectorAsset:
     asset_id: str
-    type: str  # "video" | "image" | "character"
+    type: str  # "video" | "image" | "audio" | "character"
     status: str  # "ready" | "pending" | "failed"
     prompt: str
     params: dict[str, Any] = field(default_factory=dict)
@@ -368,7 +368,7 @@ class DirectorStore:
         return max(matches, key=lambda a: a.updated_at)
 
     def asset_counts(self) -> dict[str, int]:
-        counts: dict[str, int] = {"video": 0, "image": 0, "character": 0}
+        counts: dict[str, int] = {"video": 0, "image": 0, "audio": 0, "character": 0}
         for project in self._load().values():
             for asset in project.assets:
                 if asset.type in counts:

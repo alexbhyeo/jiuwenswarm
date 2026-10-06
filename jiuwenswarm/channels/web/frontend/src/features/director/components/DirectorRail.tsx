@@ -23,7 +23,7 @@ interface DirectorRailProps {
   onSelectProject: (projectId: string) => void;
 }
 
-type ExpandedCategory = 'projects' | 'video' | 'image' | 'character' | null;
+type ExpandedCategory = 'projects' | 'video' | 'image' | 'audio' | 'character' | null;
 
 function rawFileUrl(path: string): string {
   return `/file-api/raw-file?path=${encodeURIComponent(path)}`;
@@ -52,6 +52,14 @@ const imageIcon = (
     <rect x="3" y="3" width="18" height="18" rx="2.5" />
     <circle cx="9" cy="9" r="1.6" />
     <path d="m4 17 5-5 3 3 4-5 4 5" />
+  </svg>
+);
+
+const audioIcon = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M9 18V6l10-2v12" />
+    <circle cx="6.5" cy="18" r="2.5" />
+    <circle cx="16.5" cy="16" r="2.5" />
   </svg>
 );
 
@@ -366,15 +374,22 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
   const assetsByType = useMemo(() => {
     const video: DirectorAsset[] = [];
     const image: DirectorAsset[] = [];
+    const audio: DirectorAsset[] = [];
     const character: DirectorAsset[] = [];
     for (const asset of selectedProject?.assets ?? []) {
       if (asset.status !== 'ready') continue;
       if (asset.type === 'video') video.push(asset);
       else if (asset.type === 'image') image.push(asset);
+      else if (asset.type === 'audio') audio.push(asset);
       else if (asset.type === 'character') character.push(asset);
     }
     const byRecency = (a: DirectorAsset, b: DirectorAsset) => b.updated_at - a.updated_at;
-    return { video: video.sort(byRecency), image: image.sort(byRecency), character: character.sort(byRecency) };
+    return {
+      video: video.sort(byRecency),
+      image: image.sort(byRecency),
+      audio: audio.sort(byRecency),
+      character: character.sort(byRecency),
+    };
   }, [selectedProject]);
 
   const toggle = (category: ExpandedCategory) => {
@@ -533,6 +548,54 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
                     <AssetNameLabel
                       asset={asset}
                       fallback={t('director.categories.image')}
+                      onRename={(name) => renameAsset(selectedProject!.project_id, asset.asset_id, name)}
+                      onDelete={() => deleteAsset(selectedProject!.project_id, asset.asset_id)}
+                    />
+                    <div className="director-asset-time">{relativeTime(t, asset.updated_at)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div
+              role="button"
+              tabIndex={0}
+              className={`director-category-row ${expanded === 'audio' ? 'director-category-row--active' : ''}`}
+              onClick={() => toggle('audio')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  toggle('audio');
+                }
+              }}
+            >
+              <span className="director-category-icon">{audioIcon}</span>
+              <span className="director-category-label">{t('director.categories.audio')}</span>
+              {/* 音频素材由 composer 的 音频 模式生成；上传暂不支持（后端 multipart
+                  只接受图片/视频），所以这一行没有上传按钮。 */}
+              <span className="director-category-count">{assetsByType.audio.length}</span>
+              {expanded === 'audio' ? chevronDown : chevronRight}
+            </div>
+            {expanded === 'audio' && (
+              <div className="director-asset-grid">
+                {assetsByType.audio.length === 0 && (
+                  <div className="director-empty-hint">{t('director.assetsEmpty')}</div>
+                )}
+                {assetsByType.audio.map((asset) => (
+                  <div
+                    key={asset.asset_id}
+                    className="director-asset-item"
+                    draggable
+                    onDragStart={(e) => handleAssetDragStart(e, asset)}
+                  >
+                    <div className="director-asset-thumb director-asset-thumb--audio">
+                      {asset.file_path && (
+                        <audio src={rawFileUrl(asset.file_path)} controls preload="metadata" style={{ width: '100%' }} />
+                      )}
+                    </div>
+                    <AssetNameLabel
+                      asset={asset}
+                      fallback={t('director.categories.audio')}
                       onRename={(name) => renameAsset(selectedProject!.project_id, asset.asset_id, name)}
                       onDelete={() => deleteAsset(selectedProject!.project_id, asset.asset_id)}
                     />

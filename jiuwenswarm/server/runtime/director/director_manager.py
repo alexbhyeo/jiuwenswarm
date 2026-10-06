@@ -20,6 +20,11 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from jiuwenswarm.agents.harness.common.tools.audio_gen_tools import (
+    audio_gen_configured,
+    audio_gen_enabled,
+    generate_audio,
+)
 from jiuwenswarm.agents.harness.common.tools.video_gen_tools import (
     check_video_status,
     generate_video,
@@ -48,7 +53,7 @@ from jiuwenswarm.server.runtime.director.director_store import (
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_MODES = ("video", "image", "character")
+_SUPPORTED_MODES = ("video", "image", "audio", "character")
 
 _RE_STILL_RUNNING_JOB_ID = re.compile(r"^Video job (\S+) submitted and still")
 _RE_SAVED_TO = re.compile(r"Saved to:\s*(.+)")
@@ -432,7 +437,10 @@ class DirectorManager:
             if not (video_gen_enabled() and video_gen_configured()):
                 raise DirectorRpcError("NOT_CONFIGURED", "视频生成未配置，请先在设置中配置「视频处理」")
             duration_seconds = int(params.get("duration_seconds") or 15)
-            generate_audio = bool(params.get("generate_audio") or False)
+            # 这个局部布尔量不能叫 generate_audio：整个函数作用域里 audio 模式还要
+            # 调用同名的 generate_audio 工具函数，而局部赋值会让该名字在整个函数
+            # 内变成局部变量，导致调用点 UnboundLocalError。
+            generate_audio_flag = bool(params.get("generate_audio") or False)
             # 实验室节点画布：连线本身就是显式引用，直接按 asset_id 取路径；
             # 未提供时回退到 composer 的 "@名称" 文本解析（最多 2 个 @引用：
             # 第 1 个当首帧，第 2 个当尾帧），两条路径互斥、不叠加。
@@ -448,7 +456,7 @@ class DirectorManager:
                 "aspect_ratio": aspect_ratio,
                 "resolution": resolution,
                 "duration_seconds": duration_seconds,
-                "generate_audio": generate_audio,
+                "generate_audio": generate_audio_flag,
             }
             if first_frame_path:
                 gen_params["first_frame_path"] = first_frame_path
@@ -470,7 +478,19 @@ class DirectorManager:
                 duration_seconds=duration_seconds,
                 first_frame_path=first_frame_path,
                 last_frame_path=last_frame_path,
-                generate_audio=generate_audio,
+                generate_audio=generate_audio_flag,
+                save_dir=save_dir,
+            )
+        elif mode == "audio":
+            if not (audio_gen_enabled() and audio_gen_configured()):
+                raise DirectorRpcError("NOT_CONFIGURED", "语音生成未配置，请先在设置中配置「语音生成」")
+            # TTS 是纯文本→音频调用，没有参考图槽位，因此 composer 的
+            # "@名称" 引用解析在这里不适用——提示词原样作为朗读文本。
+            voice = str(params.get("voice") or "").strip()
+            gen_params = {"voice": voice} if voice else {}
+            result_str = await generate_audio._func(
+                text=prompt,
+                voice=voice,
                 save_dir=save_dir,
             )
         else:

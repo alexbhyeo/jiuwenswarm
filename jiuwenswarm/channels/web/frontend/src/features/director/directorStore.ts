@@ -17,6 +17,7 @@ const DEFAULT_COMPOSER_PARAMS: ComposerParams = {
   resolution: '720p',
   durationSeconds: 15,
   generateAudio: false,
+  voice: 'Kore',
   characterStyle: '写实摄影',
 };
 
@@ -109,7 +110,7 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
   projectsLoading: false,
   projectsError: null,
   selectedProjectId: null,
-  assetCounts: { video: 0, image: 0, character: 0 },
+  assetCounts: { video: 0, image: 0, audio: 0, character: 0 },
 
   composerMode: 'video',
   composerPrompt: '',
@@ -232,7 +233,7 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
     const mode = state.composerMode;
 
     if (!projectId || !prompt) return;
-    if (mode !== 'video' && mode !== 'image' && mode !== 'character') return; // 音频/世界：即将推出，无 RPC
+    if (mode !== 'video' && mode !== 'image' && mode !== 'audio' && mode !== 'character') return; // 世界：即将推出，无 RPC
 
     stopPolling();
     set({ generating: true, generateError: null, pendingGeneration: null });
@@ -254,6 +255,7 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
         resolution: state.composerParams.resolution,
         durationSeconds: state.composerParams.durationSeconds,
         generateAudio: state.composerParams.generateAudio,
+        voice: state.composerParams.voice,
       });
 
       set((s) => ({

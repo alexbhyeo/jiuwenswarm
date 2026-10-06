@@ -1,7 +1,7 @@
 // 导演模式（Director Mode）前端类型定义。
 // 与后端 director_store.py 的 DirectorAsset / DirectorProject 结构对应。
 
-export type DirectorAssetType = 'video' | 'image' | 'character';
+export type DirectorAssetType = 'video' | 'image' | 'audio' | 'character';
 export type DirectorAssetStatus = 'ready' | 'pending' | 'failed';
 
 export interface DirectorAsset {
@@ -46,20 +46,23 @@ export interface DirectorProject {
 export interface DirectorAssetCounts {
   video: number;
   image: number;
+  audio: number;
   character: number;
 }
 
-/** 创作 composer 支持的模式；video/image/character 有真实后端，其余为
- *  "即将推出"占位。 */
+/** 创作 composer 支持的模式；video/image/audio/character 有真实后端，
+ *  world 仍为 "即将推出"占位。 */
 export type ComposerMode = 'video' | 'image' | 'audio' | 'character' | 'world';
 
-export const ENABLED_COMPOSER_MODES: readonly ComposerMode[] = ['video', 'image', 'character'];
+export const ENABLED_COMPOSER_MODES: readonly ComposerMode[] = ['video', 'image', 'audio', 'character'];
 
 export interface ComposerParams {
   aspectRatio: string;
   resolution: string;
   durationSeconds: number;
   generateAudio: boolean;
+  /** 仅 音频 模式使用：TTS 音色名（如 "Kore"）。 */
+  voice: string;
   /** 仅 角色 模式使用：拼进生成描述末尾的画风提示（如"写实摄影"），
    *  不改变 composer 里 "名称: 描述" 的原始文本。 */
   characterStyle: string;
@@ -67,12 +70,14 @@ export interface ComposerParams {
 
 export interface GenerateParams {
   projectId: string;
-  mode: 'video' | 'image' | 'character';
+  mode: 'video' | 'image' | 'audio' | 'character';
   prompt: string;
   aspectRatio: string;
   resolution: string;
   durationSeconds?: number;
   generateAudio?: boolean;
+  /** 仅 音频 模式使用：TTS 音色名。 */
+  voice?: string;
   /** 实验室节点画布：连线的显式引用（asset_id），绕开 composer 的
    *  "@名称" 文本解析。video 模式下最多首帧+尾帧两个；image 模式下可以是
    *  "图片参考" 卡片上连的一张或多张参考图（多参考图合成）。 */

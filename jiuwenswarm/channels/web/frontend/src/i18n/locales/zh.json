@@ -62,10 +62,11 @@
     "projectsSection": "项目",
     "assetsEmpty": "暂无素材",
     "comingSoon": "即将推出",
-    "poweredBy": "由 generate_video / generate_visual 提供支持",
+    "poweredBy": "由 generate_video / generate_visual / generate_audio 提供支持",
     "categories": {
       "video": "视频",
       "image": "图片",
+      "audio": "音频",
       "character": "角色"
     },
     "tabs": {
@@ -77,6 +78,7 @@
       "placeholderVideo": "需要一段什么样的视频？描述画面、运镜、氛围，或输入 @名称 引用已命名的图片作为首帧/尾帧（最多 2 张）…",
       "placeholderImage": "需要一张什么样的图片？描述画面、风格、构图，或输入 @名称 引用已命名的图片作为参考…",
       "placeholderCharacter": "描述这个角色：名称: 外貌、气质、身份描述，例如「美妆博主: 一位亲和力极强的亚洲女性美妆博主，负责全程口播讲解」…",
+      "placeholderAudio": "需要一段什么样的语音？输入要朗读的文本，并在工具栏选择音色…",
       "durationLabel": "{{seconds}} 秒",
       "send": "生成",
       "modes": {

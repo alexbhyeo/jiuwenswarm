@@ -63,7 +63,7 @@ function normalizeProjectsList(raw: unknown): ProjectsListResult {
   const payload = (raw ?? {}) as { projects?: DirectorProject[]; asset_counts?: DirectorAssetCounts };
   return {
     projects: payload.projects ?? [],
-    assetCounts: payload.asset_counts ?? { video: 0, image: 0, character: 0 },
+    assetCounts: payload.asset_counts ?? { video: 0, image: 0, audio: 0, character: 0 },
   };
 }
 
@@ -288,5 +288,5 @@ export async function directorAssetUpload(
   if (!resp.ok || !payload.project) {
     throw new DirectorApiError(payload.code || 'UNKNOWN', payload.message || payload.error || `上传失败 (HTTP ${resp.status})`);
   }
-  return { project: payload.project, assetId: payload.asset_id || '', assetCounts: payload.asset_counts || { video: 0, image: 0, character: 0 } };
+  return { project: payload.project, assetId: payload.asset_id || '', assetCounts: payload.asset_counts || { video: 0, image: 0, audio: 0, character: 0 } };
 }
