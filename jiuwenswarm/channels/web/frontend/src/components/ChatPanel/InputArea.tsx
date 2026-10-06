@@ -53,6 +53,7 @@ import { webRequest } from '../../services/webClient';
 import { selectSessionAssets, useSessionAssetsStore } from '../../features/sessionAssets/sessionAssets';
 import {
   assetKindFromMime,
+  findReferencedAssets,
   normalizePath,
   samePath,
   stemFilename,
@@ -1126,6 +1127,29 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
         ];
       });
   }, [attachments, sessionAssets]);
+  // @ 引用的素材直接预览在输入框上方：用 @ 选中图片素材后立刻能看到是哪一张。
+  // 引用是从当前草稿文本里解析出来的，所以把 @名称 从文本里删掉，卡片就跟着消失；
+  // 已经有真实附件卡片的路径（刚上传的那份）不重复显示。
+  const referencedAssetCards = useMemo(() => {
+    if (!inputValue.includes('@')) return [];
+    const attachedPaths = new Set(
+      attachments.flatMap((attachment) => {
+        const path = pickString(attachment.persistedMediaItem?.path);
+        return path ? [normalizePath(path)] : [];
+      }),
+    );
+    return findReferencedAssets(inputValue, sessionAssets)
+      .filter((asset) => asset.kind === 'image')
+      .filter((asset) => !attachedPaths.has(normalizePath(asset.path)))
+      .map((asset) => ({
+        key: `ref-${asset.asset_id}`,
+        name: asset.name,
+        // 刚上传的素材借本地预览图；已经落盘的生成图用 file-api 直接读（这些路径 Web 端可读）。
+        previewUrl:
+          previewUrlByPath.get(normalizePath(asset.path)) ??
+          `/file-api/raw-file?path=${encodeURIComponent(asset.path)}`,
+      }));
+  }, [attachments, inputValue, previewUrlByPath, sessionAssets]);
   const mentionCandidates = useMemo(
     () => [...mentionableMembers, ...assetSuggestionItems, ...pendingAssetSuggestionItems],
     [assetSuggestionItems, mentionableMembers, pendingAssetSuggestionItems],
@@ -3417,7 +3441,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
           )}
 
           <div className="chat-input-body" data-testid="chat-panel-input-body">
-            {attachments.length > 0 && (
+            {(attachments.length > 0 || referencedAssetCards.length > 0) && (
               <div className="chat-input-attachment-panel" data-testid="chat-panel-input-attachment-panel">
                 <div
                   className={cx(
@@ -3594,6 +3618,32 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                           </div>,
                           document.body,
                         )}
+                    </div>
+                  ))}
+                  {referencedAssetCards.map((card) => (
+                    <div
+                      className="chat-input-attachment-card chat-input-attachment-card--reference"
+                      key={card.key}
+                      data-testid="chat-panel-input-reference-card"
+                      data-variant={card.key}
+                    >
+                      <div
+                        className="chat-input-attachment-preview chat-input-attachment-preview--image"
+                        aria-hidden="true"
+                        data-testid="chat-panel-input-reference-preview"
+                      >
+                        {card.previewUrl ? <img src={card.previewUrl} alt="" /> : <FileIcon fileName={card.name} size={32} />}
+                      </div>
+                      <div className="chat-input-attachment-main" data-testid="chat-panel-input-reference-main">
+                        <div className="chat-input-attachment-name" data-testid="chat-panel-input-reference-name">
+                          <span className="chat-input-attachment-name-text" title={`@${card.name}`}>
+                            {card.name}
+                          </span>
+                        </div>
+                        <div className="chat-input-attachment-meta" data-testid="chat-panel-input-reference-meta">
+                          <span>{t('sessionAssets.reference')}</span>
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>

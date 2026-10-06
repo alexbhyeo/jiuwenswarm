@@ -742,7 +742,8 @@
     "cancel": "取消",
     "invalidName": "名称不能为空，最多 60 个字符，不能包含 @ 或换行",
     "pickTitle": "选择素材",
-    "referHint": "输入框里输入 @ 引用"
+    "referHint": "输入框里输入 @ 引用",
+    "reference": "已引用"
   },
   "artifacts": {
     "title": "所有产物",

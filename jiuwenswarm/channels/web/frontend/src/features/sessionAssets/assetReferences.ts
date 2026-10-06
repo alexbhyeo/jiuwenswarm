@@ -81,3 +81,31 @@ export function normalizePath(value: string): string {
 export function samePath(a: string, b: string): boolean {
   return normalizePath(a) === normalizePath(b);
 }
+
+/**
+ * 把会话素材表里用户起的名称补到历史消息的附件上。
+ *
+ * `displayName` 不随消息落盘，所以刷新页面后，改过名的附件会退化成原始文件名
+ * （如 `EMXN1y8qOw....webp`）。历史记录里存了绝对路径，素材表里也有路径，按路径对回去即可。
+ * 已经有 displayName、或路径对不上的条目原样返回；全部无需改动时返回原数组以保持引用稳定。
+ */
+export function resolveAssetDisplayNames<T extends { path?: string; displayName?: string }>(
+  items: readonly T[],
+  assets: readonly NamedAsset[],
+): T[] {
+  if (items.length === 0 || assets.length === 0) return items as T[];
+  const nameByPath = new Map<string, string>();
+  for (const asset of assets) {
+    if (asset.name && asset.path) nameByPath.set(normalizePath(asset.path), asset.name);
+  }
+  if (nameByPath.size === 0) return items as T[];
+  let changed = false;
+  const next = items.map((item) => {
+    if (item.displayName || !item.path) return item;
+    const name = nameByPath.get(normalizePath(item.path));
+    if (!name) return item;
+    changed = true;
+    return { ...item, displayName: name };
+  });
+  return changed ? next : (items as T[]);
+}

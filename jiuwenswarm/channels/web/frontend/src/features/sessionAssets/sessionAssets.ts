@@ -80,6 +80,7 @@ export {
   assetKindFromMime,
   findReferencedAssets,
   normalizePath,
+  resolveAssetDisplayNames,
   stemFilename,
   withAssetReferenceNote,
   type NamedAsset,
