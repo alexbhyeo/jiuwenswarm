@@ -1102,7 +1102,13 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
         label: asset.name,
         status: asset.kind,
         itemKind: 'asset' as const,
-        previewUrl: previewUrlByPath.get(normalizePath(asset.path)),
+        // 已经落盘的图片素材没有本地预览图可用，直接用 file-api 读绝对路径（生成产物在
+        // agent 工作区，Web 端可读）；非图片类型仍然走文件图标。
+        previewUrl:
+          previewUrlByPath.get(normalizePath(asset.path)) ??
+          (asset.kind === 'image'
+            ? `/file-api/raw-file?path=${encodeURIComponent(asset.path)}`
+            : undefined),
       })),
     [previewUrlByPath, sessionAssets],
   );
@@ -5235,6 +5241,28 @@ function ProjectAddSubmenu({ onCreate }: { onCreate: (mode: ProjectCreateMode) =
   );
 }
 
+/**
+ * @ 素材候选里的缩略图。能读到图片就显示真图；读不到（例如素材不在 Web 可读目录、
+ * 或者不是图片类型）就退回文件图标，避免显示一个裂图。
+ */
+function AssetSuggestionThumb({ src, label }: { src?: string; label: string }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+  if (!src || failed) {
+    return <FileIcon fileName={label} size={18} />;
+  }
+  return (
+    <img
+      src={src}
+      alt=""
+      className="chat-composer-suggestion__asset-thumb"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 function ComposerSuggestionMenu({
   suggestion,
   items,
@@ -5407,11 +5435,7 @@ function ComposerSuggestionMenu({
                   ) : item.itemKind === 'asset' ? (
                     <>
                       <span className="chat-composer-suggestion__avatar" aria-hidden="true">
-                        {item.previewUrl ? (
-                          <img src={item.previewUrl} alt="" className="chat-composer-suggestion__asset-thumb" />
-                        ) : (
-                          <FileIcon fileName={item.label} size={18} />
-                        )}
+                        <AssetSuggestionThumb src={item.previewUrl} label={item.label} />
                       </span>
                       <span className="chat-composer-suggestion__text">
                         <span className="chat-composer-suggestion__label">{item.label}</span>
