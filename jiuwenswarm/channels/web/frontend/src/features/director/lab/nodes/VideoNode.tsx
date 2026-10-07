@@ -30,9 +30,12 @@ export function VideoNode({ id, data }: NodeProps & { data: VideoNodeData }) {
         </div>
       </div>
       <NodeNameLabel name={data.name} fallback={t('director.categories.video')} onRename={(name) => actions.renameNode(id, name)} />
-      {/* 视频输出节点没有下游用途（暂不支持视频再作为参考），保留 target
-       *  句柄只是为了让"生成结果自动连线"的视觉逻辑保持一致。 */}
+      {/* target 句柄是"生成结果自动连线"的落点（处理卡片 → 视频输出）。
+       *  source 句柄是视频作为下游输入的唯一出口——目前只有"视频生音频"
+       *  （video2audio）的 video1 端口吃它（见 LabCanvas.isValidConnection）。
+       *  少了这个 source 句柄，视频卡片在画布上根本拖不出连线。 */}
       <Handle type="target" position={Position.Left} id="in" />
+      <Handle type="source" position={Position.Right} id="video" />
     </div>
   );
 }

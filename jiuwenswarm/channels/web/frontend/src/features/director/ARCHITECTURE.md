@@ -294,11 +294,24 @@ Lab process card kinds (`labTypes.ts`):
 | `image2video` | video | 2 | 0 | Distinct first/last-frame slots; one edge each. |
 | `imageRef` | image | 1 | 0 | The single port accepts **multiple** edges (multi-reference). |
 | `text2audio` | audio | 0 | 0 | Text-to-speech (`generate_audio`). Text-only: no reference ports, and the params popover swaps aspect/resolution/duration for a voice picker. Its output node is an `audio` node wrapping `<audio controls>`. |
-| `video2audio` | audio | 0 | 1 | 视频生音频: chains two existing capabilities — `video_understanding` writes a narration script from the connected video, then `generate_audio` speaks it. The `video1` port accepts video nodes only, and the optional text node's content is appended to the narration prompt as extra requirements. Its persisted asset is an **`audio`** asset (not `video2audio`) whose `params` carry `script` / `input_video_path`; `buildFlowFromChat` uses `input_video_path` to redraw the dependency edge. Needs **both** the 语音生成 and 视频理解 slots configured. |
+| `video2audio` | audio | 0 | 1 | 视频生音频: chains two existing capabilities — `video_understanding` writes a narration script from the connected video, then `generate_audio` speaks it. The `video1` port accepts video nodes only, and the optional text node's content is appended to the narration prompt as extra requirements. Its persisted asset is an **`audio`** asset (not `video2audio`) whose `params` carry `script` / `input_video_path`; `buildFlowFromChat` uses `input_video_path` to redraw the dependency edge. Needs **both** the 语音生成 and 视频理解 slots configured. On the wire it is its **own `mode`**: the Lab sends `mode="video2audio"` explicitly (a plain `mode="audio"` would take the TTS-only branch and feed the empty prompt straight to `generate_audio`), and the backend also normalises `mode="audio"` + an input video to it so no client can land in the wrong branch. |
 
 Port capacity is declared by `PROCESS_KIND_MAX_IMAGES` / `PROCESS_KIND_MAX_VIDEOS`,
 so adding a port to a new kind is a one-line change plus the matching `<Handle>`
 row in `ProcessNode.tsx`.
+
+Output (source) handles are equally load-bearing: a card that is meant to feed a
+downstream port **must** render a `source` `<Handle>`. `VideoNode` originally had
+only a `target` handle, so the 视频 card could not be dragged into the
+视频生音频 card at all — React Flow only starts a connection from a source handle.
+It now exposes `id="video"`, and `isValidConnection` restricts each target port to
+one source node type (`text` → text, `image1`/`image2` → image, `video1` → video).
+
+Note `directorApi.ts`'s `directorGenerate()` builds the **only** camelCase →
+snake_case map for this RPC. Every new `GenerateParams` field must be added there
+as well — a field that stays only on the `GenerateParams` interface is silently
+dropped on the wire (this is how `voice` and `input_video_asset_id` were lost: the
+Lab sent them, the backend never saw them).
 
 ---
 

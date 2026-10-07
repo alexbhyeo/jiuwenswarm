@@ -421,6 +421,58 @@ async def test_video2audio_tts_failure_is_generation_failed(
     assert "429" in excinfo.value.message
 
 
+async def test_audio_mode_with_an_input_video_still_runs_the_chain(
+    manager: DirectorManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A client that sends ``mode="audio"`` *plus* an input video means the chain,
+    not plain TTS.
+
+    Regression guard for a real UI bug: the Lab used to send its ProcessMode
+    (``audio``) with the input video, so the request fell into the pure-TTS branch
+    and ``generate_audio`` was handed the empty prompt - the user saw the opaque
+    tool error ``[ERROR]: text is required.`` instead of a narration. Whatever the
+    client calls it, having an input video means video2audio.
+    """
+    _configure(monkeypatch)
+    project_id = await _create_project(manager)
+    _add_asset(manager, project_id)
+    understanding, tts = _stub_tools(monkeypatch)
+
+    result = await manager.handle_director_generate(
+        {
+            "project_id": project_id,
+            "mode": "audio",
+            "input_video_asset_id": "asset-video-1",
+            "voice": "Kore",
+        }
+    )
+
+    assert len(understanding.calls) == 1
+    assert tts.calls[0]["kwargs"]["text"] == "镜头里是一只猫在窗台上打盹。"
+    asset = _asset_of(result)
+    assert asset["type"] == "audio"
+    assert asset["params"]["script"] == "镜头里是一只猫在窗台上打盹。"
+    assert asset["params"]["voice"] == "Kore"
+    assert asset["params"]["input_video_asset_id"] == "asset-video-1"
+
+
+async def test_plain_audio_mode_without_an_input_video_is_untouched(
+    manager: DirectorManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 文生音频 path must not start asking for a video."""
+    _configure(monkeypatch)
+    project_id = await _create_project(manager)
+    understanding, tts = _stub_tools(monkeypatch)
+
+    result = await manager.handle_director_generate(
+        {"project_id": project_id, "mode": "audio", "prompt": "游过平静的海面"}
+    )
+
+    assert understanding.calls == []
+    assert tts.calls[0]["kwargs"]["text"] == "游过平静的海面"
+    assert _asset_of(result)["params"] == {}
+
+
 # ---------------------------------------------------------------------------
 # mode registration
 # ---------------------------------------------------------------------------

@@ -458,6 +458,12 @@ class DirectorManager:
             raise DirectorRpcError(
                 "NOT_SUPPORTED", f"暂不支持的生成类型: {mode or '(空)'}（即将推出）"
             )
+        # 只带了输入视频、没把 mode 写成 video2audio 的调用方，语义上仍然是要
+        # 视频生音频（两步链路）——不能就此滑进纯 TTS 分支，把空提示词当朗读
+        # 文本丢给 generate_audio（实测报 "[ERROR]: text is required."）。有输入
+        # 视频就是链路模式，这里统一归一到 video2audio，下游只认一个模式名。
+        if mode == "audio" and input_video_asset_id:
+            mode = "video2audio"
         project = self._store.get_project(project_id)
         if project is None:
             raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")

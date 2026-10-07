@@ -137,9 +137,14 @@ export function directorGenerate(params: GenerateParams): Promise<GenerateResult
     resolution: params.resolution,
     duration_seconds: params.durationSeconds,
     generate_audio: params.generateAudio,
+    // 音频模式（文生音频/视频生音频）的两个参数必须显式带上：这张表是唯一
+    // 的 camelCase → snake_case 映射点，漏一个字段就等于前端选了也没用——
+    // 音色会静默回落到后端默认值，输入视频缺失则被后端判成"提示词不能为空"。
+    voice: params.voice,
     first_frame_asset_id: params.firstFrameAssetId,
     last_frame_asset_id: params.lastFrameAssetId,
     reference_asset_ids: params.referenceAssetIds,
+    input_video_asset_id: params.inputVideoAssetId,
   };
   return webRequest<unknown>(METHOD.generate, wire, { timeoutMs: GENERATE_TIMEOUT_MS })
     .then(normalizeGenerateResult)

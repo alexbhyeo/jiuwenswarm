@@ -521,9 +521,13 @@ function LabCanvasInner() {
     ): Promise<'ok' | 'failed'> => {
       try {
         const { directorGenerate } = await import('../directorApi');
+        // video2audio 是后端 _SUPPORTED_MODES 里一个独立模式（先视频理解写解说
+        // 再 TTS 配音），不是"audio 加一个可选输入"：走线上必须如实说明，否则
+        // 后端走 audio 分支，把空提示词直接喂给 TTS（实测报 "text is required"）。
+        // 在 ProcessMode 这一层它仍然是 audio（输出卡片/参数弹层都一样）。
         const params: GenerateParams = {
           projectId,
-          mode,
+          mode: data.kind === 'video2audio' ? 'video2audio' : mode,
           prompt,
           aspectRatio: data.aspectRatio,
           resolution: data.resolution,
@@ -660,6 +664,10 @@ function LabCanvasInner() {
     // 既是自己那一行的输出，也可能是下一行的参考图输入）。
     const outputNodeIdByAsset = new Map<string, string>();
     const imageNodeIdByPath = new Map<string, string>();
+    // 视频卡片也能当输入（视频生音频的 video1 端口），所以要单独一张
+    // 文件路径 -> 视频节点 id 的表：imageNodeIdByPath 只收 type==='image'
+    // 的节点，拿视频去查它永远是空。
+    const videoNodeIdByPath = new Map<string, string>();
     // 素材 id -> 它在画布上的 y 坐标——用来给"依赖上一个输出"的素材算摆放
     // 位置（取它依赖的那些素材的 y 均值），既覆盖这次新摆的素材，也覆盖
     // 已经在画布上、来自更早一次 build 的素材。
@@ -671,6 +679,7 @@ function LabCanvasInner() {
         assetY.set(d.assetId, n.position.y);
       }
       if (n.type === 'image' && d?.filePath) imageNodeIdByPath.set(d.filePath, n.id);
+      if (n.type === 'video' && d?.filePath) videoNodeIdByPath.set(d.filePath, n.id);
     }
 
     const newAssetIds = orderedAssetIds.filter((id) => !outputNodeIdByAsset.has(id));
@@ -709,6 +718,34 @@ function LabCanvasInner() {
       return id;
     };
 
+    // 视频输入（视频生音频的 video1 端口）复用该视频素材自己的输出卡片：
+    // 同一次 build 里刚摆的那张（见下面的 outputNodeIdByAsset.set）或更早
+    // 一次 build 留下的那张。实在找不到才新建一张视频卡片。
+    const ensureVideoNode = (filePath: string, x: number, y: number): string => {
+      const existing = videoNodeIdByPath.get(filePath);
+      if (existing) return existing;
+      const placedAssetId = assetIdByFilePath.get(filePath);
+      const placedNodeId = placedAssetId ? outputNodeIdByAsset.get(placedAssetId) : undefined;
+      if (placedNodeId) {
+        videoNodeIdByPath.set(filePath, placedNodeId);
+        return placedNodeId;
+      }
+      const matchingAsset = project.assets.find((a) => a.file_path === filePath);
+      const id = nextNodeId('video');
+      addNode({
+        id,
+        type: 'video',
+        position: { x, y },
+        data: {
+          assetId: matchingAsset?.asset_id ?? null,
+          filePath,
+          name: matchingAsset?.name || matchingAsset?.prompt || '',
+        },
+      });
+      videoNodeIdByPath.set(filePath, id);
+      return id;
+    };
+
     // 文件路径 -> 素材 id，用来把一个素材的"参考图/首尾帧路径"反查回是
     // 引用了项目里哪个素材（这个项目里全部素材，不限于这次新摆的）——
     // 从而判断它是不是"依赖上一个输出"。
@@ -722,6 +759,8 @@ function LabCanvasInner() {
       referenceImagePaths: string[];
       firstFramePath: string | null;
       lastFramePath: string | null;
+      /** video2audio（视频生音频）当成解说素材的那路输入视频。 */
+      inputVideoPath: string | null;
       kind: ProcessKind;
       mode: ProcessMode;
       /** 这个素材实际依赖的其它素材 id（不管是这次新摆的还是已经在画布上
@@ -772,7 +811,16 @@ function LabCanvasInner() {
         )
       );
 
-      plans.set(assetId, { asset, referenceImagePaths, firstFramePath, lastFramePath, kind, mode, depAssetIds });
+      plans.set(assetId, {
+        asset,
+        referenceImagePaths,
+        firstFramePath,
+        lastFramePath,
+        inputVideoPath,
+        kind,
+        mode,
+        depAssetIds,
+      });
     }
 
     // 按依赖深度分层：完全不依赖别的素材的是第 0 层，纵向摞；依赖了第 N
@@ -822,7 +870,7 @@ function LabCanvasInner() {
     for (const { id: assetId, depth } of orderedForLayout) {
       const plan = plans.get(assetId);
       if (!plan) continue;
-      const { asset, referenceImagePaths, firstFramePath, lastFramePath, kind, mode, depAssetIds } = plan;
+      const { asset, referenceImagePaths, firstFramePath, lastFramePath, inputVideoPath, kind, mode, depAssetIds } = plan;
 
       const y =
         depth === 0
@@ -859,6 +907,8 @@ function LabCanvasInner() {
           typeof params.resolution === 'string' ? params.resolution : mode === 'video' ? '720p' : '512',
         durationSeconds: typeof params.duration_seconds === 'number' ? params.duration_seconds : 5,
         outputCount: 1,
+        // 音频卡片重建后音色不能变回默认值——params 里存了当时用的 voice。
+        voice: typeof params.voice === 'string' ? params.voice : DEFAULT_AUDIO_VOICE,
       };
       addNode({ id: processNodeId, type: 'process', position: { x: processX, y }, data: processData });
       setEdges((eds) =>
@@ -888,15 +938,28 @@ function LabCanvasInner() {
           addEdge({ id: nextNodeId('edge'), source: refId, sourceHandle: 'image', target: processNodeId, targetHandle: 'image2' }, eds)
         );
       }
+      if (inputVideoPath) {
+        // 视频生音频的输入视频：复用那路视频素材自己的卡片，连到 video1
+        // 端口——与首帧/尾帧/参考图同一套路子。
+        const refId = ensureVideoNode(inputVideoPath, refX, y);
+        setEdges((eds) =>
+          addEdge({ id: nextNodeId('edge'), source: refId, sourceHandle: 'video', target: processNodeId, targetHandle: 'video1' }, eds)
+        );
+      }
 
       const outputNodeId = nextNodeId('out');
-      const outputType = asset.type === 'video' ? 'video' : 'image';
+      // 音频素材必须摆成 audio 卡片（<audio controls>）；归到 image 会被渲染成
+      // 一个 src 指向 .wav 的 <img>，重建出来的卡片直接是坏的。
+      const outputType = asset.type === 'video' ? 'video' : asset.type === 'audio' ? 'audio' : 'image';
       addNode({
         id: outputNodeId,
         type: outputType,
         position: { x: outputX, y },
         data: { assetId: asset.asset_id, filePath: asset.file_path, name: asset.name || asset.prompt, slotIndex: 0 },
       });
+      // 本次 build 刚摆出来的卡片也要立刻进索引表：排在后面的素材（比如引用
+      // 这段视频写解说的那张音频卡片）要能复用这张卡片，而不是再摆一张。
+      outputNodeIdByAsset.set(asset.asset_id, outputNodeId);
       setEdges((eds) =>
         addEdge({ id: nextNodeId('edge'), source: processNodeId, sourceHandle: 'out', target: outputNodeId, targetHandle: 'in' }, eds)
       );

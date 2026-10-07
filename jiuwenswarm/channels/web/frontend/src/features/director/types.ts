@@ -70,7 +70,9 @@ export interface ComposerParams {
 
 export interface GenerateParams {
   projectId: string;
-  mode: 'video' | 'image' | 'audio' | 'character';
+  /** `video2audio`（视频生音频）是后端独立模式：它串了"视频理解写解说 → TTS
+   *  配音"两步，光凭 mode=audio + 一个输入视频是区分不出来的。 */
+  mode: 'video' | 'image' | 'audio' | 'character' | 'video2audio';
   prompt: string;
   aspectRatio: string;
   resolution: string;
