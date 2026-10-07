@@ -250,6 +250,9 @@ type ComposerSuggestionItem = {
   /** 素材候选项的真实缩略图（本地 blob URL）；没有时列表退回按文件类型显示通用图标，
    *  不再借团队成员那套"按 id 生成"的头像（那套头像和上传的文件内容毫无关系）。 */
   previewUrl?: string;
+  /** 素材在磁盘上的绝对路径。图标兜底时要用它判类型：素材名常常没有扩展名
+   *  （如 `serum`、`Scene1_Shot1-1_OS10s`），只看名字会退回"未知类型"的灰色问号图标。 */
+  assetPath?: string;
 };
 
 function getComposerSuggestionItems(
@@ -1102,13 +1105,15 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
         label: asset.name,
         status: asset.kind,
         itemKind: 'asset' as const,
-        // 已经落盘的图片素材没有本地预览图可用，直接用 file-api 读绝对路径（生成产物在
-        // agent 工作区，Web 端可读）；非图片类型仍然走文件图标。
+        // 已经落盘的素材没有本地预览图可用，直接用 file-api 读绝对路径（生成产物在
+        // agent 工作区，Web 端可读）。图片和视频都给 previewUrl：图片直接当缩略图用，
+        // 视频用它当第一帧的来源；音频/文档仍然走文件图标。
         previewUrl:
           previewUrlByPath.get(normalizePath(asset.path)) ??
-          (asset.kind === 'image'
+          (asset.kind === 'image' || asset.kind === 'video'
             ? `/file-api/raw-file?path=${encodeURIComponent(asset.path)}`
             : undefined),
+        assetPath: asset.path,
       })),
     [previewUrlByPath, sessionAssets],
   );
@@ -1129,6 +1134,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
             status: assetKindFromMime(attachment.mimeType),
             itemKind: 'asset' as const,
             previewUrl: attachment.previewUrl,
+            assetPath: attachment.filename,
           },
         ];
       });
@@ -5242,25 +5248,62 @@ function ProjectAddSubmenu({ onCreate }: { onCreate: (mode: ProjectCreateMode) =
 }
 
 /**
- * @ 素材候选里的缩略图。能读到图片就显示真图；读不到（例如素材不在 Web 可读目录、
- * 或者不是图片类型）就退回文件图标，避免显示一个裂图。
+ * @ 素材候选里的缩略图。
+ *
+ * - 图片：直接显示真图；
+ * - 视频：没有现成缩略图，用 `<video preload="metadata">` + `#t=` 让浏览器解出第一帧。
+ *   先摆类型图标占位，解出帧再换成真帧——服务端不支持 Range，拿不到帧时会一直是图标，
+ *   不会出现一个黑方块。
+ * - 其余情况（读不到图、不是媒体）退回文件图标；图标按**路径**判类型，因为素材名常常
+ *   没有扩展名，只看名字会退成灰向号。
  */
-function AssetSuggestionThumb({ src, label }: { src?: string; label: string }) {
+function AssetSuggestionThumb({ src, label, kind, path }: {
+  src?: string;
+  label: string;
+  kind?: string;
+  path?: string;
+}) {
   const [failed, setFailed] = useState(false);
+  const [frameReady, setFrameReady] = useState(false);
   useEffect(() => {
     setFailed(false);
+    setFrameReady(false);
   }, [src]);
-  if (!src || failed) {
-    return <FileIcon fileName={label} size={18} />;
+
+  const fallback = <FileIcon fileName={path || label} size={18} />;
+
+  if (!src || failed) return fallback;
+
+  if (kind === 'video') {
+    return (
+      <>
+        <video
+          className="chat-composer-suggestion__asset-thumb"
+          src={`${src}#t=0.1`}
+          preload="metadata"
+          muted
+          playsInline
+          onLoadedData={() => setFrameReady(true)}
+          onError={() => setFailed(true)}
+          style={frameReady ? undefined : { display: 'none' }}
+        />
+        {frameReady ? null : fallback}
+      </>
+    );
   }
-  return (
-    <img
-      src={src}
-      alt=""
-      className="chat-composer-suggestion__asset-thumb"
-      onError={() => setFailed(true)}
-    />
-  );
+
+  if (kind === 'image') {
+    return (
+      <img
+        src={src}
+        alt=""
+        className="chat-composer-suggestion__asset-thumb"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+
+  return fallback;
 }
 
 function ComposerSuggestionMenu({
@@ -5435,7 +5478,12 @@ function ComposerSuggestionMenu({
                   ) : item.itemKind === 'asset' ? (
                     <>
                       <span className="chat-composer-suggestion__avatar" aria-hidden="true">
-                        <AssetSuggestionThumb src={item.previewUrl} label={item.label} />
+                        <AssetSuggestionThumb
+                          src={item.previewUrl}
+                          label={item.label}
+                          kind={item.status}
+                          path={item.assetPath}
+                        />
                       </span>
                       <span className="chat-composer-suggestion__text">
                         <span className="chat-composer-suggestion__label">{item.label}</span>
