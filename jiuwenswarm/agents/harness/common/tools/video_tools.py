@@ -8,6 +8,7 @@ import asyncio
 import base64
 import mimetypes
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
