@@ -878,6 +878,38 @@ async def test_repeated_runs_leave_no_handoff_wake_entries(
 
 
 @pytest.mark.asyncio
+async def test_has_active_tasks_tracks_live_runs_of_one_graph(
+    designer_store: DesignerGraphStore,
+) -> None:
+    """The chat guard needs per-graph liveness, and cleanup must clear it.
+
+    Two overlapping runs on one graph would share the graph and its node_states,
+    so the chat path refuses a second turn while one is still generating.
+    """
+    graph = designer_store.save_graph(
+        _handler_graph(build_bootstrap_graph(project_id="proj_active", prompt="active")),
+    )
+    executor = GraphExecutor(designer_store)
+    run_id = executor.create_run(graph)["run_id"]
+
+    assert executor.has_active_tasks(graph["graph_id"]) is False
+
+    pending: asyncio.Future = asyncio.get_running_loop().create_future()
+    executor._tasks[run_id] = pending
+    executor._live_runs[run_id] = {"run_id": run_id, "graph_id": graph["graph_id"]}
+
+    assert executor.has_active_tasks(graph["graph_id"]) is True
+    assert executor.has_active_tasks("graph_somewhere_else") is False
+
+    # A finished run is not an active one, even before its cleanup runs.
+    pending.set_result(None)
+    assert executor.has_active_tasks(graph["graph_id"]) is False
+
+    executor._cleanup_run(run_id)
+    assert executor.has_active_tasks(graph["graph_id"]) is False
+
+
+@pytest.mark.asyncio
 async def test_continue_after_failure_retries_failed_node(
     designer_store: DesignerGraphStore,
     monkeypatch: pytest.MonkeyPatch,

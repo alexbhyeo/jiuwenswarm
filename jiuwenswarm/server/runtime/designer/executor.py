@@ -771,6 +771,23 @@ class GraphExecutor:
         run["updated_at"] = utc_now_ms()
         return self._store.save_run(run)
 
+    def has_active_tasks(self, graph_id: str) -> bool:
+        """Whether any run of this graph still has a live task.
+
+        The chat path uses this to refuse a second turn while one is still
+        generating: two overlapping runs share the graph and its node_states.
+        ``_cleanup_run`` drops the task with the rest of the run, so a task left
+        here is genuinely in flight (done ones are skipped anyway, in case a run
+        died before its cleanup).
+        """
+        for run_id, task in list(self._tasks.items()):
+            if task.done():
+                continue
+            run = self._live_runs.get(run_id)
+            if run is not None and str(run.get("graph_id") or "") == graph_id:
+                return True
+        return False
+
     def cancel_run(self, run_id: str) -> DesignerExecutionRun:
         run = self._require_run(run_id)
         cancel_flag = self._cancel_flags.get(run_id)

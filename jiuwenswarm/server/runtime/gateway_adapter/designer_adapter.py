@@ -191,6 +191,28 @@ def hydrate_graph_node_outputs(
     return {**graph, "nodes": nodes}
 
 
+def _chat_concurrency_conflict(graph_id: str, baseline_graph: dict[str, Any] | None) -> str:
+    """Why this chat turn must not write, or "" when it is safe to.
+
+    A turn plans against the graph it read, then saves a graph derived from that
+    snapshot. Without this a writer that lands meanwhile — another chat turn, or
+    the canvas autosaving a user edit — is silently overwritten: the leader's
+    plan comes from the older snapshot, so saving it reverts whatever else
+    changed, and the user sees an edit disappear with no error.
+
+    The design branch carried this guard until e29021fac ("add asset into chat
+    box") dropped it along with the chat-document conflict machinery. Only the
+    graph half is restored here: comparing the run too would refuse turns that
+    lose nothing (a background run updating its own node_states mid-turn is
+    normal), while a genuinely overlapping run is already caught above.
+    """
+    if _executor.has_active_tasks(graph_id):
+        return "工作流任务尚未结束；运行中请先停止，任务正在停止时请稍后重试。"
+    if _store.get_graph(graph_id) != baseline_graph:
+        return "工作流已在此期间发生变化，请重新提交。"
+    return ""
+
+
 def _get_graph(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None, str | None]:
     graph_id = str(params.get("graph_id") or "").strip()
     if not graph_id:
@@ -1523,12 +1545,18 @@ async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[di
     if graph is None:
         return None, "graph not found", "NOT_FOUND"
     graph = _executor.reconcile_loaded_graph(graph)
+    # Optimistic-concurrency baseline: what the store holds now, captured before
+    # hydration overlays the run's outputs. This turn plans against it and saves
+    # a graph derived from it, so the guard below compares like-for-like against
+    # a fresh read and refuses when another writer got there first.
+    baseline_graph = _store.get_graph(graph_id)
+    baseline_run = _store.get_latest_run_for_graph(graph_id)
     # The run record is the source of truth for what a node already produced. A
     # long render can finish after the chat's wait window, so a node can be
     # completed in the run while the persisted graph still shows no output —
     # planning from that stale view treats finished work as a leftover and
     # queues a second, unasked-for version of it.
-    graph = hydrate_graph_node_outputs(graph, _store.get_latest_run_for_graph(graph_id))
+    graph = hydrate_graph_node_outputs(graph, baseline_run)
     selected_node_id = str(params.get("selected_node_id") or params.get("node_id") or "").strip()
     run_new_nodes = bool(params.get("run_new_nodes") or params.get("runNewNodes"))
     progress = _leader_progress_callback(request)
@@ -1560,6 +1588,11 @@ async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[di
         return None, str(exc), "INTERNAL_ERROR"
 
     next_graph = result.get("graph") or graph
+    if result.get("changed") or result.get("run_node_ids"):
+        conflict = _chat_concurrency_conflict(graph_id, baseline_graph)
+        if conflict:
+            logger.info("[DesignerAdapter] refusing chat turn on %s: %s", graph_id, conflict)
+            return None, conflict, "CONFLICT"
     saved = _store.save_graph(next_graph) if result.get("changed") else graph
     summary = str(result.get("summary") or "")
     session_id = str((saved.get("metadata") or {}).get("session_id") or "").strip()
