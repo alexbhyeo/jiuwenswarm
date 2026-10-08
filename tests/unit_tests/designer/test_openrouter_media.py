@@ -164,3 +164,203 @@ def test_endpoint_profile_admits_a_proxied_openrouter(
     monkeypatch.setenv("VIDEO_GEN_ENDPOINT_PROFILE", "openrouter")
 
     assert mg.generation_problem("video") is None
+
+
+# --- reference-to-video on the OpenRouter path -------------------------------
+#
+# These requests used to be refused outright ("only supports text-to-video and
+# first-frame image-to-video, not reference images"), which blocked Design clips
+# on a model that does support them and told the user to switch providers.
+
+
+def _video_body(**overrides: Any) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "model": "bytedance/seedance-2.0-fast",
+        "prompt": "shot",
+        "aspect_ratio": "16:9",
+        "resolution": "720p",
+        "duration_seconds": 5,
+        "generate_audio": False,
+        "first_frame": None,
+        "reference_uris": [],
+        "reference_mode": False,
+    }
+    kwargs.update(overrides)
+    return video_gen_tools._openrouter_video_body(**kwargs)  # pylint: disable=protected-access
+
+
+def test_reference_images_ride_input_references() -> None:
+    body = _video_body(reference_uris=["https://cdn/a.png", "https://cdn/b.png"])
+
+    assert body["input_references"] == [
+        {"type": "image_url", "image_url": {"url": "https://cdn/a.png"}},
+        {"type": "image_url", "image_url": {"url": "https://cdn/b.png"}},
+    ]
+    assert "frame_images" not in body
+
+
+def test_a_lone_first_frame_still_uses_frame_images() -> None:
+    body = _video_body(first_frame="data:image/png;base64,AAA")
+
+    assert body["frame_images"] == [
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,AAA"},
+            "frame_type": "first_frame",
+        }
+    ]
+    assert "input_references" not in body
+
+
+def test_reference_mode_folds_the_first_frame_into_references() -> None:
+    """Matches every native backend: reference mode uses it as a reference."""
+    body = _video_body(first_frame="data:image/png;base64,AAA", reference_mode=True)
+
+    assert body["input_references"] == [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}}
+    ]
+    assert "frame_images" not in body
+
+
+def test_reference_mode_puts_the_frame_ahead_of_the_other_references() -> None:
+    frame = "data:image/png;base64,FRAME"
+    body = _video_body(
+        first_frame=frame, reference_uris=["https://cdn/character.png"], reference_mode=True
+    )
+
+    assert [item["image_url"]["url"] for item in body["input_references"]] == [
+        frame,
+        "https://cdn/character.png",
+    ]
+
+
+def test_a_frame_already_listed_as_a_reference_is_not_sent_twice() -> None:
+    frame = "data:image/png;base64,AAA"
+    body = _video_body(first_frame=frame, reference_uris=[frame])
+
+    assert "frame_images" not in body
+    assert body["input_references"] == [{"type": "image_url", "image_url": {"url": frame}}]
+
+
+class _FakeResponse:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.status_code = 200
+        self._payload = payload
+
+    @property
+    def text(self) -> str:
+        return str(self._payload)
+
+    def json(self) -> dict[str, Any]:
+        return self._payload
+
+
+class _FakeClient:
+    """Captures the POST body; the job is already terminal so no poll happens."""
+
+    instances: list["_FakeClient"] = []
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.posts: list[tuple[str, dict[str, Any]]] = []
+        _FakeClient.instances.append(self)
+
+    async def __aenter__(self) -> "_FakeClient":
+        return self
+
+    async def __aexit__(self, *args: Any) -> bool:
+        return False
+
+    async def post(self, url: str, headers: Any = None, json: Any = None) -> _FakeResponse:
+        self.posts.append((url, json))
+        return _FakeResponse({"id": "job-1", "status": "failed", "error": "stopped for the test"})
+
+    async def get(self, url: str, headers: Any = None) -> _FakeResponse:
+        return _FakeResponse({"id": "job-1", "status": "failed"})
+
+
+@pytest.mark.asyncio
+async def test_generate_video_sends_references_instead_of_refusing_them(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, openrouter_video_slot: None
+) -> None:
+    _FakeClient.instances.clear()
+    monkeypatch.setattr(video_gen_tools.httpx, "AsyncClient", _FakeClient)
+    character = tmp_path / "character.png"
+    character.write_bytes(b"png-character")
+    scene = tmp_path / "scene.png"
+    scene.write_bytes(b"png-scene")
+
+    result = await video_gen_tools.generate_video._func(  # pylint: disable=protected-access
+        "shot", "16:9", "720p", 5, None, False, str(tmp_path),
+        [str(character), str(scene)], False,
+    )
+
+    assert "not reference images" not in result
+    [(url, body)] = _FakeClient.instances[-1].posts
+    assert url.endswith("/videos")
+    references = body["input_references"]
+    assert len(references) == 2
+    assert all(item["type"] == "image_url" for item in references)
+    assert all(item["image_url"]["url"].startswith("data:image/png;base64,") for item in references)
+    assert "frame_images" not in body
+
+
+class _RejectingResponse:
+    def __init__(self, status_code: int, text: str) -> None:
+        self.status_code = status_code
+        self.text = text
+
+    def json(self) -> dict[str, Any]:
+        return {}
+
+
+class _RejectingClient:
+    """A provider that refuses the submit outright."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    async def __aenter__(self) -> "_RejectingClient":
+        return self
+
+    async def __aexit__(self, *args: Any) -> bool:
+        return False
+
+    async def post(self, url: str, headers: Any = None, json: Any = None) -> _RejectingResponse:
+        return _RejectingResponse(400, "reference images are not supported by this model")
+
+    async def get(self, url: str, headers: Any = None) -> _RejectingResponse:
+        return _RejectingResponse(400, "")
+
+
+@pytest.mark.asyncio
+async def test_a_provider_rejection_still_explains_the_references(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, openrouter_video_slot: None
+) -> None:
+    """The old block became guidance: only a real rejection triggers it now."""
+    monkeypatch.setattr(video_gen_tools.httpx, "AsyncClient", _RejectingClient)
+    character = tmp_path / "character.png"
+    character.write_bytes(b"png-character")
+
+    result = await video_gen_tools.generate_video._func(  # pylint: disable=protected-access
+        "shot", "16:9", "720p", 5, None, False, str(tmp_path), [str(character)], False,
+    )
+
+    assert "reference images are not supported by this model" in result  # provider detail kept
+    assert "1 reference image(s) were sent as input_references" in result
+    assert "OpenRouter (bytedance/seedance-2.x)" in result  # OpenRouter named as supported
+    assert "first_frame_path" in result
+
+
+@pytest.mark.asyncio
+async def test_a_provider_rejection_without_references_adds_no_guidance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, openrouter_video_slot: None
+) -> None:
+    monkeypatch.setattr(video_gen_tools.httpx, "AsyncClient", _RejectingClient)
+
+    result = await video_gen_tools.generate_video._func(  # pylint: disable=protected-access
+        "shot", "16:9", "720p", 5, None, False, str(tmp_path), None, False,
+    )
+
+    assert "reference images are not supported by this model" in result
+    assert "input_references" not in result
+

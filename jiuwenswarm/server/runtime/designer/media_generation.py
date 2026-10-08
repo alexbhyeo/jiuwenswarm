@@ -11,10 +11,9 @@ Vendor-native backends (MiniMax, ModelArk, DashScope, vLLM-Omni) go through
 ``gen_toolkits``. OpenRouter endpoints are driven through the chat tools'
 OpenRouter-style path (``visual_gen_tools`` / ``video_gen_tools``). Any other
 endpoint is refused by :func:`generation_problem` with a message naming the
-supported ones, rather than being attempted and failing at request time. That
-path does not take reference images: image requests drop references with a
-warning, and video references are rejected by it (only the native backends
-support reference-to-video).
+supported ones, rather than being attempted and failing at request time. The
+OpenRouter image path is text-to-image only, so image requests drop references
+with a warning; the video path does accept them (``input_references``).
 """
 
 from __future__ import annotations
@@ -261,7 +260,8 @@ async def generate_video(request: DesignerVideoRequest, *, save_dir: str | None 
 
     if settings.backend is None:
         # OpenRouter-style endpoint: the chat tool's path (submit, then poll).
-        # It rejects reference images; the tool's message is passed through.
+        # Reference stills ride ``input_references`` there, so the character/
+        # scene references Design always passes are honoured.
         logger.info(
             "Designer video generation backend=openrouter model=%s size=%s resolution=%s first_frame=%s "
             "references=%d reference_mode=%s",
