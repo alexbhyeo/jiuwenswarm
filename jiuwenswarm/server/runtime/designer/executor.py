@@ -327,12 +327,23 @@ class GraphExecutor:
         incoming = execution_predecessors(graph)
         groups = sync_groups(graph)
         source_states = source_run.get("node_states") or {}
+        # A predecessor that this same rerun rebuilds must not have to be
+        # completed first: the targets run in dependency order, so it is built
+        # inside this very run. Chained shots hit this — clip 2 takes clip 1's
+        # tail frame, so asking to generate all three clips was refused with
+        # "upstream not ready: n_clip_1" until n_clip_1 was rebuilt on its own.
+        target_set = set(targets)
         for target in targets:
             for pred in incoming.get(target, []):
                 members = groups.get(pred, frozenset({pred}))
-                for member in members:
-                    if (source_states.get(member) or {}).get("status") != NODE_STATUS_COMPLETED:
-                        raise ValueError(f"upstream not ready: {member}")
+                blocking = [
+                    member
+                    for member in members
+                    if member not in target_set
+                    and (source_states.get(member) or {}).get("status") != NODE_STATUS_COMPLETED
+                ]
+                if blocking:
+                    raise ValueError(f"upstream not ready: {blocking[0]}")
         now = utc_now_ms()
         states = deepcopy(source_states)
         for node in graph.get("nodes", []):

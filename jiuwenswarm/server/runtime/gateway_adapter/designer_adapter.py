@@ -1574,6 +1574,7 @@ async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[di
             mode="designer",
         )
     run_payload = None
+    run_error = ""
     run_ids = list(result.get("run_node_ids") or [])
     if run_ids:
         start_params: dict[str, Any] = {
@@ -1655,8 +1656,26 @@ async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[di
             )
             result["summary"] = summary
         elif error:
-            result["summary"] = f"{result.get('summary') or ''} ({error})".strip()
-            summary = str(result["summary"])
+            # Keep the reason out of the summary here: replace_next_step below
+            # truncates everything from the "下一步" marker, which is exactly
+            # where a suffix would land, so the cause was silently dropped and
+            # the reply still read as though generation had begun.
+            run_error = str(error)
+    if run_error:
+        from jiuwenswarm.server.runtime.designer.leader_chat import (
+            looks_chinese,
+            report_unbuilt_nodes,
+        )
+
+        summary = report_unbuilt_nodes(
+            summary,
+            saved,
+            [str(item) for item in run_ids],
+            run_finished=True,
+            chinese=looks_chinese(str(message)),
+            reason=run_error,
+        )
+        result["summary"] = summary
     # The leader writes its summary before the run executes, so a turn that built
     # the last shots still closed with "下一步是镜头视频" — true when it was written,
     # wrong by the time the user read it. Re-resolve the closing line from the

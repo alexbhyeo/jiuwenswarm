@@ -409,6 +409,7 @@ def report_unbuilt_nodes(
     node_states: dict[str, Any] | None = None,
     run_finished: bool = True,
     chinese: bool,
+    reason: str = "",
 ) -> str:
     """Replace a summary that announces nodes the run never actually produced.
 
@@ -418,15 +419,19 @@ def report_unbuilt_nodes(
     run left that node pending — the user then hunted for an asset that did not
     exist. Whenever a named node has no output, its prose cannot be trusted, so
     the claim is replaced with what the run state actually says.
+
+    ``reason`` overrides the per-node state wording, for when the run never
+    started at all and the caller has the real error to give.
     """
     states = {str(key): value for key, value in (node_states or {}).items() if isinstance(value, dict)}
-    missing: list[str] = []
+    parts: list[str] = []
     seen: set[str] = set()
+    reported: set[str] = set()
     for raw_id in node_ids:
         node_id = str(raw_id or "").strip()
-        if not node_id or node_id in seen:
+        if not node_id or node_id in reported:
             continue
-        seen.add(node_id)
+        reported.add(node_id)
         node = _node_by_id(graph, node_id)
         if not isinstance(node, dict):
             continue
@@ -437,12 +442,18 @@ def report_unbuilt_nodes(
         label = _STAGE_LABELS.get(pipeline, (pipeline or node_id, pipeline or node_id))[
             0 if chinese else 1
         ]
-        missing.append(f"{label}（{_unbuilt_reason(state, run_finished=run_finished, chinese=chinese)}）")
-    if not missing:
+        said = reason or _unbuilt_reason(state, run_finished=run_finished, chinese=chinese)
+        # Three clips share one stage label, so report the stage once rather
+        # than repeating "镜头视频（…）" per node.
+        entry = f"{label}（{said}）"
+        if entry not in seen:
+            seen.add(entry)
+            parts.append(entry)
+    if not parts:
         return summary
     if chinese:
-        return f"未生成：{'、'.join(missing)}。"
-    return f"Not generated: {', '.join(missing)}."
+        return f"未生成：{'、'.join(parts)}。"
+    return f"Not generated: {', '.join(parts)}."
 
 
 def with_next_step(
@@ -791,6 +802,17 @@ async def run_leader_chat(
         next_graph,
         instruction=text,
         intent=str(plan.get("intent") or ""),
+    )
+    # A turn can end with nothing to run while its prose promises generation
+    # ("开始生成三段镜头视频" with run_node_ids emptied out). Record the plan's
+    # ids next to the resolved ones: without this the only symptom is a reply
+    # that claims work it never scheduled, which is invisible in the logs.
+    logger.info(
+        "[Designer] leader chat intent=%s asked_to_run=%s plan_run_ids=%s resolved_run_ids=%s",
+        plan.get("intent"),
+        message_asks_to_run(text, run_new_nodes=run_new_nodes),
+        list(plan.get("run_node_ids") or []),
+        run_ids,
     )
     changed = next_graph is not graph and next_graph.get("updated_at") != graph.get("updated_at")
     if not changed:

@@ -736,6 +736,79 @@ async def test_rerun_single_node_keeps_upstream_outputs(
         executor.create_rerun(graph, source_run=unfinished, node_id="n_clip_1")
 
 
+def _chained_clip_graph(designer_store: DesignerGraphStore, project_id: str):
+    """Bootstrap graph plus a second clip that continues the first.
+
+    Mirrors what the leader wires for chained shots: clip 2 takes clip 1's tail
+    frame, so clip 1 is clip 2's upstream.
+    """
+    base = build_bootstrap_graph(project_id=project_id, prompt="chain")
+    clip_1 = next(node for node in base["nodes"] if node["id"] == "n_clip_1")
+    clip_2 = {
+        **clip_1,
+        "id": "n_clip_2",
+        "label": "Clip 2",
+        "config": dict(clip_1.get("config") or {}),
+    }
+    return designer_store.save_graph(
+        _handler_graph(
+            {
+                **base,
+                "nodes": [*base["nodes"], clip_2],
+                "edges": [
+                    *base["edges"],
+                    {"id": "e_clip_1_clip_2", "source": "n_clip_1", "target": "n_clip_2"},
+                ],
+            }
+        )
+    )
+
+
+def test_rerun_allows_targets_that_depend_on_each_other(
+    designer_store: DesignerGraphStore,
+) -> None:
+    """Asking for chained clips together must not be refused.
+
+    ``create_rerun`` required every predecessor to be completed already,
+    including predecessors that are themselves targets of the same rerun — so
+    "生成镜头视频" on clips chained first-frame-to-first-frame raised
+    "upstream not ready: n_clip_1", the very node the run would have rebuilt.
+    Nothing ran, and the reply still said generation had started.
+    """
+    graph = _chained_clip_graph(designer_store, "proj_chain")
+    executor = GraphExecutor(designer_store)
+    source = executor.create_run(graph)
+    for state in source["node_states"].values():
+        state["status"] = NODE_STATUS_COMPLETED
+    # The earlier clip failed earlier in the session; this rerun rebuilds it.
+    source["node_states"]["n_clip_1"] = {"status": "failed", "error": "[ERROR]: boom"}
+    designer_store.save_run(source)
+
+    rerun = executor.create_rerun(
+        graph, source_run=source, node_id="n_clip_1", node_ids=["n_clip_1", "n_clip_2"]
+    )
+
+    assert rerun["node_states"]["n_clip_1"]["status"] == "pending"
+    assert rerun["node_states"]["n_clip_2"]["status"] == "pending"
+
+
+def test_rerun_still_refuses_an_unfinished_upstream_it_will_not_build(
+    designer_store: DesignerGraphStore,
+) -> None:
+    """Widening must not drop the check for a predecessor outside the target set."""
+    graph = _chained_clip_graph(designer_store, "proj_chain_guard")
+    executor = GraphExecutor(designer_store)
+    source = executor.create_run(graph)
+    for state in source["node_states"].values():
+        state["status"] = NODE_STATUS_COMPLETED
+    source["node_states"]["n_clip_1"] = {"status": "failed", "error": "boom"}
+    designer_store.save_run(source)
+
+    # Only clip 2 is rebuilt here, so its failed upstream really is not ready.
+    with pytest.raises(ValueError, match="upstream not ready: n_clip_1"):
+        executor.create_rerun(graph, source_run=source, node_id="n_clip_2", node_ids=["n_clip_2"])
+
+
 @pytest.mark.asyncio
 async def test_continue_after_failure_retries_failed_node(
     designer_store: DesignerGraphStore,
