@@ -181,7 +181,10 @@ async def generate_image(
             "Designer image generation backend=openrouter model=%s size=%s references=0/%d",
             settings.model, size, len(refs),
         )
-        result = await visual_gen_tools.generate_visual(
+        # ``generate_visual`` is an openjiuwen ``@tool``: the module attribute is a
+        # LocalFunction, not the coroutine. Reach through ``_func`` for the plain
+        # callable (same convention as readonly_tool_bindings.py).
+        result = await visual_gen_tools.generate_visual._func(  # pylint: disable=protected-access
             prompt, aspect_ratio, _short_edge_px(size), save_dir
         )
         path = None if result.startswith("[ERROR]") else _saved_path(result)
@@ -240,7 +243,8 @@ async def generate_video(request: DesignerVideoRequest, *, save_dir: str | None 
             "references=%d reference_mode=%s",
             model, request.size, resolution, bool(request.first_frame), len(refs), request.reference_mode,
         )
-        result = await video_gen_tools.generate_video(
+        # Same ``@tool`` caveat as the image path above.
+        result = await video_gen_tools.generate_video._func(  # pylint: disable=protected-access
             request.prompt,
             aspect_ratio,
             resolution,
@@ -254,7 +258,9 @@ async def generate_video(request: DesignerVideoRequest, *, save_dir: str | None 
         deadline = time.monotonic() + _VIDEO_TIMEOUT_SECONDS
         while (pending := _PENDING_JOB.match(result)) and time.monotonic() < deadline:
             await asyncio.sleep(_VIDEO_POLL_SECONDS)
-            result = await video_gen_tools.check_video_status(pending.group(1), save_dir)
+            result = await video_gen_tools.check_video_status._func(  # pylint: disable=protected-access
+                pending.group(1), save_dir
+            )
         if pending:
             return {
                 "error": f"[ERROR]: video job {pending.group(1)} did not finish within "
