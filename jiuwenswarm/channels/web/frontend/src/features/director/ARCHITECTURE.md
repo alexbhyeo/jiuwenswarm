@@ -138,7 +138,7 @@ Two fields exist specifically to avoid remount races:
 | `lab/LabCanvas.tsx` | `@xyflow/react` canvas of process/image/video/text cards; debounced save. |
 | `lab/LabActionsContext.tsx` | Cross-node actions (run a process card, etc.). |
 | `lab/nodes/` | Node renderers for the Lab canvas. |
-| `components/EditTabShell.tsx` | Timeline shell (tracks, clips, undo) for the Edit tab. |
+| `components/EditTabShell.tsx` | Timeline shell (tracks, clips, undo) for the Edit tab. Clips are `image` / `video` / `audio`: image clips get a fixed default length, video and audio clips probe the real duration from a media element on drop, and all three can be moved, trimmed (image only, via handles) and split. Audio clips have no thumbnail — they render a note-icon placeholder — and the preview area shows an `<audio controls>` element whose `timeupdate` drives the playhead, exactly like video. |
 | `components/EditChatPanel.tsx` | Edit-tab chat assistant (script → designs → shot list → frames → clips). |
 
 ### 3.4 Composer modes
@@ -180,7 +180,7 @@ Plus one non-RPC endpoint:
 
 | Endpoint | Handler | Purpose |
 |----------|---------|---------|
-| `POST /file-api/director/upload` | `director_multipart_http.handle_director_asset_upload_http` | Upload an image/video as an asset (`asset_type=character` for character refs). |
+| `POST /file-api/director/upload` | `director_multipart_http.handle_director_asset_upload_http` | Upload an image/video/audio file as an asset (`asset_type=character` for character refs, `asset_type=audio` for the new 音频 category). |
 
 ### 4.2 Error codes (`DirectorRpcError`)
 

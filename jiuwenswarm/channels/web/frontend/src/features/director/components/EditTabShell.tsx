@@ -43,6 +43,63 @@ const splitIcon = (
   </svg>
 );
 
+/** 音频片段在时间线上的占位图标——音频没有画面可以当缩略图，用它代替
+ *  图片/视频片段的 <img>/<video> 缩略图。 */
+const audioClipIcon = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M9 18V6l10-2v12" />
+    <circle cx="6.5" cy="18" r="2.5" />
+    <circle cx="16.5" cy="16" r="2.5" />
+  </svg>
+);
+
+/** 片段右上角的"导出"图标（把片段裁剪出来的那一段存成一个新素材）。 */
+const exportIcon = (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 16V4M7 9l5-5 5 5" />
+    <path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+  </svg>
+);
+
+/** 把解码后的多声道样本编码成 16bit PCM 的 WAV Blob。
+
+ *  浏览器没有"把音频片段导出成文件"的原生能力，要导出就得自己落地一个容器
+ *  格式：WAV 无依赖、无损，而且上传端（.wav 在允许的音频扩展名里）和播放端
+ *  （<audio> / 素材面板）都已经支持，不需要为了导出再引入编码器。 */
+function encodeWavBlob(channels: Float32Array[], sampleRate: number): Blob {
+  const numChannels = Math.max(1, channels.length);
+  const numFrames = channels[0]?.length ?? 0;
+  const blockAlign = numChannels * 2;
+  const dataSize = numFrames * blockAlign;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+  const writeString = (offset: number, text: string) => {
+    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true); // fmt chunk 长度
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  writeString(36, 'data');
+  view.setUint32(40, dataSize, true);
+  let offset = 44;
+  for (let frame = 0; frame < numFrames; frame += 1) {
+    for (let ch = 0; ch < numChannels; ch += 1) {
+      const sample = Math.max(-1, Math.min(1, channels[ch][frame] ?? 0));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      offset += 2;
+    }
+  }
+  return new Blob([view], { type: 'audio/wav' });
+}
+
 const captureIcon = (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
     <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
@@ -126,10 +183,10 @@ const MAX_HISTORY = 50;
 interface EditClip {
   id: string;
   assetId: string;
-  type: 'image' | 'video';
+  type: 'image' | 'video' | 'audio';
   filePath: string;
   name: string;
-  /** 视频片段在源文件里的裁剪窗口（秒）；图片片段固定 trimIn=0。 */
+  /** 视频/音频片段在源文件里的裁剪窗口（秒）；图片片段固定 trimIn=0。 */
   trimIn: number;
   trimOut: number;
   /** 片段在所属轨道上的绝对起始时间（秒）——片段可以摆在轨道上任意时间点，
@@ -150,6 +207,16 @@ function clipEnd(clip: EditClip): number {
 
 function rawFileUrl(path: string): string {
   return `/file-api/raw-file?path=${encodeURIComponent(path)}`;
+}
+
+/** 时间线接受的素材类型。图片/视频是原有的两类，音频是新增的第三类——
+ *  音频片段与视频片段一样有内在时长，落下来先探 metadata 再按真实秒数占位，
+ *  之后同样可以拖动、分割。"角色"素材本质是图片，但这里仍然特意不收，避免
+ *  用户分不清拖上去的是角色参考图还是一张普通图片。 */
+const TIMELINE_ASSET_TYPES: readonly DirectorAssetDragPayload['type'][] = ['image', 'video', 'audio'];
+
+function isTimelineAssetType(type: DirectorAssetDragPayload['type']): boolean {
+  return (TIMELINE_ASSET_TYPES as readonly string[]).includes(type);
 }
 
 function formatTime(seconds: number): string {
@@ -319,6 +386,7 @@ export function EditTabShell() {
   const suppressClipClickRef = useRef(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const rafRef = useRef<number | null>(null);
   const lastTickRef = useRef<number | null>(null);
   const playheadRef = useRef(playheadTime);
@@ -429,6 +497,27 @@ export function EditTabShell() {
             start,
           });
         };
+      } else if (payload.type === 'audio') {
+        // 音频片段的时长只能问媒体元素要——素材记录里没有存时长（audio
+        // 素材的 file_path 是落盘的 wav/mp3），所以和视频一样先探一次
+        // metadata，拿到真实秒数再落到轨道上。探不到就退回 5s，不至于因为
+        // 一个探测失败把素材整个拒之门外。
+        const probe = document.createElement('audio');
+        probe.preload = 'metadata';
+        probe.src = rawFileUrl(payload.filePath);
+        probe.onloadedmetadata = () => {
+          const dur = Number.isFinite(probe.duration) && probe.duration > 0 ? probe.duration : 5;
+          commit({
+            id: `clip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            assetId: payload.assetId,
+            type: 'audio',
+            filePath: payload.filePath,
+            name: payload.name,
+            trimIn: 0,
+            trimOut: dur,
+            start,
+          });
+        };
       } else {
         commit({
           id: `clip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -528,7 +617,7 @@ export function EditTabShell() {
       if (!assetRaw) return;
       try {
         const payload = JSON.parse(assetRaw) as DirectorAssetDragPayload;
-        if (payload.type !== 'video' && payload.type !== 'image') return; // "角色" 素材本质是图片，但这里只接受显式的图片/视频，避免混淆
+        if (!isTimelineAssetType(payload.type)) return;
         const raw = timeFromClientX(e.clientX);
         const start = snapToNeighbors(tracksRef.current[trackIndex] ?? [], raw, IMAGE_CLIP_DURATION, snapThresholdSeconds());
         appendClipAt(payload, trackIndex, start);
@@ -549,7 +638,7 @@ export function EditTabShell() {
       if (!assetRaw) return;
       try {
         const payload = JSON.parse(assetRaw) as DirectorAssetDragPayload;
-        if (payload.type !== 'video' && payload.type !== 'image') return;
+        if (!isTimelineAssetType(payload.type)) return;
         const main = tracksRef.current[0] ?? [];
         const start = main.length ? Math.max(...main.map(clipEnd)) : 0;
         appendClipAt(payload, 0, start);
@@ -691,8 +780,13 @@ export function EditTabShell() {
       const ts = tracksRef.current;
       const total = totalDurationAcrossTracks(ts);
       const current = locateActive(ts, playheadRef.current);
-      const isVideoDriven = current?.clip.type === 'video' && videoRef.current && !videoRef.current.paused;
-      if (!isVideoDriven) {
+      // 视频和音频片段都由媒体元素自己的 timeupdate 驱动播放头（见下面
+      // handleMediaTimeUpdate）；图片片段/轨道间的空隙没有媒体元素可驱动，
+      // 交给 rAF 按真实经过时间累加。
+      const mediaEl = current?.clip.type === 'audio' ? audioRef.current : videoRef.current;
+      const isMediaDriven =
+        (current?.clip.type === 'video' || current?.clip.type === 'audio') && mediaEl && !mediaEl.paused;
+      if (!isMediaDriven) {
         const last = lastTickRef.current ?? now;
         const deltaSec = (now - last) / 1000;
         const next = playheadRef.current + deltaSec;
@@ -713,36 +807,45 @@ export function EditTabShell() {
     };
   }, [playing]);
 
-  // 切到视频片段时把 <video> 定位到片段内应处的位置并按当前播放状态启停；
-  // 该视频自己的 timeupdate 再把（片段起始时间 + 片段内本地时间）写回播放
-  // 头，让时间线随视频真实播放进度前进，而不是靠 rAF 空转估算。
+  // 切到视频/音频片段时把媒体元素定位到片段内应处的位置并按当前播放状态启停；
+  // 该元素自己的 timeupdate 再把（片段起始时间 + 片段内本地时间）写回播放头，
+  // 让时间线随真实播放进度前进，而不是靠 rAF 空转估算。
   useEffect(() => {
-    const el = videoRef.current;
-    if (!el || !activeClip || activeClip.type !== 'video') return;
-    const target = activeClip.trimIn + localTime;
+    const clip = activeClip;
+    if (!clip || (clip.type !== 'video' && clip.type !== 'audio')) return;
+    const el = clip.type === 'audio' ? audioRef.current : videoRef.current;
+    if (!el) return;
+    const target = clip.trimIn + localTime;
     if (Math.abs(el.currentTime - target) > 0.35) el.currentTime = target;
     if (playing) void el.play().catch(() => undefined);
     else el.pause();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeClip?.id, playing]);
 
-  // 暂停状态下拖动播放头（或点击时间线/刻度尺跳转）时，把预览画面实时同步到
-  // 拖到的那一帧——上面那个 effect 只在"切换片段"或"播放/暂停状态改变"时才
-  // 跑，播放头在同一段视频内部移动并不会触发它，画面就会停在原处不跟着走。
-  // 播放中不跑这一段：那时候画面已经交给视频自己的 timeupdate 在推进（见下面
-  // handleVideoTimeUpdate），这里再抢着 seek 只会来回打架、造成卡顿。
+  // 暂停状态下拖动播放头（或点击时间线/刻度尺跳转）时，把预览实时同步到拖到
+  // 的那一帧——上面那个 effect 只在"切换片段"或"播放/暂停状态改变"时才跑，
+  // 播放头在同一段媒体内部移动并不会触发它，画面/声音就会停在原处不跟着走。
+  // 播放中不跑这一段：那时候已经交给媒体元素自己的 timeupdate 在推进（见下面
+  // handleMediaTimeUpdate），这里再抢着 seek 只会来回打架、造成卡顿。
   useEffect(() => {
-    const el = videoRef.current;
-    if (!el || playing || !activeClip || activeClip.type !== 'video') return;
-    const target = activeClip.trimIn + localTime;
+    const clip = activeClip;
+    if (playing || !clip || (clip.type !== 'video' && clip.type !== 'audio')) return;
+    const el = clip.type === 'audio' ? audioRef.current : videoRef.current;
+    if (!el) return;
+    const target = clip.trimIn + localTime;
     if (Math.abs(el.currentTime - target) > 0.02) el.currentTime = target;
   }, [playing, activeClip?.id, localTime]);
 
-  const handleVideoTimeUpdate = useCallback(() => {
-    const el = videoRef.current;
+  /** 媒体元素（视频/音频）的 timeupdate：把片段内的本地时间换算回整条时间线
+   *  上的绝对时间写入播放头；播到片段结尾就跳到片段末尾（还有后续内容）或
+   *  整条时间线结束。 */
+  const handleMediaTimeUpdate = useCallback(() => {
     const current = locateActive(tracksRef.current, playheadRef.current);
-    if (!el || !current || current.clip.type !== 'video' || !playing) return;
+    if (!current || !playing) return;
     const { clip } = current;
+    if (clip.type !== 'video' && clip.type !== 'audio') return;
+    const el = clip.type === 'audio' ? audioRef.current : videoRef.current;
+    if (!el) return;
     if (el.currentTime >= clip.trimOut - 0.02) {
       const total = totalDurationAcrossTracks(tracksRef.current);
       const end = clipEnd(clip);
@@ -848,14 +951,16 @@ export function EditTabShell() {
       return;
     }
     const splitAt = activeClip.start + localTime;
-    const first: EditClip =
-      activeClip.type === 'video'
-        ? { ...activeClip, id: `${activeClip.id}_a`, trimOut: activeClip.trimIn + localTime }
-        : { ...activeClip, id: `${activeClip.id}_a`, trimOut: localTime };
-    const second: EditClip =
-      activeClip.type === 'video'
-        ? { ...activeClip, id: `${activeClip.id}_b`, trimIn: activeClip.trimIn + localTime, start: splitAt }
-        : { ...activeClip, id: `${activeClip.id}_b`, trimIn: 0, trimOut: d - localTime, start: splitAt };
+    // 图片片段没有源裁剪窗口（trimIn 恒为 0），切开后两段各自从 0 开始计
+    // 时长；视频和音频片段有真实的源时间轴，切开是把源窗口 [trimIn, trimIn
+    // + localTime] 归第一段、其余归第二段——两者同一套算法。
+    const isSourced = activeClip.type !== 'image';
+    const first: EditClip = isSourced
+      ? { ...activeClip, id: `${activeClip.id}_a`, trimOut: activeClip.trimIn + localTime }
+      : { ...activeClip, id: `${activeClip.id}_a`, trimOut: localTime };
+    const second: EditClip = isSourced
+      ? { ...activeClip, id: `${activeClip.id}_b`, trimIn: activeClip.trimIn + localTime, start: splitAt }
+      : { ...activeClip, id: `${activeClip.id}_b`, trimIn: 0, trimOut: d - localTime, start: splitAt };
     applyTrack(activeTrackIndex, (arr) => {
       const next = arr.filter((c) => c.id !== activeClip.id);
       next.push(first, second);
@@ -895,6 +1000,50 @@ export function EditTabShell() {
   }, [activeClip, selectedProjectId, showNotice, t, uploadAsset]);
 
   const importInputRef = useRef<HTMLInputElement>(null);
+  // 正在导出的那个片段——导出要先把整段音频下载 + 解码，几十秒的片段也得
+  // 花点时间，按钮上转圈并禁止重复点击。
+  const [exportingClipId, setExportingClipId] = useState<string | null>(null);
+
+  /** 把音频片段裁剪出来的那一段导出成一个新的音频素材，落到项目的「素材 ·
+   *  音频」分类里。裁剪用的是片段自己的 trimIn/trimOut（分割出来的两段各自
+   *  带着自己的源窗口），所以导出结果与时间线上听到的完全一致。 */
+  const handleExportClipAudio = useCallback(
+    async (clip: EditClip) => {
+      if (!selectedProjectId || exportingClipId) return;
+      const trimIn = Math.max(0, clip.trimIn);
+      const trimOut = Math.max(trimIn + MIN_CLIP_DURATION, clip.trimOut);
+      setExportingClipId(clip.id);
+      const ctx = new AudioContext();
+      try {
+        const resp = await fetch(rawFileUrl(clip.filePath));
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const decoded = await ctx.decodeAudioData(await resp.arrayBuffer());
+        const startFrame = Math.min(decoded.length, Math.floor(trimIn * decoded.sampleRate));
+        const endFrame = Math.min(decoded.length, Math.ceil(trimOut * decoded.sampleRate));
+        if (endFrame - startFrame <= 0) throw new Error('empty trim window');
+        const channels: Float32Array[] = [];
+        for (let ch = 0; ch < decoded.numberOfChannels; ch += 1) {
+          // getChannelData 返回的是解码缓冲区自己的视图，slice 出一份拷贝再
+          // 编码——直接把视图交出去导出的是整段音频，而不是裁剪出来的一段。
+          channels.push(decoded.getChannelData(ch).slice(startFrame, endFrame));
+        }
+        const base = (clip.name || 'audio').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'audio';
+        const file = new File(
+          [encodeWavBlob(channels, decoded.sampleRate)],
+          `${base}_${trimIn.toFixed(2)}-${trimOut.toFixed(2)}.wav`,
+          { type: 'audio/wav' },
+        );
+        await uploadAsset(selectedProjectId, file, 'audio');
+        showNotice('ok', t('director.edit.exported', { name: file.name }));
+      } catch {
+        showNotice('error', t('director.edit.exportFailed'));
+      } finally {
+        setExportingClipId(null);
+        void ctx.close();
+      }
+    },
+    [exportingClipId, selectedProjectId, showNotice, t, uploadAsset],
+  );
 
   const playheadPct = (playheadTime / timeScale) * 100;
 
@@ -935,22 +1084,43 @@ export function EditTabShell() {
       >
         {clip.type === 'image' ? (
           <img className="director-edit-clip-thumb" src={rawFileUrl(clip.filePath)} alt="" draggable={false} />
-        ) : (
+        ) : clip.type === 'video' ? (
           <video className="director-edit-clip-thumb" src={rawFileUrl(clip.filePath)} muted preload="metadata" draggable={false} />
+        ) : (
+          <span className="director-edit-clip-audio" aria-hidden="true">
+            {audioClipIcon}
+          </span>
         )}
         <span className="director-edit-clip-name">{clip.name}</span>
-        <button
-          type="button"
-          className="director-edit-clip-delete"
-          title={t('director.edit.deleteClip')}
-          onClick={(e) => {
-            e.stopPropagation();
-            deleteClip(trackIndex, clip.id);
-          }}
-          data-testid="director-edit-clip-delete"
-        >
-          {trashIcon}
-        </button>
+        <div className="director-edit-clip-actions">
+          {clip.type === 'audio' ? (
+            <button
+              type="button"
+              className="director-edit-clip-export"
+              title={t('director.edit.exportAudio')}
+              disabled={exportingClipId === clip.id}
+              onClick={(e) => {
+                e.stopPropagation();
+                void handleExportClipAudio(clip);
+              }}
+              data-testid="director-edit-clip-export"
+            >
+              {exportIcon}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="director-edit-clip-delete"
+            title={t('director.edit.deleteClip')}
+            onClick={(e) => {
+              e.stopPropagation();
+              deleteClip(trackIndex, clip.id);
+            }}
+            data-testid="director-edit-clip-delete"
+          >
+            {trashIcon}
+          </button>
+        </div>
         {clip.type === 'image' ? (
           <>
             <div
@@ -1049,10 +1219,19 @@ export function EditTabShell() {
                   ref={videoRef}
                   className="director-edit-preview-media"
                   src={rawFileUrl(activeClip.filePath)}
-                  onTimeUpdate={handleVideoTimeUpdate}
+                  onTimeUpdate={handleMediaTimeUpdate}
                   playsInline
                   muted
                   data-testid="director-edit-preview-video"
+                />
+              ) : activeClip.type === 'audio' ? (
+                <audio
+                  ref={audioRef}
+                  className="director-edit-preview-media director-edit-preview-audio"
+                  src={rawFileUrl(activeClip.filePath)}
+                  onTimeUpdate={handleMediaTimeUpdate}
+                  controls
+                  data-testid="director-edit-preview-audio"
                 />
               ) : (
                 <img className="director-edit-preview-media" src={rawFileUrl(activeClip.filePath)} alt={activeClip.name} data-testid="director-edit-preview-image" />
@@ -1077,7 +1256,7 @@ export function EditTabShell() {
               <input
                 ref={importInputRef}
                 type="file"
-                accept="image/*,video/*"
+                accept="image/*,video/*,audio/*"
                 multiple
                 style={{ display: 'none' }}
                 onChange={(e) => {
