@@ -362,7 +362,7 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
   // director_state.json 读改写互相覆盖（同类问题见 director. 前缀无状态路由修复）。
   // assetType 显式指定落到哪个分类——"素材 · 角色"上传的图片要存成
   // character 素材而不是普通 image 素材，文件扩展名本身分不出这两者。
-  const handleUploadFiles = async (files: FileList, assetType: 'image' | 'video' | 'character') => {
+  const handleUploadFiles = async (files: FileList, assetType: 'image' | 'video' | 'audio' | 'character') => {
     if (!selectedProject) return;
     for (const file of Array.from(files)) {
       await uploadAsset(selectedProject.project_id, file, assetType);
@@ -571,8 +571,7 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
             >
               <span className="director-category-icon">{audioIcon}</span>
               <span className="director-category-label">{t('director.categories.audio')}</span>
-              {/* 音频素材由 composer 的 音频 模式生成；上传暂不支持（后端 multipart
-                  只接受图片/视频），所以这一行没有上传按钮。 */}
+              <CategoryUploadButton accept="audio/*" disabled={uploading} onFiles={(files) => handleUploadFiles(files, 'audio')} />
               <span className="director-category-count">{assetsByType.audio.length}</span>
               {expanded === 'audio' ? chevronDown : chevronRight}
             </div>

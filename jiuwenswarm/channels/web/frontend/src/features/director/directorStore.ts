@@ -58,7 +58,7 @@ interface DirectorState {
   generate: () => Promise<void>;
   renameAsset: (projectId: string, assetId: string, name: string) => Promise<void>;
   deleteAsset: (projectId: string, assetId: string) => Promise<void>;
-  uploadAsset: (projectId: string, file: File, assetType?: 'image' | 'video' | 'character') => Promise<void>;
+  uploadAsset: (projectId: string, file: File, assetType?: 'image' | 'video' | 'audio' | 'character') => Promise<void>;
   uploading: boolean;
   uploadError: string | null;
 

@@ -2,7 +2,7 @@
 
 """``/file-api/director/upload`` multipart 上传处理.
 
-让用户把本地图片/视频直接导入某个项目的"素材"，不经过 generate_video /
+让用户把本地图片/视频/音频直接导入某个项目的"素材"，不经过 generate_video /
 generate_visual —— 与 skills 的 upload 端点同构（见
 server/runtime/skill/skills_multipart_http.py），复用其 multipart 解析，
 本地直接落盘 + 写 DirectorStore，不经过 AgentServer WS 往返。
@@ -27,6 +27,12 @@ logger = logging.getLogger(__name__)
 
 _ALLOWED_IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 _ALLOWED_VIDEO_EXT = {".mp4", ".mov", ".webm", ".m4v"}
+# Kept in sync with the frontend audio extensions in FileIcon (fileIconModel.ts)
+# plus the opus/pcm outputs of the audio generation tool.
+_ALLOWED_AUDIO_EXT = {".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma", ".opus"}
+# Asset types an explicit ``asset_type`` field may select; "character" is
+# handled separately below because it is an image with a different meaning.
+_EXPLICIT_ASSET_TYPES = ("image", "video", "audio")
 _ERROR_STATUS: dict[str, int] = {
     "INVALID_PARAMS": 400,
     "PROJECT_NOT_FOUND": 404,
@@ -51,11 +57,11 @@ def _error_body(code: str, message: str) -> dict[str, str]:
 def handle_director_asset_upload_http(*, content_type: str, body: bytes) -> tuple[int, dict[str, Any]]:
     """处理 ``POST /file-api/director/upload``，返回 (status, json_body).
 
-    表单字段：project_id（必填）、file（必填，图片或视频）、asset_type
-    （可选："image" | "video" | "character"）。角色素材本质上也是一张
-    图片，文件扩展名本身分不出"这是一张普通图片还是角色参考图"——前端从
-    "素材 · 角色"分类上传时显式传 asset_type=character 来区分；不传时
-    沿用原来按扩展名推断 image/video 的行为，兼容既有调用方。
+    表单字段：project_id（必填）、file（必填，图片/视频/音频）、asset_type
+    （可选："image" | "video" | "audio" | "character"）。角色素材本质上也是
+    一张图片，文件扩展名本身分不出"这是一张普通图片还是角色参考图"——前端
+    从"素材 · 角色"分类上传时显式传 asset_type=character 来区分；不传时
+    沿用原来按扩展名推断 image/video/audio 的行为，兼容既有调用方。
     """
     try:
         fields = parse_multipart_form(content_type, body)
@@ -76,8 +82,10 @@ def handle_director_asset_upload_http(*, content_type: str, body: bytes) -> tupl
         inferred_type = "image"
     elif ext in _ALLOWED_VIDEO_EXT:
         inferred_type = "video"
+    elif ext in _ALLOWED_AUDIO_EXT:
+        inferred_type = "audio"
     else:
-        allowed = ", ".join(sorted(_ALLOWED_IMAGE_EXT | _ALLOWED_VIDEO_EXT))
+        allowed = ", ".join(sorted(_ALLOWED_IMAGE_EXT | _ALLOWED_VIDEO_EXT | _ALLOWED_AUDIO_EXT))
         return _ERROR_STATUS["INVALID_PARAMS"], _error_body(
             "INVALID_PARAMS", f"不支持的文件类型: {ext or '(无扩展名)'}；仅支持 {allowed}"
         )
@@ -89,7 +97,7 @@ def handle_director_asset_upload_http(*, content_type: str, body: bytes) -> tupl
                 "INVALID_PARAMS", "角色素材只能上传图片文件"
             )
         asset_type = "character"
-    elif requested_type in ("image", "video") and requested_type != inferred_type:
+    elif requested_type in _EXPLICIT_ASSET_TYPES and requested_type != inferred_type:
         return _ERROR_STATUS["INVALID_PARAMS"], _error_body(
             "INVALID_PARAMS", f"文件扩展名 {ext} 与所选分类（{requested_type}）不匹配"
         )
