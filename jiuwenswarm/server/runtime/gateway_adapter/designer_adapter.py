@@ -1523,6 +1523,12 @@ async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[di
     if graph is None:
         return None, "graph not found", "NOT_FOUND"
     graph = _executor.reconcile_loaded_graph(graph)
+    # The run record is the source of truth for what a node already produced. A
+    # long render can finish after the chat's wait window, so a node can be
+    # completed in the run while the persisted graph still shows no output —
+    # planning from that stale view treats finished work as a leftover and
+    # queues a second, unasked-for version of it.
+    graph = hydrate_graph_node_outputs(graph, _store.get_latest_run_for_graph(graph_id))
     selected_node_id = str(params.get("selected_node_id") or params.get("node_id") or "").strip()
     run_new_nodes = bool(params.get("run_new_nodes") or params.get("runNewNodes"))
     progress = _leader_progress_callback(request)

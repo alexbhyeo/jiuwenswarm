@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from jiuwenswarm.server.runtime.designer import leader_chat
 from jiuwenswarm.server.runtime.designer.leader_chat import (
     report_unbuilt_nodes,
     replace_next_step,
@@ -131,3 +132,99 @@ def test_unknown_node_id_is_ignored() -> None:
         )
         == _CLAIM
     )
+
+
+# --- generating only the leftover -------------------------------------------
+#
+# A stage-level "generate" used to queue every node the plan named, including
+# ones that already had an output — a long render finishing after the chat's
+# wait window left the run complete but the graph stale, so the next turn
+# treated finished shots as leftovers and rebuilt all of them.
+
+
+async def _run_chat(
+    monkeypatch: pytest.MonkeyPatch,
+    graph: dict[str, Any],
+    message: str,
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    async def fake_plan(
+        _graph: Any, _message: str, *, selected_node_id: str = "", history: Any = None, images: Any = None
+    ) -> dict[str, Any]:
+        return plan
+
+    monkeypatch.setattr(leader_chat, "_llm_leader_plan", fake_plan)
+    return await leader_chat.run_leader_chat(graph, message)
+
+
+@pytest.mark.asyncio
+async def test_generate_targets_only_the_leftover(monkeypatch: pytest.MonkeyPatch) -> None:
+    graph = _graph(
+        _node("n_clip_1", "clip", uri="file:///tmp/clip1.mp4"),
+        _node("n_clip_2", "clip"),
+        _node("n_clip_3", "clip"),
+    )
+    plan = {
+        "intent": "edit_graph",
+        "summary": "开始生成三段镜头视频。",
+        "patch": {},
+        "run_node_ids": ["n_clip_1", "n_clip_2", "n_clip_3"],
+    }
+
+    result = await _run_chat(monkeypatch, graph, "生成镜头视频", plan)
+
+    assert result["run_node_ids"] == ["n_clip_2", "n_clip_3"]
+
+
+@pytest.mark.asyncio
+async def test_generate_with_nothing_missing_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No leftover must not read as though a rebuild had started."""
+    graph = _graph(
+        _node("n_clip_1", "clip", uri="file:///tmp/clip1.mp4"),
+        _node("n_clip_2", "clip", uri="file:///tmp/clip2.mp4"),
+    )
+    plan = {
+        "intent": "edit_graph",
+        "summary": "开始生成三段镜头视频。",
+        "patch": {},
+        "run_node_ids": ["n_clip_1", "n_clip_2"],
+    }
+
+    result = await _run_chat(monkeypatch, graph, "生成镜头视频", plan)
+
+    assert result["run_node_ids"] == []
+    assert "已生成，无需重复生成" in result["summary"]
+    assert "开始生成" not in result["summary"]
+
+
+@pytest.mark.asyncio
+async def test_refine_still_rebuilds_a_built_node(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redoing a specific node on purpose must survive the leftover filter."""
+    graph = _graph(_node("n_clip_1", "clip", uri="file:///tmp/clip1.mp4"))
+    plan = {
+        "intent": "refine_node",
+        "summary": "重新生成这个镜头。",
+        "patch": {},
+        "run_node_ids": ["n_clip_1"],
+    }
+
+    result = await _run_chat(monkeypatch, graph, "重新生成这个镜头", plan)
+
+    assert result["run_node_ids"] == ["n_clip_1"]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_did_not_ask_to_run_keeps_its_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    """"先别生成" must stay a no-op even with nodes named."""
+    graph = _graph(_node("n_clip_1", "clip"), _node("n_clip_2", "clip"))
+    plan = {
+        "intent": "edit_graph",
+        "summary": "把三个镜头接成首帧链。",
+        "patch": {},
+        "run_node_ids": ["n_clip_1", "n_clip_2"],
+    }
+
+    result = await _run_chat(monkeypatch, graph, "先别生成，只调整连线", plan)
+
+    assert result["run_node_ids"] == []
+    assert "已生成，无需重复生成" not in result["summary"]

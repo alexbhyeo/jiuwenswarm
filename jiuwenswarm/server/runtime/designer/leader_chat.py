@@ -401,6 +401,39 @@ def _unbuilt_reason(
     return "未完成" if chinese else "did not finish"
 
 
+def _split_already_built(
+    node_ids: list[str], graph: DesignerExecutionGraph
+) -> tuple[list[str], list[str]]:
+    """(still to build, already has an output) for the named nodes."""
+    pending: list[str] = []
+    built: list[str] = []
+    for node_id in node_ids:
+        node = _node_by_id(graph, node_id)
+        if isinstance(node, dict) and _node_with_output(node):
+            built.append(node_id)
+        else:
+            pending.append(node_id)
+    return pending, built
+
+
+def _already_built_note(
+    node_ids: list[str], graph: DesignerExecutionGraph, *, chinese: bool
+) -> str:
+    """Say the stage is already there rather than promising to rebuild it."""
+    labels: list[str] = []
+    for node_id in node_ids:
+        node = _node_by_id(graph, node_id) or {}
+        pipeline = str((node.get("config") or {}).get("pipeline") or "").strip()
+        label = _STAGE_LABELS.get(pipeline, (pipeline or node_id, pipeline or node_id))[
+            0 if chinese else 1
+        ]
+        if label not in labels:
+            labels.append(label)
+    if chinese:
+        return f"{'、'.join(labels)}已生成，无需重复生成。"
+    return f"{', '.join(labels)} is already generated; nothing to rebuild."
+
+
 def report_unbuilt_nodes(
     summary: str,
     graph: DesignerExecutionGraph,
@@ -789,14 +822,23 @@ async def run_leader_chat(
         plan["run_node_ids"] = [selected_node_id]
 
     _emit(progress, ACTIVITY_KIND_TOOL_CALL, "designer_graph_patch", tool="designer_graph_patch")
+    asked_to_run = message_asks_to_run(text, run_new_nodes=run_new_nodes)
     next_graph, run_ids, summary = apply_leader_plan(
         graph,
         plan,
         # A turn that asked to generate must also build the nodes it just added.
-        include_new_nodes=message_asks_to_run(text, run_new_nodes=run_new_nodes),
+        include_new_nodes=asked_to_run,
         # "完成下一步" must actually run the next stage, not just describe it.
         include_next_stage=bool(_NEXT_STEP_HINT.search(text)),
     )
+    # "Generate the shot videos" builds what is missing. A node that already has
+    # an output is not a leftover: rebuilding it costs minutes and leaves a
+    # second version nobody asked for. Redoing a specific node deliberately is
+    # the refine / selected-node path, which is left alone.
+    if asked_to_run and str(plan.get("intent") or "") != "refine_node":
+        run_ids, already_built = _split_already_built(run_ids, next_graph)
+        if not run_ids and already_built:
+            summary = _already_built_note(already_built, next_graph, chinese=looks_chinese(text))
     summary = with_next_step(
         summary,
         next_graph,
