@@ -109,4 +109,4 @@ report/index.html
 director-edit-assistant.zip
 short-video-production-swarm.zip
 designer_catalog_skills_reports_trajectory/runs/*
-tests/ui_e2e/*
+tests/ui_e2e/artifacts/suite/*
