@@ -336,3 +336,106 @@ async def test_generate_can_produce_a_silent_clip(
     asset = _asset_of(result)
     assert asset["params"]["generate_audio"] is False
     assert asset["type"] == "video"
+
+
+@pytest.mark.asyncio
+async def test_generate_accepts_an_audio_url_instead_of_an_asset(
+    monkeypatch: pytest.MonkeyPatch, manager: DirectorManager, tmp_path: Path
+):
+    """参考音频可以是一条公网直链（对象存储里的 wav），不必先上传成素材。"""
+    _configure(monkeypatch)
+    project_id = await _create_project(manager)
+    _add_asset(manager, project_id, asset_id="asset-image-1", asset_type="image", suffix=".png")
+    stub = _stub_video_tool(monkeypatch, _SAVED.format(path=str(tmp_path / "out.mp4")))
+    url = "https://examdatalake.blob.core.windows.net/examdatalake/audio/song-short.wav"
+
+    result = await manager.handle_director_generate(
+        {
+            "project_id": project_id,
+            "mode": "image_audio2video",
+            "reference_asset_ids": ["asset-image-1"],
+            "input_audio_url": url,
+            "prompt": "sing this",
+        }
+    )
+
+    kwargs = stub.calls[0]["kwargs"]
+    assert kwargs["reference_audio_path"] == url
+    asset = _asset_of(result)
+    assert asset["type"] == "video"
+    assert asset["params"]["input_audio_path"] == url
+    # 没有走素材那条路，就不该记一个素材 id 出来。
+    assert asset["params"]["input_audio_asset_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_audio_url_wins_over_a_connected_audio_asset(
+    monkeypatch: pytest.MonkeyPatch, manager: DirectorManager, tmp_path: Path
+):
+    _configure(monkeypatch)
+    project_id = await _create_project(manager)
+    _add_asset(manager, project_id, asset_id="asset-image-1", asset_type="image", suffix=".png")
+    _add_asset(manager, project_id, asset_id="asset-audio-1", asset_type="audio", suffix=".mp3")
+    stub = _stub_video_tool(monkeypatch, _SAVED.format(path=str(tmp_path / "out.mp4")))
+    url = "https://cdn.example/song.wav"
+
+    await manager.handle_director_generate(
+        {
+            "project_id": project_id,
+            "mode": "image_audio2video",
+            "reference_asset_ids": ["asset-image-1"],
+            "input_audio_asset_id": "asset-audio-1",
+            "input_audio_url": url,
+            "prompt": "p",
+        }
+    )
+
+    assert stub.calls[0]["kwargs"]["reference_audio_path"] == url
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_a_non_http_audio_url(
+    monkeypatch: pytest.MonkeyPatch, manager: DirectorManager, tmp_path: Path
+):
+    _configure(monkeypatch)
+    project_id = await _create_project(manager)
+    _add_asset(manager, project_id, asset_id="asset-image-1", asset_type="image", suffix=".png")
+    stub = _stub_video_tool(monkeypatch, _SAVED.format(path=str(tmp_path / "out.mp4")))
+
+    with pytest.raises(DirectorRpcError) as exc:
+        await manager.handle_director_generate(
+            {
+                "project_id": project_id,
+                "mode": "image_audio2video",
+                "reference_asset_ids": ["asset-image-1"],
+                "input_audio_url": "/Users/someone/song.wav",
+                "prompt": "p",
+            }
+        )
+
+    assert exc.value.code == "INVALID_PARAMS"
+    assert "音频链接" in exc.value.message
+    assert stub.calls == []
+
+
+@pytest.mark.asyncio
+async def test_generate_with_an_audio_url_does_not_need_a_prompt(
+    monkeypatch: pytest.MonkeyPatch, manager: DirectorManager, tmp_path: Path
+):
+    """填了链接就是一次完整请求——空提示词不该被"提示词不能为空"拦住。"""
+    _configure(monkeypatch)
+    project_id = await _create_project(manager)
+    _add_asset(manager, project_id, asset_id="asset-image-1", asset_type="image", suffix=".png")
+    stub = _stub_video_tool(monkeypatch, _SAVED.format(path=str(tmp_path / "out.mp4")))
+
+    result = await manager.handle_director_generate(
+        {
+            "project_id": project_id,
+            "mode": "image_audio2video",
+            "reference_asset_ids": ["asset-image-1"],
+            "input_audio_url": "https://cdn.example/song.wav",
+        }
+    )
+
+    assert len(stub.calls) == 1
+    assert _asset_of(result)["type"] == "video"

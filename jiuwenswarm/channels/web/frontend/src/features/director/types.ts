@@ -85,8 +85,12 @@ export interface GenerateParams {
   /** 仅 video2audio（视频生音频）使用：用作解说素材的输入视频素材 id。 */
   inputVideoAssetId?: string;
   /** 仅 image_audio2video（图音生视频）使用：作为口型同步依据的参考音频
-   *  素材 id（参考图走 referenceAssetIds）。 */
+   *  素材 id（参考图走 referenceAssetIds）。与 inputAudioUrl 二选一，两者
+   *  都给出时以 inputAudioUrl 为准。 */
   inputAudioAssetId?: string;
+  /** 仅 image_audio2video（图音生视频）使用：参考音频的公网 HTTPS 直链，
+   *  无需先上传成素材。非空时优先于 inputAudioAssetId。 */
+  inputAudioUrl?: string;
   /** 实验室节点画布：连线的显式引用（asset_id），绕开 composer 的
    *  "@名称" 文本解析。video 模式下最多首帧+尾帧两个；image 模式下可以是
    *  "图片参考" 卡片上连的一张或多张参考图（多参考图合成）。 */

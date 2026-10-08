@@ -2460,6 +2460,33 @@
   margin-bottom: 5px;
 }
 
+/* 生成参数弹层里的文本输入（目前只有 图音生视频 的"音频链接"）——宽度撑满
+   弹层，字号跟卡片其它小字一致；弹层本身很窄，输入框必须是整行而不是跟
+   胶囊按钮挤在一起。 */
+.lab-node-param-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  border: 1px solid var(--d-border-default);
+  border-radius: var(--d-radius-sm);
+  background: var(--d-bg-card);
+  color: var(--d-text-primary);
+  font-size: 10.5px;
+  font-family: inherit;
+}
+
+.lab-node-param-input:focus {
+  outline: none;
+  border-color: var(--d-accent);
+}
+
+.lab-node-params-popover-hint {
+  margin-top: 4px;
+  font-size: 9.5px;
+  line-height: 1.35;
+  color: var(--d-text-secondary);
+}
+
 .lab-node-params-popover-pills {
   display: flex;
   flex-wrap: wrap;

@@ -105,20 +105,26 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   const video1 = useConnectedVideo(id, maxVideos >= 1 ? 'video1' : '__none__');
   const audio1 = useConnectedAudio(id, maxAudios >= 1 ? 'audio1' : '__none__');
 
+  // 参考音频的两条来路：端口连线，或卡片上填的 HTTPS 直链。填了链接就以
+  // 链接为准（输入行上会标出来），避免"连了素材却在用链接"这种看不见的替换。
+  const audioUrl = (data.audioUrl ?? '').trim();
+  const hasAudioUrl = audioUrl.length > 0;
+  const audioConnected = !!audio1;
+
   const requiresImage = maxImages > 0;
   // 视频生音频必须先连一路视频（解说文案是从它写出来的）；文本节点可选，
   // 连了就当作用户对解说的额外要求。
   const requiresVideo = maxVideos > 0;
-  // 图音生视频必须同时连上参考图和参考音频——模型按音频做口型同步，缺了
-  // 音频这张卡片就不再是"图音生视频"了。
+  // 图音生视频必须拿到一路参考音频——连了音频素材、或者在卡片上填了音频
+  // 链接都算，两条都没有时这张卡片就不再是"图音生视频"了。
   const requiresAudio = maxAudios > 0;
   const hasAnyImage = isMultiRef ? images.length > 0 : !!image1;
   const canGenerate =
     data.status !== 'generating' &&
     (!requiresImage || hasAnyImage) &&
     (!requiresVideo || !!video1) &&
-    (!requiresAudio || !!audio1) &&
-    (text.trim().length > 0 || hasAnyImage || !!video1 || !!audio1);
+    (!requiresAudio || audioConnected || hasAudioUrl) &&
+    (text.trim().length > 0 || hasAnyImage || !!video1 || audioConnected || hasAudioUrl);
 
   const [paramsOpen, setParamsOpen] = useState(false);
   const paramsRef = useRef<HTMLDivElement>(null);
@@ -195,7 +201,13 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
             <Handle type="target" position={Position.Left} id="audio1" />
             <span className="lab-node-input-dot" />
             {t('director.lab.inputAudio')}
-            {audio1 && <span className="lab-node-input-filled">✓</span>}
+            {hasAudioUrl ? (
+              <span className="lab-node-input-filled" title={audioUrl}>
+                {t('director.lab.audioFromUrl')}
+              </span>
+            ) : (
+              audioConnected && <span className="lab-node-input-filled">✓</span>
+            )}
           </div>
         )}
       </div>
@@ -307,6 +319,26 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
                     </button>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {hasAudioOption && (
+              <div className="lab-node-params-popover-section">
+                <div className="lab-node-params-popover-label">{t('director.lab.audioUrlLabel')}</div>
+                <input
+                  type="text"
+                  className="lab-node-param-input nodrag"
+                  value={data.audioUrl ?? ''}
+                  placeholder={t('director.lab.audioUrlPlaceholder')}
+                  onChange={(e) => actions.patchProcessNode(id, { audioUrl: e.target.value })}
+                  // 画布/节点上的 pointerdown 会开始拖动整张卡片、click 会切换
+                  // 播放头，输入框里的交互不能顺带触发它们。
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
+                  data-testid="director-lab-audio-url-input"
+                />
+                <div className="lab-node-params-popover-hint">{t('director.lab.audioUrlHint')}</div>
               </div>
             )}
 

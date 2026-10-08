@@ -553,7 +553,11 @@ function LabCanvasInner() {
           // reference-to-video 调用完成，参考图不进首帧槽位（同时带
           // frame_images 与 input_references 时服务商会丢弃后者）。
           if (resolved.image1?.assetId) params.referenceAssetIds = [resolved.image1.assetId];
-          if (resolved.audio1?.assetId) params.inputAudioAssetId = resolved.audio1.assetId;
+          // 参考音频优先用卡片上填的链接（与卡片上"参考音频"行的显示一致），
+          // 没填链接才回落到端口连进来的音频素材。
+          const audioUrl = (data.audioUrl ?? '').trim();
+          if (audioUrl) params.inputAudioUrl = audioUrl;
+          else if (resolved.audio1?.assetId) params.inputAudioAssetId = resolved.audio1.assetId;
           // 卡片上的"有声音/无声音"选项：未设置过按有声音处理（与后端默认一致）。
           params.generateAudio = data.generateAudio !== false;
         } else if (mode === 'video') {
@@ -966,8 +970,13 @@ function LabCanvasInner() {
         // 音频卡片重建后音色不能变回默认值——params 里存了当时用的 voice。
         voice: typeof params.voice === 'string' ? params.voice : DEFAULT_AUDIO_VOICE,
         // 图音生视频重建后"有声音/无声音"也要跟着素材走，否则重摆一遍流程
-        // 就把用户当初关掉的声音又打开了。
+        // 就把用户当初关掉的声音又打开了；音频链接同理（填了链接的素材
+        // params 里存的是链接本身，没有可还原的素材连线）。
         generateAudio: kind === 'imageAudio2video' ? params.generate_audio !== false : false,
+        audioUrl:
+          kind === 'imageAudio2video' && typeof params.input_audio_path === 'string' && /^https?:\/\//i.test(params.input_audio_path)
+            ? params.input_audio_path
+            : '',
       };
       addNode({ id: processNodeId, type: 'process', position: { x: processX, y }, data: processData });
       setEdges((eds) =>

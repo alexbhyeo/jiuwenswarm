@@ -447,16 +447,18 @@ class DirectorManager:
         )
         input_video_asset_id = str(params.get("input_video_asset_id") or "").strip()
         input_audio_asset_id = str(params.get("input_audio_asset_id") or "").strip()
+        input_audio_url = str(params.get("input_audio_url") or "").strip()
         # 显式连线本身就是一次完整的请求——视频生音频只连了一路视频、没写
         # 任何文案时同样如此（解说文案由视频理解自己写出来），所以输入视频
         # 也要算进“有显式引用”，不能被下面的空提示词校验拦住。图音生视频
-        # 同理：连上音频就是一次完整的请求。
+        # 同理：连上音频（或填了音频链接）就是一次完整的请求。
         has_explicit_reference = bool(
             first_frame_asset_id
             or last_frame_asset_id
             or reference_asset_ids
             or input_video_asset_id
             or input_audio_asset_id
+            or input_audio_url
         )
 
         if not project_id:
@@ -561,19 +563,34 @@ class DirectorManager:
             )
             if not reference_image_path:
                 raise DirectorRpcError("INVALID_PARAMS", "图音生视频需要先连接一个已就绪的参考图片")
-            audio_asset = next(
-                (
-                    asset
-                    for asset in project.assets
-                    if asset.asset_id == input_audio_asset_id
-                    and asset.type == "audio"
-                    and asset.status == "ready"
-                    and asset.file_path
-                ),
-                None,
-            )
-            if audio_asset is None:
-                raise DirectorRpcError("INVALID_PARAMS", "图音生视频需要先连接一个已就绪的音频素材")
+            # 参考音频有两条来路：连一路音频素材，或者直接在卡片上填公网
+            # HTTPS 直链（有些音频本来就在对象存储里，没必要先上传成素材再
+            # 连线）。填了链接就以链接为准——卡片上也会显示当前用的是哪一路。
+            input_audio_url = str(params.get("input_audio_url") or "").strip()
+            audio_asset: DirectorAsset | None = None
+            if input_audio_url:
+                if not input_audio_url.lower().startswith(("http://", "https://")):
+                    raise DirectorRpcError(
+                        "INVALID_PARAMS", "音频链接必须是 http(s) 开头的可公网访问地址"
+                    )
+                reference_audio_path = input_audio_url
+            else:
+                audio_asset = next(
+                    (
+                        asset
+                        for asset in project.assets
+                        if asset.asset_id == input_audio_asset_id
+                        and asset.type == "audio"
+                        and asset.status == "ready"
+                        and asset.file_path
+                    ),
+                    None,
+                )
+                if audio_asset is None:
+                    raise DirectorRpcError(
+                        "INVALID_PARAMS", "图音生视频需要先连接一个已就绪的音频素材，或填写音频链接"
+                    )
+                reference_audio_path = str(audio_asset.file_path)
             duration_seconds = int(params.get("duration_seconds") or 15)
             # 成片是否带音轨由卡片上的选项决定；没带这个字段（旧画布数据、
             # 或别的调用方）时按"有声音"处理——这张卡片的输入就是一段音频，
@@ -583,15 +600,16 @@ class DirectorManager:
             # 两条参考路径都记进 params：文案与音频是一一对应的，事后想换
             # 参考图/音频重新生成时不必再翻素材；reference_image_path 与
             # input_audio_path 同时供前端 buildFlowFromChat 还原依赖连线用
-            # （与 first_frame_path / input_video_path 同一套路子）。
+            # （与 first_frame_path / input_video_path 同一套路子，填链接时
+            # 没有可还原的素材连线，只记原始链接）。
             gen_params = {
                 "aspect_ratio": aspect_ratio,
                 "resolution": resolution,
                 "duration_seconds": duration_seconds,
                 "generate_audio": generate_audio_flag,
                 "reference_image_path": reference_image_path,
-                "input_audio_asset_id": audio_asset.asset_id,
-                "input_audio_path": audio_asset.file_path,
+                "input_audio_asset_id": audio_asset.asset_id if audio_asset else None,
+                "input_audio_path": reference_audio_path,
             }
             cleaned_prompt = prompt or "Generate a video that lip-syncs to the provided audio reference."
             result_str = await generate_video._func(
@@ -600,7 +618,7 @@ class DirectorManager:
                 resolution=resolution,
                 duration_seconds=duration_seconds,
                 reference_image_path=reference_image_path,
-                reference_audio_path=audio_asset.file_path,
+                reference_audio_path=reference_audio_path,
                 # 参考音频既是口型同步的依据，也要出现在成片音轨里；不要求
                 # 音频输出时服务商返回的是一段无声视频（实测 Seedance 2.0
                 # Fast + 参考音频 + generate_audio=false）。关掉就等于要一段
