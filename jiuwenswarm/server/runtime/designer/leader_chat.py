@@ -376,6 +376,75 @@ def replace_next_step(summary: str, graph: DesignerExecutionGraph, *, chinese: b
     return f"{head} {hint}".strip() if head else hint
 
 
+def _node_with_output(node: dict[str, Any]) -> bool:
+    """Whether the node itself carries a real (non-placeholder) output."""
+    ref = node.get("output_ref") if isinstance(node.get("output_ref"), dict) else {}
+    return bool(str((ref or {}).get("uri") or "").strip())
+
+
+def _unbuilt_reason(
+    state: dict[str, Any],
+    *,
+    run_finished: bool,
+    chinese: bool,
+) -> str:
+    error = str(state.get("error") or "").strip()
+    if error:
+        return error
+    status = str(state.get("status") or "").strip().lower()
+    if status == "cancelled":
+        return "已取消" if chinese else "cancelled"
+    if status == "failed":
+        return "生成失败" if chinese else "generation failed"
+    if status == "running" or not run_finished:
+        return "仍在生成中" if chinese else "still generating"
+    return "未完成" if chinese else "did not finish"
+
+
+def report_unbuilt_nodes(
+    summary: str,
+    graph: DesignerExecutionGraph,
+    node_ids: list[str] | tuple[str, ...],
+    *,
+    node_states: dict[str, Any] | None = None,
+    run_finished: bool = True,
+    chinese: bool,
+) -> str:
+    """Replace a summary that announces nodes the run never actually produced.
+
+    The leader writes its summary before the run executes, so it describes the
+    plan as though it had already succeeded. ``replace_next_step`` fixes only the
+    closing line, so the body kept announcing e.g. a character sheet while the
+    run left that node pending — the user then hunted for an asset that did not
+    exist. Whenever a named node has no output, its prose cannot be trusted, so
+    the claim is replaced with what the run state actually says.
+    """
+    states = {str(key): value for key, value in (node_states or {}).items() if isinstance(value, dict)}
+    missing: list[str] = []
+    seen: set[str] = set()
+    for raw_id in node_ids:
+        node_id = str(raw_id or "").strip()
+        if not node_id or node_id in seen:
+            continue
+        seen.add(node_id)
+        node = _node_by_id(graph, node_id)
+        if not isinstance(node, dict):
+            continue
+        state = states.get(node_id) or {}
+        if _node_with_output(node) and str(state.get("status") or "") != "failed":
+            continue
+        pipeline = str((node.get("config") or {}).get("pipeline") or "").strip()
+        label = _STAGE_LABELS.get(pipeline, (pipeline or node_id, pipeline or node_id))[
+            0 if chinese else 1
+        ]
+        missing.append(f"{label}（{_unbuilt_reason(state, run_finished=run_finished, chinese=chinese)}）")
+    if not missing:
+        return summary
+    if chinese:
+        return f"未生成：{'、'.join(missing)}。"
+    return f"Not generated: {', '.join(missing)}."
+
+
 def with_next_step(
     summary: str,
     graph: DesignerExecutionGraph,

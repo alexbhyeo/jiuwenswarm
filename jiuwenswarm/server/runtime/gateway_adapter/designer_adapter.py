@@ -1602,12 +1602,6 @@ async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[di
             # instead of guessing a cap, so the merge below and the chat reply
             # carry the real, finished output.
             finished = await _await_run_completion(run_id)
-            if not finished:
-                summary = (
-                    f"{summary}（仍在生成中 / still generating — "
-                    "the canvas updates when it finishes）"
-                ).strip()
-                result["summary"] = summary
             run = _store.get_run(run_id) or run
             run_payload = dict(run)
             await _push_designer_event(
@@ -1638,6 +1632,28 @@ async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[di
                 merged_nodes.append(node)
             if graph_changed:
                 saved = _store.save_graph({**saved, "nodes": merged_nodes})
+            # The leader writes its summary before the run executes, so it can
+            # announce a node the run never produced — the user was told a
+            # character sheet had been generated while its node was still
+            # pending, and went looking for an asset that did not exist. With
+            # both the run's node_states and the merged graph in hand, replace
+            # any such claim with what actually happened, rather than appending
+            # a "still generating" note to a sentence that already claimed
+            # success.
+            from jiuwenswarm.server.runtime.designer.leader_chat import (
+                looks_chinese,
+                report_unbuilt_nodes,
+            )
+
+            summary = report_unbuilt_nodes(
+                summary,
+                saved,
+                [str(item) for item in run_ids],
+                node_states=(run or {}).get("node_states"),
+                run_finished=finished,
+                chinese=looks_chinese(str(message)),
+            )
+            result["summary"] = summary
         elif error:
             result["summary"] = f"{result.get('summary') or ''} ({error})".strip()
             summary = str(result["summary"])

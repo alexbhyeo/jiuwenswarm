@@ -1316,31 +1316,40 @@ class GraphExecutor:
                     )
                     self._store.save_graph(graph)
 
-                with traj.span(
-                    agent_id="director",
-                    action="validate_plan",
-                    phase="orchestration",
-                    role="director",
-                    tool="llm",
-                ):
-                    director_ack = await Director().validate_plan(
-                        graph
-                    )
+                if single_node_rerun:
                     traj.record(
                         agent_id="director",
-                        action="validate_plan_result",
+                        action="skip_validate_plan_single_node_rerun",
                         phase="orchestration",
                         role="director",
-                        detail={
-                            "patched": list(director_ack.get("patched") or [])[:20],
-                            "rating_modality": director_ack.get("rating_modality"),
-                            "can_vision": director_ack.get("can_vision"),
-                        },
+                        detail={"reason": "single_node_rerun"},
                     )
-                    graph = self._store.save_graph(graph)
-                    self._resync_run_after_graph_redesign(run, graph)
-                    self._publish(run, on_update)
-                    self._publish_graph(run, graph)
+                else:
+                    with traj.span(
+                        agent_id="director",
+                        action="validate_plan",
+                        phase="orchestration",
+                        role="director",
+                        tool="llm",
+                    ):
+                        director_ack = await Director().validate_plan(
+                            graph
+                        )
+                        traj.record(
+                            agent_id="director",
+                            action="validate_plan_result",
+                            phase="orchestration",
+                            role="director",
+                            detail={
+                                "patched": list(director_ack.get("patched") or [])[:20],
+                                "rating_modality": director_ack.get("rating_modality"),
+                                "can_vision": director_ack.get("can_vision"),
+                            },
+                        )
+                        graph = self._store.save_graph(graph)
+                        self._resync_run_after_graph_redesign(run, graph)
+                        self._publish(run, on_update)
+                        self._publish_graph(run, graph)
 
             remaining = {
                 node["id"]
