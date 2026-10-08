@@ -31,10 +31,13 @@ export function AudioNode({ id, data }: NodeProps & { data: AudioNodeData }) {
         </div>
       </div>
       <NodeNameLabel name={data.name} fallback={t('director.categories.audio')} onRename={(name) => actions.renameNode(id, name)} />
-      {/* 音频输出节点目前没有下游用途（还不能作为别的卡片的输入），保留
-       *  target 句柄只是为了让"生成结果自动连线"的视觉逻辑保持一致——与
-       *  VideoNode 的处理相同。 */}
+      {/* target 句柄是"生成结果自动连线"的落点（处理卡片 → 音频输出）。
+       *  source 句柄是音频作为下游输入的唯一出口——目前只有"图音生视频"
+       *  （imageAudio2video）的 audio1 端口吃它（见 LabCanvas.isValidConnection），
+       *  模型按这段音频做口型同步。少了这个 source 句柄，音频卡片在画布上
+       *  根本拖不出连线。 */}
       <Handle type="target" position={Position.Left} id="in" />
+      <Handle type="source" position={Position.Right} id="audio" />
     </div>
   );
 }

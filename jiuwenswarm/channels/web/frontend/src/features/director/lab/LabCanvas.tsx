@@ -27,7 +27,7 @@ import { TextNode } from './nodes/TextNode';
 import { ProcessNode } from './nodes/ProcessNode';
 import { DEFAULT_AUDIO_VOICE } from '../audioVoices';
 import type { ImageNodeData, ProcessKind, ProcessMode, ProcessNodeData } from './labTypes';
-import { PROCESS_KIND_MODE, PROCESS_KIND_MULTI_REF } from './labTypes';
+import { PROCESS_KIND_MAX_AUDIOS, PROCESS_KIND_MODE, PROCESS_KIND_MULTI_REF } from './labTypes';
 
 const nodeTypes: NodeTypes = {
   image: ImageNode,
@@ -52,7 +52,7 @@ function timerKey(nodeId: string, slotIndex: number): string {
 }
 
 const IMAGE_PROCESS_KINDS: ProcessKind[] = ['text2image', 'imageRef'];
-const VIDEO_PROCESS_KINDS: ProcessKind[] = ['text2video', 'image2video'];
+const VIDEO_PROCESS_KINDS: ProcessKind[] = ['text2video', 'image2video', 'imageAudio2video'];
 const AUDIO_PROCESS_KINDS: ProcessKind[] = ['text2audio', 'video2audio'];
 
 // director.generate 的客户端超时（GENERATE_TIMEOUT_MS，见 directorApi.ts）
@@ -181,6 +181,8 @@ function LabCanvasInner() {
       }
       // 视频生音频的输入视频端口：只接受视频输出节点。
       if (connection.targetHandle === 'video1') return sourceNode.type === 'video';
+      // 图音生视频的参考音频端口：只接受音频输出节点。
+      if (connection.targetHandle === 'audio1') return sourceNode.type === 'audio';
       return true;
     },
     [nodes]
@@ -281,6 +283,9 @@ function LabCanvasInner() {
         durationSeconds: 5,
         // 仅 text2audio（文生音频）会读取；图片/视频卡片忽略它。
         voice: DEFAULT_AUDIO_VOICE,
+        // 仅 imageAudio2video（图音生视频）会读取：默认给成片配上音轨，用户
+        // 可在卡片的生成参数里改成"无声音"。其余卡片恒为 false 且不带上线。
+        generateAudio: PROCESS_KIND_MAX_AUDIOS[kind] > 0,
         outputCount: 1,
       };
       addNode({ id, type: 'process', position, data });
@@ -527,7 +532,12 @@ function LabCanvasInner() {
         // 在 ProcessMode 这一层它仍然是 audio（输出卡片/参数弹层都一样）。
         const params: GenerateParams = {
           projectId,
-          mode: data.kind === 'video2audio' ? 'video2audio' : mode,
+          mode:
+            data.kind === 'video2audio'
+              ? 'video2audio'
+              : data.kind === 'imageAudio2video'
+                ? 'image_audio2video'
+                : mode,
           prompt,
           aspectRatio: data.aspectRatio,
           resolution: data.resolution,
@@ -538,6 +548,14 @@ function LabCanvasInner() {
           // 视频理解写解说文案再配音，这里只要把输入视频和音色带上。
           params.voice = data.voice || DEFAULT_AUDIO_VOICE;
           if (resolved.video1?.assetId) params.inputVideoAssetId = resolved.video1.assetId;
+        } else if (data.kind === 'imageAudio2video') {
+          // 图音生视频：参考图 + 参考音频都是"多模态参考"，后端一次
+          // reference-to-video 调用完成，参考图不进首帧槽位（同时带
+          // frame_images 与 input_references 时服务商会丢弃后者）。
+          if (resolved.image1?.assetId) params.referenceAssetIds = [resolved.image1.assetId];
+          if (resolved.audio1?.assetId) params.inputAudioAssetId = resolved.audio1.assetId;
+          // 卡片上的"有声音/无声音"选项：未设置过按有声音处理（与后端默认一致）。
+          params.generateAudio = data.generateAudio !== false;
         } else if (mode === 'video') {
           if (resolved.image1?.assetId) params.firstFrameAssetId = resolved.image1.assetId;
           if (resolved.image2?.assetId) params.lastFrameAssetId = resolved.image2.assetId;
@@ -668,6 +686,8 @@ function LabCanvasInner() {
     // 文件路径 -> 视频节点 id 的表：imageNodeIdByPath 只收 type==='image'
     // 的节点，拿视频去查它永远是空。
     const videoNodeIdByPath = new Map<string, string>();
+    // 音频卡片也能当输入（图音生视频的 audio1 端口），同样单独一张表。
+    const audioNodeIdByPath = new Map<string, string>();
     // 素材 id -> 它在画布上的 y 坐标——用来给"依赖上一个输出"的素材算摆放
     // 位置（取它依赖的那些素材的 y 均值），既覆盖这次新摆的素材，也覆盖
     // 已经在画布上、来自更早一次 build 的素材。
@@ -680,6 +700,7 @@ function LabCanvasInner() {
       }
       if (n.type === 'image' && d?.filePath) imageNodeIdByPath.set(d.filePath, n.id);
       if (n.type === 'video' && d?.filePath) videoNodeIdByPath.set(d.filePath, n.id);
+      if (n.type === 'audio' && d?.filePath) audioNodeIdByPath.set(d.filePath, n.id);
     }
 
     const newAssetIds = orderedAssetIds.filter((id) => !outputNodeIdByAsset.has(id));
@@ -746,6 +767,33 @@ function LabCanvasInner() {
       return id;
     };
 
+    // 音频输入（图音生视频的 audio1 端口）与 ensureVideoNode 同构：优先复用
+    // 该音频素材自己的输出卡片，找不到才新建一张音频卡片。
+    const ensureAudioNode = (filePath: string, x: number, y: number): string => {
+      const existing = audioNodeIdByPath.get(filePath);
+      if (existing) return existing;
+      const placedAssetId = assetIdByFilePath.get(filePath);
+      const placedNodeId = placedAssetId ? outputNodeIdByAsset.get(placedAssetId) : undefined;
+      if (placedNodeId) {
+        audioNodeIdByPath.set(filePath, placedNodeId);
+        return placedNodeId;
+      }
+      const matchingAsset = project.assets.find((a) => a.file_path === filePath);
+      const id = nextNodeId('audio');
+      addNode({
+        id,
+        type: 'audio',
+        position: { x, y },
+        data: {
+          assetId: matchingAsset?.asset_id ?? null,
+          filePath,
+          name: matchingAsset?.name || matchingAsset?.prompt || '',
+        },
+      });
+      audioNodeIdByPath.set(filePath, id);
+      return id;
+    };
+
     // 文件路径 -> 素材 id，用来把一个素材的"参考图/首尾帧路径"反查回是
     // 引用了项目里哪个素材（这个项目里全部素材，不限于这次新摆的）——
     // 从而判断它是不是"依赖上一个输出"。
@@ -761,6 +809,8 @@ function LabCanvasInner() {
       lastFramePath: string | null;
       /** video2audio（视频生音频）当成解说素材的那路输入视频。 */
       inputVideoPath: string | null;
+      /** imageAudio2video（图音生视频）用来做口型同步的那路参考音频。 */
+      inputAudioPath: string | null;
       kind: ProcessKind;
       mode: ProcessMode;
       /** 这个素材实际依赖的其它素材 id（不管是这次新摆的还是已经在画布上
@@ -786,6 +836,9 @@ function LabCanvasInner() {
       // 视频生音频把自己的输入视频路径也存进了 params，这里照旧还原成一条
       // 依赖连线（与首帧/尾帧/参考图同一套路子）。
       const inputVideoPath = typeof params.input_video_path === 'string' ? params.input_video_path : null;
+      // 图音生视频把参考图和参考音频的路径也存了下来——两者都要还原成
+      // 依赖连线，否则重建出来的流程图会退化成一张没有输入的"文生视频"。
+      const inputAudioPath = typeof params.input_audio_path === 'string' ? params.input_audio_path : null;
 
       const isAudio = asset.type === 'audio';
       const isVideo = asset.type === 'video';
@@ -794,9 +847,11 @@ function LabCanvasInner() {
           ? 'video2audio'
           : 'text2audio'
         : isVideo
-          ? firstFramePath || lastFramePath
-            ? 'image2video'
-            : 'text2video'
+          ? inputAudioPath
+            ? 'imageAudio2video'
+            : firstFramePath || lastFramePath
+              ? 'image2video'
+              : 'text2video'
           : referenceImagePaths.length > 0
             ? 'imageRef'
             : 'text2image';
@@ -804,7 +859,7 @@ function LabCanvasInner() {
 
       const depAssetIds = Array.from(
         new Set(
-          [...referenceImagePaths, firstFramePath, lastFramePath, inputVideoPath]
+          [...referenceImagePaths, firstFramePath, lastFramePath, inputVideoPath, inputAudioPath]
             .filter((p): p is string => !!p)
             .map((p) => assetIdByFilePath.get(p))
             .filter((id): id is string => !!id && id !== assetId)
@@ -817,6 +872,7 @@ function LabCanvasInner() {
         firstFramePath,
         lastFramePath,
         inputVideoPath,
+        inputAudioPath,
         kind,
         mode,
         depAssetIds,
@@ -870,7 +926,7 @@ function LabCanvasInner() {
     for (const { id: assetId, depth } of orderedForLayout) {
       const plan = plans.get(assetId);
       if (!plan) continue;
-      const { asset, referenceImagePaths, firstFramePath, lastFramePath, inputVideoPath, kind, mode, depAssetIds } = plan;
+      const { asset, referenceImagePaths, firstFramePath, lastFramePath, inputVideoPath, inputAudioPath, kind, mode, depAssetIds } = plan;
 
       const y =
         depth === 0
@@ -909,6 +965,9 @@ function LabCanvasInner() {
         outputCount: 1,
         // 音频卡片重建后音色不能变回默认值——params 里存了当时用的 voice。
         voice: typeof params.voice === 'string' ? params.voice : DEFAULT_AUDIO_VOICE,
+        // 图音生视频重建后"有声音/无声音"也要跟着素材走，否则重摆一遍流程
+        // 就把用户当初关掉的声音又打开了。
+        generateAudio: kind === 'imageAudio2video' ? params.generate_audio !== false : false,
       };
       addNode({ id: processNodeId, type: 'process', position: { x: processX, y }, data: processData });
       setEdges((eds) =>
@@ -946,6 +1005,15 @@ function LabCanvasInner() {
           addEdge({ id: nextNodeId('edge'), source: refId, sourceHandle: 'video', target: processNodeId, targetHandle: 'video1' }, eds)
         );
       }
+      if (inputAudioPath) {
+        // 图音生视频的参考音频：复用那段音频素材自己的卡片，连到 audio1
+        // 端口；参考图走上面的 referenceImagePaths（后端存的是单数
+        // reference_image_path，这里已归一成列表）接到 image1。
+        const refId = ensureAudioNode(inputAudioPath, refX, y + 150);
+        setEdges((eds) =>
+          addEdge({ id: nextNodeId('edge'), source: refId, sourceHandle: 'audio', target: processNodeId, targetHandle: 'audio1' }, eds)
+        );
+      }
 
       const outputNodeId = nextNodeId('out');
       // 音频素材必须摆成 audio 卡片（<audio controls>）；归到 image 会被渲染成
@@ -967,6 +1035,7 @@ function LabCanvasInner() {
       outputNodeIdByAsset.set(asset.asset_id, outputNodeId);
       assetY.set(asset.asset_id, y);
       if (outputType === 'image') imageNodeIdByPath.set(asset.file_path as string, outputNodeId);
+      if (outputType === 'audio') audioNodeIdByPath.set(asset.file_path as string, outputNodeId);
     }
   }, [selectedProjectId, getNodes, addNode, setEdges]);
 

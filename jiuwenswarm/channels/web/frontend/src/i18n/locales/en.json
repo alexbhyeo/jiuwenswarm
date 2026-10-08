@@ -152,6 +152,10 @@
       "durationLabel": "Duration",
       "voiceLabel": "Voice",
       "inputVideo": "Input Video",
+      "inputAudio": "Reference Audio",
+      "audioOutputLabel": "Audio",
+      "audioOn": "With audio",
+      "audioOff": "Silent",
       "outputCountLabel": "Output Count",
       "buildFlowFromChat": "Build flow in Lab",
       "buildFlowFromChatEmpty": "No generated results in this conversation yet to lay out as a flow",
@@ -161,7 +165,8 @@
         "image2video": "Image to Video",
         "imageRef": "Image to Image",
         "text2audio": "Text to Audio",
-        "video2audio": "Video to Audio"
+        "video2audio": "Video to Audio",
+        "imageAudio2video": "Image + Audio to Video"
       }
     },
     "edit": {

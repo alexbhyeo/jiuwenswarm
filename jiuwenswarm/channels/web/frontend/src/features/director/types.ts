@@ -70,9 +70,11 @@ export interface ComposerParams {
 
 export interface GenerateParams {
   projectId: string;
-  /** `video2audio`（视频生音频）是后端独立模式：它串了"视频理解写解说 → TTS
-   *  配音"两步，光凭 mode=audio + 一个输入视频是区分不出来的。 */
-  mode: 'video' | 'image' | 'audio' | 'character' | 'video2audio';
+  /** `video2audio`（视频生音频）与 `image_audio2video`（图音生视频）都是后端
+   *  独立模式：前者串了"视频理解写解说 → TTS 配音"两步，后者是一次带参考图
+   *  + 参考音频的 reference-to-video 调用，光凭 mode=video/audio 外加几个
+   *  输入素材是区分不出来的。 */
+  mode: 'video' | 'image' | 'audio' | 'character' | 'video2audio' | 'image_audio2video';
   prompt: string;
   aspectRatio: string;
   resolution: string;
@@ -82,6 +84,9 @@ export interface GenerateParams {
   voice?: string;
   /** 仅 video2audio（视频生音频）使用：用作解说素材的输入视频素材 id。 */
   inputVideoAssetId?: string;
+  /** 仅 image_audio2video（图音生视频）使用：作为口型同步依据的参考音频
+   *  素材 id（参考图走 referenceAssetIds）。 */
+  inputAudioAssetId?: string;
   /** 实验室节点画布：连线的显式引用（asset_id），绕开 composer 的
    *  "@名称" 文本解析。video 模式下最多首帧+尾帧两个；image 模式下可以是
    *  "图片参考" 卡片上连的一张或多张参考图（多参考图合成）。 */

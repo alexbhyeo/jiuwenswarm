@@ -301,3 +301,50 @@ async def test_modelark_video_pending_tells_agent_not_to_shell_sleep(monkeypatch
     assert "still running" in check and "do not use shell sleep" in check
     # a 5 s Seedance clip takes ~2.5 min to render; the in-call wait must outlast that
     assert gt._MODELARK_MAX_POLL_SECONDS >= 240
+
+
+# ---------------------------------------------------------------------------
+# Reference-to-video inputs (reference image + reference audio)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_modelark_video_places_reference_image_and_audio_in_content(monkeypatch, tmp_path):
+    """Seedance 2.0+ 的多模态参考：参考图/参考音频都是 content 数组里的一个
+    条目（audio_url），不是 frame_images 那样带 frame_type 的首尾帧。"""
+    seen = _patch_client(monkeypatch, _ark_video_handler(["succeeded"]))
+    request = gt.VideoRequest(
+        "she lip-syncs to the reference audio",
+        "16:9",
+        "720p",
+        5,
+        False,
+        None,
+        "data:image/png;base64,AAA",
+        "data:audio/wav;base64,BBB",
+    )
+
+    result = await gt.submit_video(gt.GenerationTarget("modelark", "ak", _ARK_INTL, "seedance-2.0"), request, str(tmp_path))
+
+    assert result.startswith("Video generated successfully!")
+    content = _body(seen[0])["content"]
+    assert content[0] == {"type": "text", "text": "she lip-syncs to the reference audio"}
+    assert {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}} in content
+    assert {"type": "audio_url", "audio_url": {"url": "data:audio/wav;base64,BBB"}} in content
+    # No first frame was supplied, so the ratio must not be forced to adaptive.
+    assert _body(seen[0])["ratio"] == "16:9"
+
+
+@pytest.mark.asyncio
+async def test_minimax_video_rejects_reference_inputs(monkeypatch, tmp_path):
+    """MiniMax-H3 既不吃参考图也不吃参考音频——明确报错，而不是悄悄丢掉
+    这些输入、返回一段根本没用到它们的视频。"""
+    seen = _patch_client(monkeypatch, _ark_video_handler(["succeeded"]))
+    request = gt.VideoRequest(
+        "p", "16:9", "720p", 5, False, None, "data:image/png;base64,AAA", "data:audio/wav;base64,BBB"
+    )
+
+    result = await gt.submit_video(gt.GenerationTarget("minimax", "ak", _MM_GLOBAL, "MiniMax-H3"), request, str(tmp_path))
+
+    assert result.startswith("[ERROR]: MiniMax video generation does not support reference")
+    assert seen == []

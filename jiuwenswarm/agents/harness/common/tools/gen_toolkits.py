@@ -138,6 +138,11 @@ class VideoRequest:
     duration_seconds: int
     generate_audio: bool = False
     first_frame_data_uri: str | None = None
+    # Multimodal references (reference-to-video) as already-resolved data URIs:
+    # video_gen_tools validates/embeds them, backends only place them in their
+    # own request body shape.
+    reference_image_data_uri: str | None = None
+    reference_audio_data_uri: str | None = None
 
 
 def _host_of(api_base: str) -> str:
@@ -364,6 +369,14 @@ async def _minimax_submit_video(target: GenerationTarget, request: VideoRequest,
     api_key, api_base, model = target.api_key, target.api_base, target.model
     prompt, aspect_ratio, resolution = request.prompt, request.aspect_ratio, request.resolution
     duration_seconds, first_frame_data_uri = request.duration_seconds, request.first_frame_data_uri
+    # MiniMax-H3 takes a first frame at most - no reference image, no audio
+    # reference. Say so plainly instead of silently dropping the inputs and
+    # returning a video that ignored them.
+    if request.reference_image_data_uri or request.reference_audio_data_uri:
+        return (
+            "[ERROR]: MiniMax video generation does not support reference image/audio "
+            "inputs; use a BytePlus Seedance 2.0+ model for reference-to-video."
+        )
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt[:_MINIMAX_VIDEO_PROMPT_LIMIT]}]
     if first_frame_data_uri:
         content.append({"type": "image_url", "image_url": {"url": first_frame_data_uri}, "role": "first_frame"})
@@ -627,6 +640,10 @@ async def _modelark_submit_video(target: GenerationTarget, request: VideoRequest
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     if first_frame_data_uri:
         content.append({"type": "image_url", "image_url": {"url": first_frame_data_uri}, "role": "first_frame"})
+    if request.reference_image_data_uri:
+        content.append({"type": "image_url", "image_url": {"url": request.reference_image_data_uri}})
+    if request.reference_audio_data_uri:
+        content.append({"type": "audio_url", "audio_url": {"url": request.reference_audio_data_uri}})
     res = (resolution or "").strip().lower()
     body = {
         "model": model,

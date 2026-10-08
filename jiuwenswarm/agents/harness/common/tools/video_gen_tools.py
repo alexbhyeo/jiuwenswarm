@@ -62,6 +62,24 @@ _TRANSIENT_RETRY_BASE_DELAY_S = 1.5
 _MAX_REFERENCE_DIMENSION = 1280
 _REFERENCE_JPEG_QUALITY = 85
 
+# Reference audio (multimodal reference-to-video, e.g. "lip-sync to this clip")
+# is base64-embedded into the submit body exactly like frame images, so it hits
+# the same provider-side connection drops once the body gets large. Unlike an
+# image there is no pure-Python way to re-encode a clip smaller here, so an
+# oversized file is rejected with an actionable message instead of being sent
+# and failing opaquely mid-request.
+_MAX_REFERENCE_AUDIO_BYTES = 12 * 1024 * 1024
+_AUDIO_EXTENSION_MIME = {
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/opus",
+    ".flac": "audio/flac",
+    ".wma": "audio/x-ms-wma",
+}
+
 
 def video_gen_enabled() -> bool:
     """Whether the "Video processing" switch in configuration settings is on.
@@ -133,6 +151,39 @@ def _resolve_frame_reference(path_or_url: str) -> tuple[str | None, str | None]:
             mime = "image/png"
     b64 = base64.b64encode(data).decode("ascii")
     return f"data:{mime};base64,{b64}", None
+
+
+def _resolve_audio_reference(path_or_url: str) -> tuple[str | None, str | None]:
+    """Resolve a reference audio to a data: URI.
+
+    Same contract as _resolve_frame_reference (accepts an http(s) URL, an
+    already-complete data: URI, or a local file path) minus the image-specific
+    downscaling - there is no re-encoding step for audio here.
+    """
+    value = (path_or_url or "").strip()
+    if not value:
+        return None, None
+    if value.startswith(("http://", "https://", "data:")):
+        return value, None
+    path = Path(value).expanduser()
+    if not path.is_file():
+        return None, (
+            f"[ERROR]: reference_audio_path {value!r} is not a URL/data URI and no such file exists."
+        )
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        return None, f"[ERROR]: reading reference_audio_path {value!r} failed: {exc!r}"
+    limit_mb = _MAX_REFERENCE_AUDIO_BYTES // (1024 * 1024)
+    if len(data) > _MAX_REFERENCE_AUDIO_BYTES:
+        return None, (
+            f"[ERROR]: reference_audio_path {value!r} is {len(data) // (1024 * 1024)}MB, "
+            f"over the {limit_mb}MB limit for an embedded audio reference."
+        )
+    mime = _AUDIO_EXTENSION_MIME.get(path.suffix.lower()) or mimetypes.guess_type(str(path))[0]
+    if not mime or not mime.startswith("audio/"):
+        mime = "audio/mpeg"
+    return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}", None
 
 
 def _resolve_save_path(save_dir: str | None, filename: str) -> Path:
@@ -224,11 +275,11 @@ async def _poll_job(
     name="generate_video",
     description=(
         "Generate a video clip from a text prompt (and optionally a first-frame and/or "
-        "last-frame image) using AI video generation models. Use this tool when the user "
-        "wants to create or generate a video based on a text description. Video generation "
-        "can take several minutes; if this tool returns a job_id instead of a finished "
-        "video, call check_video_status with that job_id to keep waiting for it instead of "
-        "resubmitting."
+        "last-frame image, or reference image/audio inputs) using AI video generation "
+        "models. Use this tool when the user wants to create or generate a video based "
+        "on a text description. Video generation can take several minutes; if this tool "
+        "returns a job_id instead of a finished video, call check_video_status with that "
+        "job_id to keep waiting for it instead of resubmitting."
     ),
 )
 async def generate_video(  # pylint: disable=huawei-too-many-arguments
@@ -238,6 +289,8 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
     duration_seconds: int = 15,
     first_frame_path: str | None = None,
     last_frame_path: str | None = None,
+    reference_image_path: str | None = None,
+    reference_audio_path: str | None = None,
     generate_audio: bool = False,
     save_dir: str | None = None,
 ) -> str:
@@ -267,8 +320,16 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
         last_frame_path: Optional local file path, http(s) URL, or data: URI to
             condition the last frame on - combined with first_frame_path this asks
             the model to interpolate a clip between the two (model-dependent support).
+        reference_image_path: Optional local file path, http(s) URL, or data: URI
+            used as a *reference* (not an exact frame) for reference-to-video.
+            Unlike first_frame_path this is passed as a multimodal reference, so
+            the prompt can talk about it (e.g. "@Image1 is a girl in a park").
+        reference_audio_path: Optional local file path, http(s) URL, or data: URI
+            of an audio clip used as a reference - models that support it (BytePlus
+            Seedance 2.0 and newer) lip-sync the generated video to this audio.
+            References are only honored by providers that support them.
         generate_audio: Whether to request native audio generation, if supported
-            by the model.
+            by the model. Leave false when reference_audio_path supplies the audio.
         save_dir: Optional directory to save the video (defaults to the agent
             workspace's generated_videos/ folder).
 
@@ -295,13 +356,42 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
             return err
         frame_images.append({"type": "image_url", "image_url": {"url": frame_data_uri}, "frame_type": frame_type})
 
+    # Multimodal references (reference-to-video): an image reference, an audio
+    # reference to lip-sync to, or both. Deliberately a separate channel from
+    # frame_images - OpenRouter treats a request carrying both as plain
+    # image-to-video and drops input_references entirely, so callers use one or
+    # the other, never both.
+    reference_image_data_uri: str | None = None
+    if reference_image_path:
+        reference_image_data_uri, err = _resolve_frame_reference(reference_image_path)
+        if err:
+            return err
+    reference_audio_data_uri: str | None = None
+    if reference_audio_path:
+        reference_audio_data_uri, err = _resolve_audio_reference(reference_audio_path)
+        if err:
+            return err
+
+    input_references: list[dict[str, Any]] = []
+    if reference_image_data_uri:
+        input_references.append({"type": "image_url", "image_url": {"url": reference_image_data_uri}})
+    if reference_audio_data_uri:
+        input_references.append({"type": "audio_url", "audio_url": {"url": reference_audio_data_uri}})
+
     # MiniMax (v2 task API) and BytePlus ModelArk (Seedance, contents/generations/tasks)
     # are not OpenRouter's /videos API, so they have their own backends.
     backend = gen_toolkits.detect_backend("VIDEO_GEN_PROTOCOL", api_base)
     if backend:
         target = gen_toolkits.GenerationTarget(backend, api_key, api_base, model)
         request = gen_toolkits.VideoRequest(
-            prompt, aspect_ratio, resolution, duration_seconds, generate_audio, frame_data_uri
+            prompt,
+            aspect_ratio,
+            resolution,
+            duration_seconds,
+            generate_audio,
+            frame_data_uri,
+            reference_image_data_uri,
+            reference_audio_data_uri,
         )
         return await gen_toolkits.submit_video(target, request, save_dir)
 
@@ -315,13 +405,16 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
     }
     if frame_images:
         body["frame_images"] = frame_images
+    if input_references:
+        body["input_references"] = input_references
 
     headers = {"Authorization": f"Bearer {api_key}"}
     logger.info(
         "[generate_video] using model: %s (api_base: %s, aspect_ratio: %s, resolution: %s, "
-        "duration: %ss, frame_images: %s)",
+        "duration: %ss, frame_images: %s, references: %s)",
         model, api_base, aspect_ratio, resolution, duration_seconds,
         [f["frame_type"] for f in frame_images],
+        [r["type"] for r in input_references],
     )
 
     # 提交步骤单独重试（不是把整个 submit+poll+download 都包进重试）：

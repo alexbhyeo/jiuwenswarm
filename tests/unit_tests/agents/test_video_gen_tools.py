@@ -415,3 +415,130 @@ async def test_generate_video_returns_error_when_submit_response_invalid_json(
     result = await generate_video(prompt="a cat")
 
     assert result.startswith("[ERROR]: video generation submit returned invalid JSON:")
+
+
+# ---------------------------------------------------------------------------
+# generate_video - reference-to-video inputs (reference image + reference audio)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_video_sends_reference_image_and_audio_as_input_references(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """图音生视频：参考图和参考音频一起走 input_references，并且不能再带
+    frame_images——OpenRouter 对同时带两者的请求按"纯图生视频"处理，会丢掉
+    input_references，参考音频就白连了。"""
+    _set_video_model_config(monkeypatch)
+    reference_image = tmp_path / "ref.png"
+    reference_image.write_bytes(b"\x89PNG\r\n\x1a\nfakepngbytes")
+    reference_audio = tmp_path / "voice.wav"
+    reference_audio.write_bytes(b"RIFF....WAVEfmt ")
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        if request.url.path == "/api/v1/videos" and request.method == "POST":
+            return httpx.Response(200, json={"id": "job-ref", "status": "completed"})
+        if request.url.path == "/api/v1/videos/job-ref/content":
+            return httpx.Response(200, content=b"video-bytes")
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    _patch_async_client(monkeypatch, handler)
+
+    result = await generate_video(
+        prompt="@Image1 is a cute girl standing in a park. She lip-syncs to @Audio1.",
+        reference_image_path=str(reference_image),
+        reference_audio_path=str(reference_audio),
+        duration_seconds=5,
+        save_dir=str(tmp_path),
+    )
+
+    assert "Video generated successfully!" in result
+    submitted_body = json.loads(requests_seen[0].content)
+    assert "frame_images" not in submitted_body
+    references = submitted_body["input_references"]
+    assert [r["type"] for r in references] == ["image_url", "audio_url"]
+    assert references[0]["image_url"]["url"].startswith("data:image/")
+    assert references[1]["audio_url"]["url"].startswith("data:audio/wav;base64,")
+
+
+@pytest.mark.asyncio
+async def test_generate_video_audio_reference_only_keeps_reference_channel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    _set_video_model_config(monkeypatch)
+    reference_audio = tmp_path / "voice.mp3"
+    reference_audio.write_bytes(b"ID3fake")
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        if request.url.path == "/api/v1/videos" and request.method == "POST":
+            return httpx.Response(200, json={"id": "job-a", "status": "completed"})
+        if request.url.path == "/api/v1/videos/job-a/content":
+            return httpx.Response(200, content=b"video-bytes")
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    _patch_async_client(monkeypatch, handler)
+
+    result = await generate_video(
+        prompt="sing this", reference_audio_path=str(reference_audio), save_dir=str(tmp_path)
+    )
+
+    assert "Video generated successfully!" in result
+    references = json.loads(requests_seen[0].content)["input_references"]
+    assert references == [
+        {"type": "audio_url", "audio_url": {"url": references[0]["audio_url"]["url"]}}
+    ]
+    assert references[0]["audio_url"]["url"].startswith("data:audio/mpeg;base64,")
+
+
+def test_resolve_audio_reference_rejects_missing_file(tmp_path: Path):
+    data_uri, error = vg._resolve_audio_reference(str(tmp_path / "nope.mp3"))
+
+    assert data_uri is None
+    assert error is not None and "reference_audio_path" in error
+
+
+def test_resolve_audio_reference_rejects_oversized_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(vg, "_MAX_REFERENCE_AUDIO_BYTES", 8)
+    oversized = tmp_path / "big.mp3"
+    oversized.write_bytes(b"0123456789")
+
+    data_uri, error = vg._resolve_audio_reference(str(oversized))
+
+    assert data_uri is None
+    assert error is not None and "over the 0MB limit" in error
+
+
+def test_resolve_audio_reference_defaults_to_mpeg_for_unknown_extension(tmp_path: Path):
+    unknown = tmp_path / "clip.bin"
+    unknown.write_bytes(b"raw-audio")
+
+    data_uri, error = vg._resolve_audio_reference(str(unknown))
+
+    assert error is None
+    assert data_uri is not None and data_uri.startswith("data:audio/mpeg;base64,")
+
+
+@pytest.mark.asyncio
+async def test_generate_video_oversized_audio_reference_fails_before_submit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    _set_video_model_config(monkeypatch)
+    monkeypatch.setattr(vg, "_MAX_REFERENCE_AUDIO_BYTES", 4)
+    big = tmp_path / "big.mp3"
+    big.write_bytes(b"0123456789")
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover - must not be hit
+        requests_seen.append(request)
+        raise AssertionError("no request should be submitted for an oversized reference audio")
+
+    _patch_async_client(monkeypatch, handler)
+
+    result = await generate_video(prompt="p", reference_audio_path=str(big), save_dir=str(tmp_path))
+
+    assert result.startswith("[ERROR]:") and "reference_audio_path" in result
+    assert requests_seen == []

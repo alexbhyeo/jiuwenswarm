@@ -3,10 +3,18 @@
 // 快照随 DirectorProject.lab_nodes/lab_edges 一起持久化（见 LabCanvas.tsx
 // 的 debounce 保存），切换 tab 或刷新页面都不会丢。
 
-export type ProcessKind = 'text2image' | 'text2video' | 'image2video' | 'imageRef' | 'text2audio' | 'video2audio';
+export type ProcessKind =
+  | 'text2image'
+  | 'text2video'
+  | 'image2video'
+  | 'imageRef'
+  | 'text2audio'
+  | 'video2audio'
+  | 'imageAudio2video';
 
 /** 处理节点的产物类型。audio 走 generate_audio（文生音频）：与 image/video
- *  一样是一张处理卡片 + 一张输出节点，只是输出节点渲染成音频播放器。 */
+ *  一样是一张处理卡片 + 一张输出节点，只是输出节点渲染成音频播放器。
+ *  imageAudio2video（图音生视频）的产物仍然是视频。 */
 export type ProcessMode = 'image' | 'video' | 'audio';
 
 export const PROCESS_KIND_MODE: Record<ProcessKind, ProcessMode> = {
@@ -16,6 +24,7 @@ export const PROCESS_KIND_MODE: Record<ProcessKind, ProcessMode> = {
   imageRef: 'image',
   text2audio: 'audio',
   video2audio: 'audio',
+  imageAudio2video: 'video',
 };
 
 /** 每种处理节点渲染几个不同的图片输入端口——与后端 generate_video（首帧+
@@ -31,6 +40,22 @@ export const PROCESS_KIND_MAX_IMAGES: Record<ProcessKind, number> = {
   text2audio: 0,
   // 视频生音频的输入是视频不是图（见 PROCESS_KIND_MAX_VIDEOS）。
   video2audio: 0,
+  // 图音生视频的参考图是"多模态参考"里的图片参考（不是首帧），一个端口
+  // 就够——参考音频另算，见 PROCESS_KIND_MAX_AUDIOS。
+  imageAudio2video: 1,
+};
+
+/** 每种处理节点渲染几个音频输入端口。目前只有 imageAudio2video
+ *  （图音生视频）吃一路参考音频：模型按这段音频做口型同步，其余卡片都
+ *  不吃音频。 */
+export const PROCESS_KIND_MAX_AUDIOS: Record<ProcessKind, number> = {
+  text2image: 0,
+  text2video: 0,
+  image2video: 0,
+  imageRef: 0,
+  text2audio: 0,
+  video2audio: 0,
+  imageAudio2video: 1,
 };
 
 /** 每种处理节点渲染几个视频输入端口。目前只有 video2audio（视频生音频）
@@ -43,6 +68,7 @@ export const PROCESS_KIND_MAX_VIDEOS: Record<ProcessKind, number> = {
   imageRef: 0,
   text2audio: 0,
   video2audio: 1,
+  imageAudio2video: 0,
 };
 
 /** 哪些处理节点的 image1 端口允许同时接多条连线——imageRef（"图片参考"）
@@ -104,6 +130,11 @@ export interface ProcessNodeData {
   /** 仅 text2audio（文生音频）使用：TTS 音色名。旧数据没有这个字段时按
    *  DEFAULT_AUDIO_VOICE 处理。 */
   voice?: string;
+  /** 仅 imageAudio2video（图音生视频）使用：成片是否带音轨。参考音频既是
+   *  口型同步的依据、也是成片音轨的来源，但有时用户只想要一段无声的成片
+   *  （比如当作纯画面素材），所以做成卡片上的显式选项。旧数据/未设置时按
+   *  true（有声音）处理，与该卡片最初的行为一致。 */
+  generateAudio?: boolean;
   /** 一次"生成"要产出几份独立结果（1-5），每份各自成一个输出节点，从
    *  同一个 "out" 端口扇出多条连线——不是同一份结果的多个帧，而是同样的
    *  提示词/参数各自独立生成 N 次，供用户挑选。旧数据没有这个字段时按 1

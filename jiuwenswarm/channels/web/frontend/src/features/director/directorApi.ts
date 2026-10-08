@@ -145,6 +145,7 @@ export function directorGenerate(params: GenerateParams): Promise<GenerateResult
     last_frame_asset_id: params.lastFrameAssetId,
     reference_asset_ids: params.referenceAssetIds,
     input_video_asset_id: params.inputVideoAssetId,
+    input_audio_asset_id: params.inputAudioAssetId,
   };
   return webRequest<unknown>(METHOD.generate, wire, { timeoutMs: GENERATE_TIMEOUT_MS })
     .then(normalizeGenerateResult)

@@ -3,9 +3,10 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLabActions } from '../LabActionsContext';
 import { AUDIO_VOICE_OPTIONS, DEFAULT_AUDIO_VOICE } from '../../audioVoices';
-import type { ImageNodeData, ProcessNodeData, TextNodeData, VideoNodeData } from '../labTypes';
+import type { AudioNodeData, ImageNodeData, ProcessNodeData, TextNodeData, VideoNodeData } from '../labTypes';
 import {
   OUTPUT_COUNT_OPTIONS,
+  PROCESS_KIND_MAX_AUDIOS,
   PROCESS_KIND_MAX_IMAGES,
   PROCESS_KIND_MAX_VIDEOS,
   PROCESS_KIND_MODE,
@@ -76,11 +77,23 @@ function useConnectedVideo(nodeId: string, handleId: string): { assetId: string 
   return { assetId: data.assetId, filePath: data.filePath };
 }
 
+/** imageAudio2video（图音生视频）的 audio1 端口：取那一路参考音频——模型
+ *  按它做口型同步。与 useConnectedVideo 同构，读的是音频输出节点的 data。 */
+function useConnectedAudio(nodeId: string, handleId: string): { assetId: string | null; filePath: string } | null {
+  const connections = useNodeConnections({ id: nodeId, handleType: 'target', handleId });
+  const sourceId = connections[0]?.source;
+  const sourceData = useNodesData(sourceId ?? '');
+  if (!sourceId || !sourceData) return null;
+  const data = sourceData.data as unknown as AudioNodeData;
+  return { assetId: data.assetId, filePath: data.filePath };
+}
+
 export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData }) {
   const { t } = useTranslation();
   const actions = useLabActions();
   const maxImages = PROCESS_KIND_MAX_IMAGES[data.kind];
   const maxVideos = PROCESS_KIND_MAX_VIDEOS[data.kind];
+  const maxAudios = PROCESS_KIND_MAX_AUDIOS[data.kind];
   const mode = PROCESS_KIND_MODE[data.kind];
   const outputCount = data.outputCount || 1;
   const isMultiRef = !!PROCESS_KIND_MULTI_REF[data.kind];
@@ -90,17 +103,22 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   const image2 = useConnectedImage(id, maxImages >= 2 ? 'image2' : '__none__');
   const images = useConnectedImages(id, isMultiRef ? 'image1' : '__none__');
   const video1 = useConnectedVideo(id, maxVideos >= 1 ? 'video1' : '__none__');
+  const audio1 = useConnectedAudio(id, maxAudios >= 1 ? 'audio1' : '__none__');
 
   const requiresImage = maxImages > 0;
   // 视频生音频必须先连一路视频（解说文案是从它写出来的）；文本节点可选，
   // 连了就当作用户对解说的额外要求。
   const requiresVideo = maxVideos > 0;
+  // 图音生视频必须同时连上参考图和参考音频——模型按音频做口型同步，缺了
+  // 音频这张卡片就不再是"图音生视频"了。
+  const requiresAudio = maxAudios > 0;
   const hasAnyImage = isMultiRef ? images.length > 0 : !!image1;
   const canGenerate =
     data.status !== 'generating' &&
     (!requiresImage || hasAnyImage) &&
     (!requiresVideo || !!video1) &&
-    (text.trim().length > 0 || hasAnyImage || !!video1);
+    (!requiresAudio || !!audio1) &&
+    (text.trim().length > 0 || hasAnyImage || !!video1 || !!audio1);
 
   const [paramsOpen, setParamsOpen] = useState(false);
   const paramsRef = useRef<HTMLDivElement>(null);
@@ -122,6 +140,10 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   // 文生音频没有宽高比/分辨率/时长这些画面参数，改成音色选择。
   const isAudio = mode === 'audio';
   const voice = data.voice || DEFAULT_AUDIO_VOICE;
+  // 只有带音频输入端口的卡片（imageAudio2video）才需要选"成片有没有声音"。
+  const hasAudioOption = maxAudios >= 1;
+  const audioOutput = data.generateAudio !== false;
+  const audioOutputLabel = t(audioOutput ? 'director.lab.audioOn' : 'director.lab.audioOff');
 
   return (
     <div className={`lab-node lab-node--process lab-node--process-${data.kind}`}>
@@ -168,6 +190,14 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
             {video1 && <span className="lab-node-input-filled">✓</span>}
           </div>
         )}
+        {maxAudios >= 1 && (
+          <div className="lab-node-input-row">
+            <Handle type="target" position={Position.Left} id="audio1" />
+            <span className="lab-node-input-dot" />
+            {t('director.lab.inputAudio')}
+            {audio1 && <span className="lab-node-input-filled">✓</span>}
+          </div>
+        )}
       </div>
 
       <div className="lab-node-params" ref={paramsRef}>
@@ -200,7 +230,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
               ? voice
               : `${data.aspectRatio} · ${data.resolution}${
                   mode === 'video' ? ` · ${data.durationSeconds}s` : ''
-                }`}
+                }${hasAudioOption ? ` · ${audioOutputLabel}` : ''}`}
             {outputCount > 1 ? ` · ×${outputCount}` : ''}
             {chevronDown}
           </span>
@@ -280,6 +310,28 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
               </div>
             )}
 
+            {hasAudioOption && (
+              <div className="lab-node-params-popover-section">
+                <div className="lab-node-params-popover-label">{t('director.lab.audioOutputLabel')}</div>
+                <div className="lab-node-params-popover-pills">
+                  <button
+                    type="button"
+                    className={`lab-node-param-pill ${audioOutput ? 'lab-node-param-pill--active' : ''}`}
+                    onClick={() => actions.patchProcessNode(id, { generateAudio: true })}
+                  >
+                    {t('director.lab.audioOn')}
+                  </button>
+                  <button
+                    type="button"
+                    className={`lab-node-param-pill ${!audioOutput ? 'lab-node-param-pill--active' : ''}`}
+                    onClick={() => actions.patchProcessNode(id, { generateAudio: false })}
+                  >
+                    {t('director.lab.audioOff')}
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="lab-node-params-popover-section">
               <div className="lab-node-params-popover-label">{t('director.lab.outputCountLabel')}</div>
               <div className="lab-node-params-popover-pills">
@@ -305,7 +357,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
         type="button"
         className="lab-node-generate-btn"
         disabled={!canGenerate}
-        onClick={() => actions.generate(id, { prompt: text, image1, image2, images, video1 })}
+        onClick={() => actions.generate(id, { prompt: text, image1, image2, images, video1, audio1 })}
       >
         {data.status === 'generating' ? (
           <span className="lab-node-spinner" />

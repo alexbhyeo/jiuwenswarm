@@ -59,7 +59,13 @@ from jiuwenswarm.server.runtime.director.director_store import (
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_MODES = ("video", "image", "audio", "video2audio", "character")
+# 图音生视频 = 一次 reference-to-video 调用：参考图 + 参考音频一起作为多模态
+# 参考送进 generate_video，模型按参考音频做口型同步。它既不是纯 video 模式
+# （那种是把图当首/尾帧），也不是"video 加一个可选输入"——连线语义不同，所以
+# 走线上单独一个模式名，与 video2audio 的待遇一致。
+_MODE_IMAGE_AUDIO2VIDEO = "image_audio2video"
+
+_SUPPORTED_MODES = ("video", "image", "audio", "video2audio", "character", _MODE_IMAGE_AUDIO2VIDEO)
 
 _RE_STILL_RUNNING_JOB_ID = re.compile(r"^Video job (\S+) submitted and still")
 _RE_SAVED_TO = re.compile(r"Saved to:\s*(.+)")
@@ -440,14 +446,17 @@ class DirectorManager:
             else []
         )
         input_video_asset_id = str(params.get("input_video_asset_id") or "").strip()
+        input_audio_asset_id = str(params.get("input_audio_asset_id") or "").strip()
         # 显式连线本身就是一次完整的请求——视频生音频只连了一路视频、没写
         # 任何文案时同样如此（解说文案由视频理解自己写出来），所以输入视频
-        # 也要算进“有显式引用”，不能被下面的空提示词校验拦住。
+        # 也要算进“有显式引用”，不能被下面的空提示词校验拦住。图音生视频
+        # 同理：连上音频就是一次完整的请求。
         has_explicit_reference = bool(
             first_frame_asset_id
             or last_frame_asset_id
             or reference_asset_ids
             or input_video_asset_id
+            or input_audio_asset_id
         )
 
         if not project_id:
@@ -476,7 +485,10 @@ class DirectorManager:
             character_name, prompt = _parse_character_prompt(prompt)
 
         aspect_ratio = str(params.get("aspect_ratio") or "16:9")
-        resolution = str(params.get("resolution") or ("720p" if mode == "video" else "512"))
+        resolution = str(
+            params.get("resolution")
+            or ("720p" if mode in ("video", _MODE_IMAGE_AUDIO2VIDEO) else "512")
+        )
         save_dir = str(get_project_assets_dir(project_id))
 
         if mode == "video":
@@ -524,6 +536,75 @@ class DirectorManager:
                 duration_seconds=duration_seconds,
                 first_frame_path=first_frame_path,
                 last_frame_path=last_frame_path,
+                generate_audio=generate_audio_flag,
+                save_dir=save_dir,
+            )
+        elif mode == _MODE_IMAGE_AUDIO2VIDEO:
+            # 图音生视频 = 一次 reference-to-video 调用：参考图 + 参考音频
+            # 一起作为多模态参考交给模型，模型按参考音频做口型同步。参考图
+            # 用的是 image1 端口（连线显式给出 asset_id），不进首帧槽位——
+            # OpenRouter 对同时带 frame_images 和 input_references 的请求按
+            # "纯图生视频" 处理并丢弃 input_references，那样参考音频就白连了。
+            if not (video_gen_enabled() and video_gen_configured()):
+                raise DirectorRpcError("NOT_CONFIGURED", "视频生成未配置，请先在设置中配置「视频处理」")
+            reference_image_path = next(
+                (
+                    asset.file_path
+                    for asset_id in reference_asset_ids
+                    for asset in project.assets
+                    if asset.asset_id == asset_id
+                    and asset.type in ("image", "character")
+                    and asset.status == "ready"
+                    and asset.file_path
+                ),
+                None,
+            )
+            if not reference_image_path:
+                raise DirectorRpcError("INVALID_PARAMS", "图音生视频需要先连接一个已就绪的参考图片")
+            audio_asset = next(
+                (
+                    asset
+                    for asset in project.assets
+                    if asset.asset_id == input_audio_asset_id
+                    and asset.type == "audio"
+                    and asset.status == "ready"
+                    and asset.file_path
+                ),
+                None,
+            )
+            if audio_asset is None:
+                raise DirectorRpcError("INVALID_PARAMS", "图音生视频需要先连接一个已就绪的音频素材")
+            duration_seconds = int(params.get("duration_seconds") or 15)
+            # 成片是否带音轨由卡片上的选项决定；没带这个字段（旧画布数据、
+            # 或别的调用方）时按"有声音"处理——这张卡片的输入就是一段音频，
+            # 默认给它配上音轨最符合预期。
+            raw_generate_audio = params.get("generate_audio")
+            generate_audio_flag = True if raw_generate_audio is None else bool(raw_generate_audio)
+            # 两条参考路径都记进 params：文案与音频是一一对应的，事后想换
+            # 参考图/音频重新生成时不必再翻素材；reference_image_path 与
+            # input_audio_path 同时供前端 buildFlowFromChat 还原依赖连线用
+            # （与 first_frame_path / input_video_path 同一套路子）。
+            gen_params = {
+                "aspect_ratio": aspect_ratio,
+                "resolution": resolution,
+                "duration_seconds": duration_seconds,
+                "generate_audio": generate_audio_flag,
+                "reference_image_path": reference_image_path,
+                "input_audio_asset_id": audio_asset.asset_id,
+                "input_audio_path": audio_asset.file_path,
+            }
+            cleaned_prompt = prompt or "Generate a video that lip-syncs to the provided audio reference."
+            result_str = await generate_video._func(
+                prompt=cleaned_prompt,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                duration_seconds=duration_seconds,
+                reference_image_path=reference_image_path,
+                reference_audio_path=audio_asset.file_path,
+                # 参考音频既是口型同步的依据，也要出现在成片音轨里；不要求
+                # 音频输出时服务商返回的是一段无声视频（实测 Seedance 2.0
+                # Fast + 参考音频 + generate_audio=false）。关掉就等于要一段
+                # 只有画面的成片。
                 generate_audio=generate_audio_flag,
                 save_dir=save_dir,
             )
@@ -632,7 +713,13 @@ class DirectorManager:
         # video2audio 的产物是一段语音：mode 说的是"怎么生成的"，asset.type
         # 说的是"生成出来的是什么"。前端按 video/image/audio/character 四类
         # 分栏展示，asset_counts 也只统计这四类，所以必须归到 audio。
-        asset_type = "audio" if mode == "video2audio" else mode
+        # image_audio2video（图音生视频）同理，产物是一段视频。
+        if mode == "video2audio":
+            asset_type = "audio"
+        elif mode == _MODE_IMAGE_AUDIO2VIDEO:
+            asset_type = "video"
+        else:
+            asset_type = mode
         asset = DirectorAsset(
             asset_id=f"asset_{secrets.token_hex(4)}",
             type=asset_type,

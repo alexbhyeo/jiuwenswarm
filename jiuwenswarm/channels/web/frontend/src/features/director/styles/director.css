@@ -2145,10 +2145,16 @@
   color: #dc2626;
 }
 
-/* -- 图片 / 视频节点 -- */
+/* -- 图片 / 视频 / 音频节点 -- */
 
+/* 三种"素材卡片"必须同宽。不能只靠 min/max 让内容自己撑开：图片卡片的
+   <img> 固有宽度很大，撑到 max-width；而音频卡片的 <audio> 可以收缩到很
+   小（见下面 min-width: 0），shrink-to-fit 会落到 min-width 上，于是音频
+   卡片比图片卡片窄一截。这里直接给一个确定的宽度，三者一律相同。 */
 .lab-node--image,
-.lab-node--video {
+.lab-node--video,
+.lab-node--audio {
+  width: 220px;
   min-width: 180px;
   max-width: 220px;
 }
@@ -2171,10 +2177,12 @@
 }
 
 /* 音频输出卡片没有画面：4:3 的视频画框对播放器毫无意义，压到一行播放器
-   的高度，并让 <audio> 撑满宽度（上面 img/video 的规则不覆盖 audio）。 */
+   的高度，并让 <audio> 撑满宽度（上面 img/video 的规则不覆盖 audio）。
+   宽度由上面 .lab-node--image/--video/--audio 的共享规则统一给出。 */
 .lab-node-media--audio {
   aspect-ratio: auto;
   min-height: 56px;
+  min-width: 0;
   display: flex;
   align-items: center;
   padding: 8px 10px;
@@ -2183,6 +2191,9 @@
 
 .lab-node-media--audio audio {
   width: 100%;
+  /* 播放器控件的固有最小宽度会顶开 flex 容器，允许它收缩回卡片宽度内。 */
+  min-width: 0;
+  max-width: 100%;
   display: block;
 }
 

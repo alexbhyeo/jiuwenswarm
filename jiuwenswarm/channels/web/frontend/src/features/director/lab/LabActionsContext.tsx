@@ -17,6 +17,9 @@ export interface ResolvedGenerateInput {
   /** video2audio（视频生音频）处理卡片：video1 端口上连的那路输入视频。
    *  其它处理卡片这里始终为 null。 */
   video1: { assetId: string | null; filePath: string } | null;
+  /** imageAudio2video（图音生视频）处理卡片：audio1 端口上连的那路参考
+   *  音频——模型按它做口型同步。其它处理卡片这里始终为 null。 */
+  audio1: { assetId: string | null; filePath: string } | null;
 }
 
 export interface LabActions {

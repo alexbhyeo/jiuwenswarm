@@ -152,6 +152,10 @@
       "durationLabel": "时长",
       "voiceLabel": "音色",
       "inputVideo": "输入视频",
+      "inputAudio": "参考音频",
+      "audioOutputLabel": "声音",
+      "audioOn": "有声音",
+      "audioOff": "无声音",
       "outputCountLabel": "输出数量",
       "buildFlowFromChat": "生成实验室流程图",
       "buildFlowFromChatEmpty": "对话里还没有可以摆成流程图的生成结果",
@@ -161,7 +165,8 @@
         "image2video": "图生视频",
         "imageRef": "图生图",
         "text2audio": "文生音频",
-        "video2audio": "视频生音频"
+        "video2audio": "视频生音频",
+        "imageAudio2video": "图音生视频"
       }
     },
     "edit": {
