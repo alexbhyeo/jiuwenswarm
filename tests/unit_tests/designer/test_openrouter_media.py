@@ -124,3 +124,43 @@ async def test_video_submits_then_polls_the_openrouter_tool(
     assert result == {"video_path": str(saved)}
     assert polled == [job]  # the submitted job id drives the polling loop
     assert submitted and submitted[0][0] == "shot"
+
+
+def test_openrouter_host_passes_the_gate(
+    monkeypatch: pytest.MonkeyPatch, openrouter_video_slot: None, openrouter_image_slot: None
+) -> None:
+    assert mg.generation_problem("video") is None
+    assert mg.generation_problem("image") is None
+
+
+def test_unknown_endpoint_is_still_refused(
+    monkeypatch: pytest.MonkeyPatch, openrouter_video_slot: None
+) -> None:
+    """The guard the native-only check provided is kept, just widened."""
+    monkeypatch.delenv("VIDEO_GEN_ENDPOINT_PROFILE", raising=False)
+    monkeypatch.setenv("VIDEO_GEN_API_BASE", "https://api.example.com/v1")
+
+    problem = mg.generation_problem("video")
+
+    assert problem is not None
+    assert "OpenRouter endpoint" in problem  # the message names the way out
+    assert "https://api.example.com/v1" in problem
+
+
+def test_unknown_image_endpoint_is_still_refused(
+    monkeypatch: pytest.MonkeyPatch, openrouter_image_slot: None
+) -> None:
+    monkeypatch.delenv("VISUAL_GEN_ENDPOINT_PROFILE", raising=False)
+    monkeypatch.setenv("VISUAL_GEN_API_BASE", "https://api.example.com/v1")
+
+    assert "OpenRouter endpoint" in (mg.generation_problem("image") or "")
+
+
+def test_endpoint_profile_admits_a_proxied_openrouter(
+    monkeypatch: pytest.MonkeyPatch, openrouter_video_slot: None
+) -> None:
+    """A non-openrouter.ai host is fine when the slot declares the profile."""
+    monkeypatch.setenv("VIDEO_GEN_API_BASE", "https://gateway.internal/v1")
+    monkeypatch.setenv("VIDEO_GEN_ENDPOINT_PROFILE", "openrouter")
+
+    assert mg.generation_problem("video") is None

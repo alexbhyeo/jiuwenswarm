@@ -8,11 +8,13 @@ tool, a clip waits for its video job: the submit / check_video pair is polled
 here until the file is saved or the deadline passes.
 
 Vendor-native backends (MiniMax, ModelArk, DashScope, vLLM-Omni) go through
-``gen_toolkits``. Anything else is driven through the chat tools'
-OpenRouter-style path (``visual_gen_tools`` / ``video_gen_tools``), so an
-OpenRouter endpoint can also serve Design. That path does not take reference
-images: image requests drop references with a warning, and video references
-are rejected by it (only the native backends support reference-to-video).
+``gen_toolkits``. OpenRouter endpoints are driven through the chat tools'
+OpenRouter-style path (``visual_gen_tools`` / ``video_gen_tools``). Any other
+endpoint is refused by :func:`generation_problem` with a message naming the
+supported ones, rather than being attempted and failing at request time. That
+path does not take reference images: image requests drop references with a
+warning, and video references are rejected by it (only the native backends
+support reference-to-video).
 """
 
 from __future__ import annotations
@@ -48,6 +50,8 @@ _VIDEO_TIMEOUT_SECONDS = 1800.0
 _VLLM_OMNI_VIDEO_TIMEOUT_SECONDS = 7200.0
 _SAVED_TO = re.compile(r"^Saved to: (.+)$", re.MULTILINE)
 _PENDING_JOB = re.compile(r"^Video job (\S+) (?:submitted and still|is still) ")
+# api_base hosts that are OpenRouter itself; the chat tools drive these.
+_OPENROUTER_HOST = re.compile(r"(^|\.)openrouter\.ai$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -86,11 +90,25 @@ def generation_enabled(kind: Kind) -> bool:
     return visual_gen_enabled() if kind == "image" else video_gen_enabled()
 
 
+def _openrouter_style(settings: SlotSettings, kind: Kind) -> bool:
+    """Whether the slot is an OpenRouter endpoint the chat tools can drive.
+
+    Recognised by host, or by an explicit ``*_ENDPOINT_PROFILE=openrouter``
+    declaration for an OpenRouter-compatible proxy on some other host.
+    """
+    profile = os.environ.get(f"{_ENV_PREFIX[kind]}_ENDPOINT_PROFILE", "").strip().lower()
+    if profile.replace("_", "-") == "openrouter":
+        return True
+    return bool(_OPENROUTER_HOST.search(urlparse(settings.api_base).hostname or ""))
+
+
 def generation_problem(kind: Kind) -> str | None:
     """Why Design cannot generate this media kind, or None when it can.
 
-    A vendor-native backend and an OpenRouter-style endpoint are both accepted;
-    which one runs is decided per call by :func:`slot_settings`.
+    A vendor-native backend and an OpenRouter endpoint are both accepted; the
+    path that runs is decided per call by :func:`slot_settings`. Anything else
+    is refused here, so an unsupported slot fails with a message that names the
+    supported endpoints instead of an opaque provider error.
     """
     label = _SETTINGS_LABEL[kind]
     if not generation_enabled(kind):
@@ -98,6 +116,12 @@ def generation_problem(kind: Kind) -> str | None:
     settings = slot_settings(kind)
     if not settings.complete:
         return f"{label} is not configured: set the API URL, API key and model in Settings > Agent."
+    if settings.backend is None and not _openrouter_style(settings, kind):
+        return (
+            f"{label} for Design needs a MiniMax, BytePlus ModelArk / Volcengine, Alibaba DashScope or "
+            f"vLLM-Omni endpoint, or an OpenRouter endpoint; {settings.api_base} is not one of them. "
+            f"Change it in Settings > Agent."
+        )
     return None
 
 
