@@ -933,10 +933,21 @@ class GraphExecutor:
         # with pending nodes — UI showed Continue. Leaf agents still run via
         # config.delegate=agent inside _run_single_node.
         _ = graph_uses_agent_scheduler  # retained import for callers/tests
-        if _scope_node_ids(run):
-            await self._execute_scoped_run(graph, run, on_update=on_update)
-            return
-        await self._execute_wave_run(graph, run, on_update=on_update)
+        run_id = str(run.get("run_id") or "")
+        try:
+            if _scope_node_ids(run):
+                await self._execute_scoped_run(graph, run, on_update=on_update)
+                return
+            await self._execute_wave_run(graph, run, on_update=on_update)
+        finally:
+            # Every per-run dict plus the host's node agents hang off this. The
+            # phase methods clean up after themselves, but only from inside
+            # their own try block: a run that fails before reaching it (an
+            # import at the top of _execute_wave_run, say) used to escape with
+            # nothing cleaned up at all, leaving a finished task in _tasks and
+            # the run's handoff Event alive for the life of the server.
+            # _cleanup_run only pops, so the second call is deliberate.
+            self._cleanup_run(run_id)
 
     async def _execute_scoped_run(
         self,
@@ -2157,6 +2168,10 @@ class GraphExecutor:
         self._on_updates.pop(run_id, None)
         self._on_graph_updates.pop(run_id, None)
         self._live_runs.pop(run_id, None)
+        # The wave scheduler creates this lazily per run (_get_handoff_wake), so
+        # it has to be dropped with the rest: leaving it behind keeps one
+        # asyncio.Event per finished run alive for the life of the server.
+        self._handoff_wake.pop(run_id, None)
         self._host.drop_run(run_id)
 
     async def _run_single_node(

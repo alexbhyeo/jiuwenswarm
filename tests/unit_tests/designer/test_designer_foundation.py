@@ -809,6 +809,74 @@ def test_rerun_still_refuses_an_unfinished_upstream_it_will_not_build(
         executor.create_rerun(graph, source_run=source, node_id="n_clip_2", node_ids=["n_clip_2"])
 
 
+async def _drain_run(executor: GraphExecutor, run_id: str) -> None:
+    """Let the run's task finish; its own outcome is not what these tests assert."""
+    task = executor._tasks.get(run_id)
+    if task is None:
+        return
+    try:
+        await task
+    except Exception:  # noqa: BLE001 - cleanup runs in the task's finally either way
+        pass
+
+
+@pytest.mark.asyncio
+async def test_cleanup_run_drops_the_handoff_wake_event(
+    designer_store: DesignerGraphStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One asyncio.Event per run must not outlive the run.
+
+    ``_cleanup_run`` dropped every other per-run dict but this one.
+    ``_get_handoff_wake`` creates the entry on demand — the wave scheduler calls
+    it for each run — so a long-lived AgentServer kept one Event alive per run it
+    had ever executed.
+    """
+    monkeypatch.setattr(
+        "jiuwenswarm.server.runtime.designer.model_tools.require_llm", lambda: None
+    )
+    graph = designer_store.save_graph(
+        _handler_graph(build_bootstrap_graph(project_id="proj_wake", prompt="wake")),
+    )
+    executor = GraphExecutor(designer_store)
+    run_id = executor.create_run(graph)["run_id"]
+    baseline = len(executor._handoff_wake)
+
+    executor._get_handoff_wake(run_id)
+    assert run_id in executor._handoff_wake
+
+    await executor.start_run(run_id)
+    await _drain_run(executor, run_id)
+
+    assert run_id not in executor._handoff_wake
+    assert len(executor._handoff_wake) == baseline
+
+
+@pytest.mark.asyncio
+async def test_repeated_runs_leave_no_handoff_wake_entries(
+    designer_store: DesignerGraphStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Creating and cleaning up several runs returns the map to its start size."""
+    monkeypatch.setattr(
+        "jiuwenswarm.server.runtime.designer.model_tools.require_llm", lambda: None
+    )
+    graph = designer_store.save_graph(
+        _handler_graph(build_bootstrap_graph(project_id="proj_wake_many", prompt="wake many")),
+    )
+    executor = GraphExecutor(designer_store)
+    baseline = len(executor._handoff_wake)
+
+    for _ in range(3):
+        run_id = executor.create_run(graph)["run_id"]
+        executor._get_handoff_wake(run_id)
+        await executor.start_run(run_id)
+        await _drain_run(executor, run_id)
+
+    assert executor._handoff_wake == {}
+    assert len(executor._handoff_wake) == baseline
+
+
 @pytest.mark.asyncio
 async def test_continue_after_failure_retries_failed_node(
     designer_store: DesignerGraphStore,
