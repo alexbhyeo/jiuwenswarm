@@ -1,5 +1,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
+import pytest
+
 from jiuwenswarm.common.schema.designer_graph import (
     ACTIVITY_KIND_STAGE,
     ACTIVITY_KIND_THINKING,
@@ -205,6 +207,53 @@ def test_apply_leader_plan_add_node_without_run() -> None:
 def test_message_asks_to_run_detects_generate_intent() -> None:
     assert message_asks_to_run("加一个配乐节点并生成") is True
     assert message_asks_to_run("加一个配乐节点接到成片，先别生成") is False
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "加一个配乐节点，不要生成",
+        "加一个配乐节点，不要重新生成",
+        "加一个配乐节点，不要运行",
+        "加一个配乐节点，不要重跑",
+        "加一个配乐节点，不用生成",
+        "加一个配乐节点，不用运行",
+        "加一个配乐节点，不用跑",
+        "加一个配乐节点，无需生成",
+        "加一个配乐节点，无需运行",
+        "加一个配乐节点，暂不生成",
+        "加一个配乐节点，暂不运行",
+        "加一个配乐节点，不需要生成",
+        "加一个配乐节点，不需要运行",
+        "加一个配乐节点，先不生成",
+        "加一个配乐节点，先不运行",
+        "别生成配乐",
+        "别运行这个节点",
+        "without generating the score",
+        "without running the compose node",
+        "don't generate the score",
+        "don't run the compose node",
+        "do not generate the score",
+        "do not run the compose node",
+    ],
+)
+def test_message_asks_to_run_ignores_negative_instructions(message: str) -> None:
+    assert message_asks_to_run(message) is False
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "不需要修改，生成吧",
+        "别的不说，直接生成",
+        "无需改动，运行吧",
+        "不用改，直接运行吧",
+        "generate the score without the voiceover",
+        "run it, don't wait for me",
+    ],
+)
+def test_message_asks_to_run_keeps_positive_instructions(message: str) -> None:
+    assert message_asks_to_run(message) is True
 
 
 def test_tool_result_activity_text_keeps_progress_lines_readable() -> None:

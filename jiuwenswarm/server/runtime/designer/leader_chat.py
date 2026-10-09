@@ -128,8 +128,15 @@ Rules:
 """
 
 
+# _DONT_RUN must recognise a negation in full, because _RUN_HINT matches the
+# positive half of the very words a negation is built from — "生成" inside
+# "不需要生成", "generate" inside "don't generate". Enumerating literal negatives
+# ("不要生成") lets every other form fall through to _RUN_HINT and be reported as
+# a run request, so the user's "don't generate" would start a generation. Keep the
+# (negation)(重新?)(verb) composition instead of flattening it into literals.
 _DONT_RUN = re.compile(
-    r"(先别|不要跑|不要生成|别生成|不用跑|without running|don'?t run|do not run)",
+    r"(先别|(?:不要|别|不用|无需|暂不|不需要|先不)\s*(?:重新)?(?:生成|运行|重跑|跑)"
+    r"|without (?:running|generating)|don'?t (?:run|generate)|do not (?:run|generate))",
     re.I,
 )
 
