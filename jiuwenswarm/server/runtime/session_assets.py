@@ -76,7 +76,8 @@ def validate_asset_name(name: str) -> str:
 class SessionAssetManager:
     """Stateless RPC handlers; each call is a full load -> change -> save round trip."""
 
-    def _state_file(self, session_id: str) -> Path:
+    @staticmethod
+    def _state_file(session_id: str) -> Path:
         sid = (session_id or "").strip()
         if not _SESSION_ID.match(sid):
             raise SessionAssetError("INVALID_PARAMS", "缺少或非法的 session_id")
