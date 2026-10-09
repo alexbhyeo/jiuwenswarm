@@ -22,6 +22,8 @@ from jiuwenswarm.server.runtime.designer.leader_chat import (
     _ZH_ACTION_VERBS,
     _node_prompt_for_snapshot,
     _snapshot_nodes,
+    _stage_run_summary,
+    _storyboard_edit_requested,
     apply_leader_plan,
     message_asks_to_run,
 )
@@ -399,6 +401,51 @@ def test_snapshot_treats_a_placeholder_output_as_not_built() -> None:
         "edges": [],
     }
     assert _snapshot_nodes(graph)[0]["has_output"] is False
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "调整分镜。至少 4 秒",
+        "調整分鏡。每個至少 4 秒",
+        "调整分镜。每個至少 4 秒。兩個分鏡就好",
+        "修改 storyboard 的时长",
+        "重新生成分镜脚本",
+    ],
+)
+def test_storyboard_edit_request_is_detected(message: str) -> None:
+    assert _storyboard_edit_requested(message) is True
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "给我看看分镜脚本",
+        "分镜没问题的话回复「确认」",
+        "show me the storyboard",
+        "what is the status now?",
+    ],
+)
+def test_read_only_storyboard_question_is_not_an_edit(message: str) -> None:
+    assert _storyboard_edit_requested(message) is False
+
+
+def test_stage_run_summary_names_the_stage_that_will_actually_run() -> None:
+    graph = {
+        "graph_id": "graph_1",
+        "nodes": [
+            {
+                "id": "n_storyboard",
+                "type": "table",
+                "config": {"pipeline": "storyboard", "prompt": "x"},
+            },
+            {"id": "n_clip_1", "type": "video", "config": {"pipeline": "clip"}},
+        ],
+        "edges": [],
+    }
+    # The reply promised the character sheet; the run built the storyboard.
+    assert "分镜脚本" in _stage_run_summary(["n_storyboard"], graph, chinese=True)
+    assert "shot videos" in _stage_run_summary(["n_clip_1"], graph, chinese=False)
 
 
 def test_tool_result_activity_text_keeps_progress_lines_readable() -> None:

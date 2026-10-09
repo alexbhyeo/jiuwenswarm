@@ -13,6 +13,7 @@ from jiuwenswarm.common.schema.designer_graph import (
     ACTIVITY_KIND_STAGE,
     ACTIVITY_KIND_THINKING,
     ACTIVITY_KIND_TOOL_CALL,
+    NODE_ROLE_STORYBOARD,
     NODE_TYPE_IMAGE,
     NODE_TYPE_VIDEO,
     DesignerExecutionGraph,
@@ -76,6 +77,32 @@ _NEXT_STEP_HINT = re.compile(
     re.I,
 )
 _VIDEO_HINT = re.compile(r"(视频|镜头|clip|video)", re.I)
+# "调整分镜。至少 4 秒" changes the storyboard text itself, so the storyboard node has
+# to re-author. Show-me requests ("给我看看分镜脚本") must not match, hence the
+# separate change verb.
+_STORYBOARD_HINT = re.compile(r"(分镜|分鏡|storyboard)", re.I)
+_EDIT_VERB_HINT = re.compile(
+    r"(调整|調整|修改|更改|改成|换成|重做|重新|至少"
+    r"|adjust|change|modify|redo|regenerate|at least)",
+    re.I,
+)
+
+
+def _storyboard_edit_requested(message: str) -> bool:
+    """True when the user asked to change the storyboard itself."""
+    text = str(message or "")
+    return bool(_STORYBOARD_HINT.search(text) and _EDIT_VERB_HINT.search(text))
+
+
+def _storyboard_node_ids(graph: DesignerExecutionGraph) -> list[str]:
+    ids: list[str] = []
+    for node in graph.get("nodes") or []:
+        if node_pipeline(node) != NODE_ROLE_STORYBOARD:
+            continue
+        node_id = str(node.get("id") or "")
+        if node_id:
+            ids.append(node_id)
+    return ids
 
 _LEADER_SYSTEM = """You are the invisible Designer Leader. Reply with a JSON object only.
 Canvas node type and config.role must be one of: text, table, image, video, audio.
@@ -114,6 +141,8 @@ Schema:
 }
 
 Rules:
+- 下一步 / next step means the earliest stage on the canvas that still has no output (has_output
+  false). Name that stage's node ids, never a later stage — the canvas decides, not your prose.
 - Every node carries has_output: true when its asset already exists. That flag is fact: never
   report an asset as missing, or as freshly generated, when has_output says otherwise. The user
   is looking at the canvas, so a status answer that contradicts it reads as the tool being broken.
@@ -457,6 +486,26 @@ def _split_already_built(
         else:
             pending.append(node_id)
     return pending, built
+
+
+def _stage_run_summary(
+    node_ids: list[str], graph: DesignerExecutionGraph, *, chinese: bool
+) -> str:
+    """Name the stage a graph-resolved "next step" will actually run."""
+    labels: list[str] = []
+    for node_id in node_ids:
+        node = _node_by_id(graph, node_id) or {}
+        pipeline = node_pipeline(node)
+        label = _STAGE_LABELS.get(pipeline, (pipeline or node_id, pipeline or node_id))[
+            0 if chinese else 1
+        ]
+        if label not in labels:
+            labels.append(label)
+    if not labels:
+        return ""
+    if chinese:
+        return f"开始生成{'、'.join(labels)}。"
+    return f"Building {', '.join(labels)}."
 
 
 def _already_built_note(
@@ -894,6 +943,14 @@ async def run_leader_chat(
         plan["run_node_ids"] = []
     if plan.get("intent") == "refine_node" and not plan.get("run_node_ids") and selected_node_id:
         plan["run_node_ids"] = [selected_node_id]
+    # A plan that scheduled nothing while the user asked to change the storyboard left
+    # them reading a reply that described an edit the canvas never received. The
+    # intent is forced to refine_node so the edit_graph guard cannot empty it again.
+    if not plan.get("run_node_ids") and _storyboard_edit_requested(text):
+        storyboard_ids = _storyboard_node_ids(graph)
+        if storyboard_ids:
+            plan["run_node_ids"] = storyboard_ids
+            plan["intent"] = "refine_node"
 
     _emit(progress, ACTIVITY_KIND_TOOL_CALL, "designer_graph_patch", tool="designer_graph_patch")
     asked_to_run = message_asks_to_run(text, run_new_nodes=run_new_nodes)
@@ -913,6 +970,12 @@ async def run_leader_chat(
         run_ids, already_built = _split_already_built(run_ids, next_graph)
         if not run_ids and already_built:
             summary = _already_built_note(already_built, next_graph, chinese=looks_chinese(text))
+    if _NEXT_STEP_HINT.search(text) and run_ids and set(run_ids) != set(plan_run_ids):
+        # "下一步" is resolved from the graph, not from the model's plan, so it can target a
+        # different stage than the prose named: the reply promised the character sheet and
+        # the scene while the run built the storyboard, and the user waited for images that
+        # were never scheduled. Say the stage that will actually run.
+        summary = _stage_run_summary(run_ids, next_graph, chinese=looks_chinese(text)) or summary
     summary = with_next_step(
         summary,
         next_graph,
