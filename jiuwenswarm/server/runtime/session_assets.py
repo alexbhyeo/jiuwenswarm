@@ -81,7 +81,11 @@ class SessionAssetManager:
         sid = (session_id or "").strip()
         if not _SESSION_ID.match(sid):
             raise SessionAssetError("INVALID_PARAMS", "缺少或非法的 session_id")
-        return get_agent_sessions_dir() / sid / _STATE_FILE
+        base = get_agent_sessions_dir().resolve()
+        file = (base / sid / _STATE_FILE).resolve()
+        if not file.is_relative_to(base):
+            raise SessionAssetError("INVALID_PARAMS", "缺少或非法的 session_id")
+        return file
 
     def _load(self, session_id: str) -> list[dict[str, Any]]:
         file = self._state_file(session_id)
@@ -134,7 +138,8 @@ class SessionAssetManager:
             try:
                 base = validate_asset_name(wanted)
             except SessionAssetError:
-                base = validate_asset_name(re.sub(r"[@\r\n\t]", "", Path(path).stem) or "asset")
+                cleaned_stem = re.sub(r"[@\r\n\t]", "", Path(path).stem).strip()
+                base = validate_asset_name(cleaned_stem[:_NAME_MAX] or "asset")
             name = self._unique_name(base, taken)
             taken.add(name.casefold())
             known_paths.add(_path_key(path))
