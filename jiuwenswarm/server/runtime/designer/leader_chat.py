@@ -943,14 +943,30 @@ async def run_leader_chat(
         plan["run_node_ids"] = []
     if plan.get("intent") == "refine_node" and not plan.get("run_node_ids") and selected_node_id:
         plan["run_node_ids"] = [selected_node_id]
-    # A plan that scheduled nothing while the user asked to change the storyboard left
-    # them reading a reply that described an edit the canvas never received. The
-    # intent is forced to refine_node so the edit_graph guard cannot empty it again.
-    if not plan.get("run_node_ids") and _storyboard_edit_requested(text):
+    # A plan that scheduled nothing — or aimed at the clips — while the user asked to
+    # change the storyboard left them with a reply describing an edit the canvas never
+    # received. Shot durations live in the storyboard, so the storyboard is the target,
+    # and it replaces the plan's ids: rebuilding the clips instead fails on
+    # "upstream not ready" and never touches the timings. The intent is forced to
+    # refine_node so the edit_graph guard cannot empty it again.
+    if _storyboard_edit_requested(text):
         storyboard_ids = _storyboard_node_ids(graph)
         if storyboard_ids:
             plan["run_node_ids"] = storyboard_ids
             plan["intent"] = "refine_node"
+            # The storyboard is authored from the brief plus its own prompt, so the
+            # requirement has to land in that prompt. Scheduling the node without it
+            # rebuilt the storyboard from the unchanged brief and reproduced the old
+            # timings while the reply claimed they had been adjusted.
+            if not plan.get("prompt_updates"):
+                updates: list[dict[str, str]] = []
+                for node_id in storyboard_ids:
+                    node = _node_by_id(graph, node_id) or {}
+                    existing = str((node.get("config") or {}).get("prompt") or "").strip()
+                    merged = text if not existing or text in existing else f"{existing}\n{text}"
+                    updates.append({"node_id": node_id, "prompt": merged})
+                if updates:
+                    plan["prompt_updates"] = updates
 
     _emit(progress, ACTIVITY_KIND_TOOL_CALL, "designer_graph_patch", tool="designer_graph_patch")
     asked_to_run = message_asks_to_run(text, run_new_nodes=run_new_nodes)
