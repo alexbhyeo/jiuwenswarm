@@ -38,7 +38,6 @@ import { type SingleAgentToolTab } from '../../features/singleAgentPanelState';
 import { useBrowserAgentActivity } from '../../features/browserAgentActivity';
 import { closeDesktopBrowserTab, openFileInDesktopBrowser, useDesktopBrowserTabFlags } from '../../features/desktopBrowserFile';
 import { SubagentExpandedPanel } from '../subagent/SubagentExpandedPanel';
-import { SubagentStatusIcon } from '../subagent/SubagentStatusIcon';
 import { useSubagentStore, selectSubagents } from '../../stores/subagentStore';
 import { useMinWidth } from '../../hooks/useResponsive';
 import { DesktopBrowserPane } from '../DesktopBrowserPane';
@@ -515,7 +514,7 @@ export function ToolPanel({
                   members={teamMembers}
                   totalTasks={teamTotalTasks + applicationPlanningTasks.length}
                   completedTasks={teamCompletedTasks + applicationCompleted}
-                  statusIconAtEnd={isTeam}
+                  statusIconAtEnd
                 />
               ) : (
                 <TaskPlanningPanel
@@ -587,7 +586,7 @@ export function ToolPanel({
             hideHeader
             hideExpandButton
             hideAssignee={!isTeam}
-            statusIconAtEnd={isTeam}
+            statusIconAtEnd
             title={t('chat.recentTasks')}
             maxCollapsedCount={4}
             {...planningProps}
@@ -653,16 +652,11 @@ export function ToolPanel({
             tasks={subagentTasks}
             members={[]}
             hideAssignee
-            statusIconAtEnd
             maxCollapsedCount={4}
             expanded={subagentsExpanded}
             emptyText={t('subagent.empty')}
             emptyIllustration={emptyMembersIcon}
-            renderStatusIcon={task => {
-              const subagent = subagentList.find(s => s.subagent_id === task.task_id);
-              if (!subagent) return null;
-              return <SubagentStatusIcon status={subagent.status} closedReason={subagent.closed_reason} turnOutcome={subagent.turn_outcome} />;
-            }}
+            renderStatusIcon={() => null}
             renderTaskIcon={task => (
               <TeamMemberAvatar member={task.assignee ?? ''} alt={task.title ?? ''} className="h-4 w-4 rounded-full shrink-0" imageClassName="rounded-full" />
             )}
