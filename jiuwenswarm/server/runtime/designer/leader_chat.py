@@ -26,12 +26,28 @@ logger = logging.getLogger(__name__)
 
 ProgressFn = Callable[..., None]
 
+# Chinese action words a run request is built from. _RUN_HINT matches them
+# positively and _DONT_RUN negates this same constant, so the two cannot drift
+# apart. They did once: _RUN_HINT gained 开始|继续|确认|… while _DONT_RUN still
+# negated only 生成|运行|重跑|跑, so 「不要开始」 matched nothing in _DONT_RUN and
+# fell through to _RUN_HINT's 开始 — an instruction meaning the opposite of
+# running returned True and started a generation.
+_ZH_ACTION_VERBS = (
+    r"生成|重跑|重生成|运行|合成|拼接|剪成|成片|出片"
+    r"|确认|确定|同意|没问题|开始|继续|就这样|好的|可以|下一步|下个步骤"
+)
+# English verbs that read naturally when negated ("don't compose", "do not
+# proceed"). ok / okay / yes / looks good are acknowledgements with no negated
+# form, so they stay positive hints only.
+_EN_NEGATABLE_VERBS = (
+    r"run|rerun|generate|regenerate|compose|stitch|concatenate|confirm|proceed|go ahead"
+)
+
 # A bare "确认" / "好的" / "OK" answers a proposed next stage, so it authorises
 # running it. Without these the edit_graph guard below saw no run intent and
 # wiped the plan's run_node_ids, so confirming generated nothing at all.
 _RUN_HINT = re.compile(
-    r"(生成|重跑|重生成|运行|合成|拼接|剪成|成片|出片"
-    r"|确认|确定|同意|没问题|开始|继续|就这样|好的|可以|下一步|下个步骤"
+    rf"({_ZH_ACTION_VERBS}"
     r"|run\b|generate|rerun|regenerate|compose|stitch|concatenate|final cut"
     r"|\bconfirm(?:ed)?\b|\bok\b|\bokay\b|proceed|go ahead|looks good|\byes\b)",
     re.I,
@@ -130,13 +146,22 @@ Rules:
 
 # _DONT_RUN must recognise a negation in full, because _RUN_HINT matches the
 # positive half of the very words a negation is built from — "生成" inside
-# "不需要生成", "generate" inside "don't generate". Enumerating literal negatives
-# ("不要生成") lets every other form fall through to _RUN_HINT and be reported as
-# a run request, so the user's "don't generate" would start a generation. Keep the
-# (negation)(重新?)(verb) composition instead of flattening it into literals.
+# "不需要生成", "开始" inside "不要开始", "compose" inside "don't compose".
+# Enumerating literal negatives ("不要生成") lets every other form fall through to
+# _RUN_HINT and be reported as a run request, so the user's "don't generate" would
+# start a generation. Two rules keep this honest:
+#   * the verbs come from _ZH_ACTION_VERBS / _EN_NEGATABLE_VERBS, never re-typed,
+#     so a verb added to _RUN_HINT is negatable the same day;
+#   * the (negation)(重新?)(verb) composition stays a composition — flattening it
+#     into literal phrases is what reopened the hole.
+# 跑 keeps its own alternation: it is negatable ("不用跑") but has never been a
+# positive run hint, so adding it to _ZH_ACTION_VERBS would change _RUN_HINT.
 _DONT_RUN = re.compile(
-    r"(先别|(?:不要|别|不用|无需|暂不|不需要|先不)\s*(?:重新)?(?:生成|运行|重跑|跑)"
-    r"|without (?:running|generating)|don'?t (?:run|generate)|do not (?:run|generate))",
+    rf"(先别"
+    rf"|(?:不要|别|不用|无需|暂不|不需要|先不)\s*(?:重新)?(?:{_ZH_ACTION_VERBS}|跑)"
+    rf"|without (?:running|generating|composing|stitching)"
+    rf"|don'?t (?:{_EN_NEGATABLE_VERBS})"
+    rf"|do not (?:{_EN_NEGATABLE_VERBS}))",
     re.I,
 )
 

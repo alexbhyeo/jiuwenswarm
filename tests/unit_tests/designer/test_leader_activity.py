@@ -18,6 +18,8 @@ from jiuwenswarm.server.runtime.designer.activity import (
     should_publish,
 )
 from jiuwenswarm.server.runtime.designer.leader_chat import (
+    _EN_NEGATABLE_VERBS,
+    _ZH_ACTION_VERBS,
     apply_leader_plan,
     message_asks_to_run,
 )
@@ -244,11 +246,64 @@ def test_message_asks_to_run_ignores_negative_instructions(message: str) -> None
 @pytest.mark.parametrize(
     "message",
     [
+        "不要开始",
+        "不要继续",
+        "不要确认",
+        "不要合成",
+        "不要拼接",
+        "不要出片",
+        "不要重新合成",
+        "别开始",
+        "不用继续",
+        "无需确认",
+        "暂不继续",
+        "不需要开始",
+        "先不开始",
+        "don't proceed",
+        "don't compose",
+        "don't stitch",
+        "don't rerun",
+        "do not proceed",
+        "do not confirm",
+        "without composing the film",
+    ],
+)
+def test_message_asks_to_run_ignores_negated_verbs(message: str) -> None:
+    assert message_asks_to_run(message) is False
+
+
+# The negation list is built from the same constants _RUN_HINT uses, so these two
+# tests are the guard that keeps the two patterns in step: add a verb to
+# _ZH_ACTION_VERBS / _EN_NEGATABLE_VERBS and it is instantly required to have a
+# working negated form.
+@pytest.mark.parametrize(
+    "negation",
+    ["不要", "别", "不用", "无需", "暂不", "不需要", "先不"],
+)
+@pytest.mark.parametrize("verb", _ZH_ACTION_VERBS.split("|"))
+def test_every_chinese_run_verb_is_negatable(negation: str, verb: str) -> None:
+    assert message_asks_to_run(negation + verb) is False
+
+
+@pytest.mark.parametrize("verb", _EN_NEGATABLE_VERBS.split("|"))
+def test_every_english_run_verb_is_negatable(verb: str) -> None:
+    assert message_asks_to_run("don't " + verb) is False
+    assert message_asks_to_run("do not " + verb) is False
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
         "不需要修改，生成吧",
         "别的不说，直接生成",
         "无需改动，运行吧",
         "不用改，直接运行吧",
+        "不要改，开始吧",
+        "别的不说，开始生成",
+        "不用管我，继续",
+        "无需多言，直接出片",
         "generate the score without the voiceover",
+        "compose it, don't wait for me",
         "run it, don't wait for me",
     ],
 )
