@@ -20,6 +20,8 @@ from jiuwenswarm.server.runtime.designer.activity import (
 from jiuwenswarm.server.runtime.designer.leader_chat import (
     _EN_NEGATABLE_VERBS,
     _ZH_ACTION_VERBS,
+    _node_prompt_for_snapshot,
+    _snapshot_nodes,
     apply_leader_plan,
     message_asks_to_run,
 )
@@ -337,6 +339,66 @@ def test_every_english_run_verb_is_negatable(verb: str) -> None:
 )
 def test_message_asks_to_run_keeps_positive_instructions(message: str) -> None:
     assert message_asks_to_run(message) is True
+
+
+def test_snapshot_reports_the_prompt_a_clip_node_actually_uses() -> None:
+    node = {
+        "id": "n_clip_2",
+        "type": "video",
+        "label": "Shot 2",
+        "config": {"pipeline": "clip", "generate": {"prompt": "flying through the canopy"}},
+    }
+    assert _node_prompt_for_snapshot(node) == "flying through the canopy"
+
+
+def test_snapshot_prompt_falls_back_to_shot_action() -> None:
+    node = {
+        "id": "n_clip_3",
+        "type": "video",
+        "label": "Shot 3",
+        "config": {"pipeline": "clip", "shot_action": "lands on the branch"},
+    }
+    assert _node_prompt_for_snapshot(node) == "lands on the branch"
+
+
+def test_snapshot_reports_whether_a_node_already_has_an_output() -> None:
+    graph = {
+        "graph_id": "graph_1",
+        "nodes": [
+            {
+                "id": "n_clip_1",
+                "type": "video",
+                "label": "Shot 1",
+                "config": {"pipeline": "clip"},
+                "output_ref": {"uri": "file:///tmp/shot1.mp4", "kind": "video"},
+            },
+            {
+                "id": "n_clip_2",
+                "type": "video",
+                "label": "Shot 2",
+                "config": {"pipeline": "clip"},
+            },
+        ],
+        "edges": [],
+    }
+    by_id = {node["id"]: node for node in _snapshot_nodes(graph)}
+    assert by_id["n_clip_1"]["has_output"] is True
+    assert by_id["n_clip_2"]["has_output"] is False
+
+
+def test_snapshot_treats_a_placeholder_output_as_not_built() -> None:
+    graph = {
+        "graph_id": "graph_1",
+        "nodes": [
+            {
+                "id": "n_x",
+                "config": {"pipeline": "clip"},
+                "output_ref": {"uri": "designer://pending"},
+            }
+        ],
+        "edges": [],
+    }
+    assert _snapshot_nodes(graph)[0]["has_output"] is False
 
 
 def test_tool_result_activity_text_keeps_progress_lines_readable() -> None:

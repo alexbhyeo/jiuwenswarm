@@ -114,6 +114,9 @@ Schema:
 }
 
 Rules:
+- Every node carries has_output: true when its asset already exists. That flag is fact: never
+  report an asset as missing, or as freshly generated, when has_output says otherwise. The user
+  is looking at the canvas, so a status answer that contradicts it reads as the tool being broken.
 - edit_graph: change topology. Leave run_node_ids empty unless the user asked to generate/run.
 - refine_node: update that node's config.prompt (and brief/storyboard text if asked). Put the target in run_node_ids so it regenerates.
 - Generate in the same turn: when the user asks you to make something new (e.g. "generate the
@@ -758,6 +761,43 @@ def _sanitize_plan(plan: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _node_prompt_for_snapshot(node: dict[str, Any]) -> str:
+    """The text this node would actually generate from.
+
+    A clip node keeps its film prompt under ``config.generate.prompt`` (written by
+    the storyboard sync) and ``config.prompt`` is usually empty, so reading only
+    ``config.prompt`` made the leader tell the user "Shot 2 and Shot 3 have no
+    prompt" about clips that had one.
+    """
+    cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
+    generate = cfg.get("generate") if isinstance(cfg.get("generate"), dict) else {}
+    for value in (cfg.get("prompt"), generate.get("prompt"), cfg.get("shot_action")):
+        text = str(value or "").strip()
+        if text:
+            return text[:240]
+    return ""
+
+
+def _snapshot_nodes(graph: DesignerExecutionGraph) -> list[dict[str, Any]]:
+    """Canvas nodes as the leader sees them.
+
+    ``has_output`` is the part that matters most: without it the model can only
+    guess whether an asset exists, and it reported three finished clips as
+    "还没有生成" while the user was looking at them on the canvas.
+    """
+    return [
+        {
+            "id": node.get("id"),
+            "type": node.get("type"),
+            "label": node.get("label"),
+            "pipeline": node_pipeline(node),
+            "prompt": _node_prompt_for_snapshot(node),
+            "has_output": _node_built(node),
+        }
+        for node in graph.get("nodes") or []
+    ]
+
+
 async def _llm_leader_plan(
     graph: DesignerExecutionGraph,
     message: str,
@@ -778,16 +818,7 @@ async def _llm_leader_plan(
     snapshot: dict[str, Any] = {
         "selected_node_id": selected_node_id,
         "user_canvas_edits": list(meta.get("user_canvas_edits") or [])[-20:],
-        "nodes": [
-            {
-                "id": node.get("id"),
-                "type": node.get("type"),
-                "label": node.get("label"),
-                "pipeline": node_pipeline(node),
-                "prompt": str((node.get("config") or {}).get("prompt") or "")[:240],
-            }
-            for node in graph.get("nodes") or []
-        ],
+        "nodes": _snapshot_nodes(graph),
         "edges": [
             {"id": edge.get("id"), "source": edge.get("source"), "target": edge.get("target")}
             for edge in graph.get("edges") or []
