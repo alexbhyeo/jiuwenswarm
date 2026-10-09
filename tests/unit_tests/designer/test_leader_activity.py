@@ -266,10 +266,38 @@ def test_message_asks_to_run_ignores_negative_instructions(message: str) -> None
         "do not proceed",
         "do not confirm",
         "without composing the film",
+        "無需生成",
+        "暫不生成",
+        "別開始",
+        "別運行",
+        "先別開始",
+        "不要繼續",
     ],
 )
 def test_message_asks_to_run_ignores_negated_verbs(message: str) -> None:
     assert message_asks_to_run(message) is False
+
+
+# The leader tells the user to reply 「确认」, but a traditional-Chinese user sends
+# 確認. Simplified-only matching read that as "no run requested", so the guard in
+# run_leader_chat wiped run_node_ids and the confirmation produced no asset while
+# the reply claimed generation had started.
+@pytest.mark.parametrize(
+    "message",
+    [
+        "確認",
+        "確定",
+        "開始",
+        "繼續",
+        "沒問題",
+        "就這樣",
+        "下個步驟",
+        "運行",
+        "確認，開始生成",
+    ],
+)
+def test_traditional_acknowledgement_asks_to_run(message: str) -> None:
+    assert message_asks_to_run(message) is True
 
 
 # The negation list is built from the same constants _RUN_HINT uses, so these two
@@ -278,7 +306,7 @@ def test_message_asks_to_run_ignores_negated_verbs(message: str) -> None:
 # working negated form.
 @pytest.mark.parametrize(
     "negation",
-    ["不要", "别", "不用", "无需", "暂不", "不需要", "先不"],
+    ["不要", "别", "別", "不用", "无需", "無需", "暂不", "暫不", "不需要", "先不"],
 )
 @pytest.mark.parametrize("verb", _ZH_ACTION_VERBS.split("|"))
 def test_every_chinese_run_verb_is_negatable(negation: str, verb: str) -> None:

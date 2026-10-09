@@ -32,10 +32,18 @@ ProgressFn = Callable[..., None]
 # negated only 生成|运行|重跑|跑, so 「不要开始」 matched nothing in _DONT_RUN and
 # fell through to _RUN_HINT's 开始 — an instruction meaning the opposite of
 # running returned True and started a generation.
+#
+# Both spellings are listed on purpose. The leader asks the user to reply 「确认」,
+# but a user writing traditional Chinese sends 確認, which matched nothing here and
+# was therefore read as "no run requested" — the confirmation was accepted, replied
+# to, and silently produced no asset at all.
 _ZH_ACTION_VERBS = (
-    r"生成|重跑|重生成|运行|合成|拼接|剪成|成片|出片"
-    r"|确认|确定|同意|没问题|开始|继续|就这样|好的|可以|下一步|下个步骤"
+    r"生成|重跑|重生成|运行|運行|合成|拼接|剪成|成片|出片"
+    r"|确认|確認|确定|確定|同意|没问题|沒問題"
+    r"|开始|開始|继续|繼續|就这样|就這樣|好的|可以|下一步|下个步骤|下個步驟"
 )
+# Negation prefixes, again in both spellings (別 / 無需 / 暫不 are traditional).
+_ZH_NEGATIONS = r"不要|别|別|不用|无需|無需|暂不|暫不|不需要|先不"
 # English verbs that read naturally when negated ("don't compose", "do not
 # proceed"). ok / okay / yes / looks good are acknowledgements with no negated
 # form, so they stay positive hints only.
@@ -157,8 +165,8 @@ Rules:
 # 跑 keeps its own alternation: it is negatable ("不用跑") but has never been a
 # positive run hint, so adding it to _ZH_ACTION_VERBS would change _RUN_HINT.
 _DONT_RUN = re.compile(
-    rf"(先别"
-    rf"|(?:不要|别|不用|无需|暂不|不需要|先不)\s*(?:重新)?(?:{_ZH_ACTION_VERBS}|跑)"
+    rf"(先别|先別"
+    rf"|(?:{_ZH_NEGATIONS})\s*(?:重新)?(?:{_ZH_ACTION_VERBS}|跑)"
     rf"|without (?:running|generating|composing|stitching)"
     rf"|don'?t (?:{_EN_NEGATABLE_VERBS})"
     rf"|do not (?:{_EN_NEGATABLE_VERBS}))",
@@ -846,6 +854,9 @@ async def run_leader_chat(
     # An edit_graph plan may only execute nodes when the message asked to run;
     # "继续合成" resolves through _RUN_HINT, so a compose request keeps its
     # run_node_ids instead of being silently emptied into a no-op.
+    # Snapshot the ids first: the log below must show what the plan asked for,
+    # otherwise a wipe is indistinguishable from a plan that scheduled nothing.
+    plan_run_ids = [str(item) for item in (plan.get("run_node_ids") or [])]
     if plan.get("intent") == "edit_graph" and not message_asks_to_run(
         text, run_new_nodes=run_new_nodes
     ):
@@ -885,7 +896,7 @@ async def run_leader_chat(
         "[Designer] leader chat intent=%s asked_to_run=%s plan_run_ids=%s resolved_run_ids=%s",
         plan.get("intent"),
         message_asks_to_run(text, run_new_nodes=run_new_nodes),
-        list(plan.get("run_node_ids") or []),
+        plan_run_ids,
         run_ids,
     )
     changed = next_graph is not graph and next_graph.get("updated_at") != graph.get("updated_at")
