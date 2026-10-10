@@ -212,7 +212,18 @@
       "collapse": "收起",
       "emptyHint": "描述你想剪出来的效果——分镜、节奏、叙事结构，剪辑助手可以和你一起讨论、给建议。",
       "noProject": "请先在「创作」中选择或新建一个项目",
-      "timeoutGaveUp": "等待回复超时，请稍后刷新查看，或重新发一遍"
+      "timeoutGaveUp": "等待回复超时，请稍后刷新查看，或重新发一遍",
+      "skills": "技能",
+      "skillsHint": "为接下来的对话选择已安装技能，助手会按它们的工作流执行",
+      "skillsLoading": "加载技能中…",
+      "skillsEmpty": "还没有已安装的技能，可先在「技能」面板安装",
+      "skillsFilterPlaceholder": "输入关键字筛选技能",
+      "skillsNoMatch": "没有匹配「{{key}}」的技能",
+      "skillRemove": "取消选择该技能",
+      "skillDefaultBadge": "默认",
+      "skillDefaultHint": "剪辑助手的基础技能，每轮自动加载，无需勾选",
+      "skillDefaultBuiltin": "未安装到工作区，正在使用内置副本的说明",
+      "skillDefaultMissing": "未找到该技能，正在使用内置说明"
     }
   },
   "applicationPlugins": {

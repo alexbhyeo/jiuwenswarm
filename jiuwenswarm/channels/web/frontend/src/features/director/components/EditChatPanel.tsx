@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useDirectorStore } from '../directorStore';
 import { useLabActions } from '../lab/LabActionsContext';
+import type { DirectorSkillOption } from '../directorApi';
 import type { DirectorAsset, DirectorProject, EditChatMessage } from '../types';
 
 function rawFileUrl(path: string): string {
@@ -36,6 +37,13 @@ const flowIcon = (
     <rect x="15" y="4" width="6" height="6" rx="1.2" />
     <rect x="9" y="15" width="6" height="6" rx="1.2" />
     <path d="M6 10v3a2 2 0 0 0 2 2h1M18 10v3a2 2 0 0 1-2 2h-1" />
+  </svg>
+);
+
+const skillIcon = (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3 4 7v6c0 4.4 3.4 7.4 8 8 4.6-.6 8-3.6 8-8V7z" />
+    <path d="m9 12 2 2 4-4" />
   </svg>
 );
 
@@ -132,12 +140,82 @@ export function EditChatPanel() {
   const addPendingImage = useDirectorStore((s) => s.addEditChatPendingImage);
   const removePendingImage = useDirectorStore((s) => s.removeEditChatPendingImage);
   const sendMessage = useDirectorStore((s) => s.sendEditChatMessage);
+  const skillNames = useDirectorStore((s) => s.editChatSkillNames);
+  const installedSkills = useDirectorStore((s) => s.installedSkills);
+  const skillsLoading = useDirectorStore((s) => s.installedSkillsLoading);
+  const loadInstalledSkills = useDirectorStore((s) => s.loadInstalledSkills);
+  const setSkillNames = useDirectorStore((s) => s.setEditChatSkillNames);
 
   const [expandedIndexes, setExpandedIndexes] = useState<Set<number>>(new Set());
   const [atMenu, setAtMenu] = useState<AtMenuState | null>(null);
   const [highlightIndex, setHighlightIndex] = useState(0);
+  const [skillMenuOpen, setSkillMenuOpen] = useState(false);
+  const [skillFilter, setSkillFilter] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
+  const skillMenuRef = useRef<HTMLDivElement>(null);
+
+  const toggleSkill = (name: string) => {
+    setSkillNames(skillNames.includes(name) ? skillNames.filter((n) => n !== name) : [...skillNames, name]);
+  };
+
+  // 技能目录里第 0 项是剪辑助手的默认技能（基础说明就是它的正文，后端每轮都
+  // 会加载）：它固定在列表最上方、始终勾选状态、点了也不取消——真正生效的是
+  // 后端的系统提示词，而不是用户这一轮的勾选，把它做成可取消只会骗人。
+  const defaultSkill = useMemo(() => installedSkills.find((s) => s.isDefault) ?? null, [installedSkills]);
+  const selectableSkills = useMemo(() => installedSkills.filter((s) => !s.isDefault), [installedSkills]);
+
+  // 技能列表的文本过滤：名称/展示名/描述任一命中（大小写不敏感）即可。技能
+  // 描述往往是唯一能区分两个同名近义技能的地方，所以描述也参与匹配，而不是
+  // 只看名字。默认技能也参与过滤——用户搜"director"应该能看到助手加载的是谁。
+  const matchesSkillFilter = useCallback((skill: DirectorSkillOption, key: string) => {
+    if (!key) return true;
+    return (
+      skill.name.toLowerCase().includes(key) ||
+      skill.displayName.toLowerCase().includes(key) ||
+      skill.description.toLowerCase().includes(key)
+    );
+  }, []);
+
+  const filterKey = skillFilter.trim().toLowerCase();
+  const filteredSkills = useMemo(
+    () => selectableSkills.filter((s) => matchesSkillFilter(s, filterKey)),
+    [selectableSkills, filterKey, matchesSkillFilter]
+  );
+  const showDefaultSkill = defaultSkill ? matchesSkillFilter(defaultSkill, filterKey) : false;
+  // 默认技能永远在列表里显示（除非被过滤词排除），所以"有没有可显示的行"不能
+  // 只看勾选项；两者都空才提示。
+  const hasListedSkill = showDefaultSkill || filteredSkills.length > 0;
+
+  // 默认技能正文的来源——直接写在描述行里，用户一眼能确认助手加载的是哪一份。
+  const defaultSkillHint = (skill: DirectorSkillOption) => {
+    if (skill.defaultSource === 'builtin') return t('director.editChat.skillDefaultBuiltin');
+    if (skill.defaultSource === 'missing') return t('director.editChat.skillDefaultMissing');
+    return t('director.editChat.skillDefaultHint');
+  };
+
+  // 面板一挂载就把技能目录拉下来（store 里有缓存，一个会话只跑一次）：默认技能
+  // 那一行/那枚 chip 是"助手当前加载的是哪份技能"的唯一可见凭据，不能等用户先点
+  // 开「技能」下拉才出现。
+  useEffect(() => {
+    void loadInstalledSkills();
+  }, [loadInstalledSkills]);
+
+  // 关掉下拉时清掉过滤词——下次打开应该是完整列表，而不是上次搜过的残留。
+  useEffect(() => {
+    if (!skillMenuOpen) setSkillFilter('');
+  }, [skillMenuOpen]);
+
+  // 点面板其它地方就把技能下拉收起来——与 LabCanvas 节点参数弹层同一套做法
+  // （捕获阶段监听，避免被内层 stopPropagation 吃掉）。
+  useEffect(() => {
+    if (!skillMenuOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (skillMenuRef.current && !skillMenuRef.current.contains(e.target as Node)) setSkillMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick, true);
+    return () => document.removeEventListener('mousedown', handleClick, true);
+  }, [skillMenuOpen]);
 
   const messages = useMemo(() => project?.edit_chat_messages ?? [], [project]);
 
@@ -149,6 +227,7 @@ export function EditChatPanel() {
   useEffect(() => {
     setExpandedIndexes(new Set());
     setAtMenu(null);
+    setSkillMenuOpen(false);
   }, [selectedProjectId]);
 
   const namedImageAssets = useMemo(() => {
@@ -253,14 +332,102 @@ export function EditChatPanel() {
     <div className="director-edit-chat">
       <div className="director-edit-chat-header">
         <span>{t('director.editChat.title')}</span>
-        <button
-          type="button"
-          className="director-edit-chat-build-flow-btn"
-          title={t('director.lab.buildFlowFromChat')}
-          onClick={() => actions.buildFlowFromChat()}
-        >
-          {flowIcon}
-        </button>
+        {/* 技能选择与「生成实验室流程图」并排放在标题行右侧。 */}
+        <div className="director-edit-chat-header-actions" ref={skillMenuRef}>
+          <button
+            type="button"
+            className={`director-edit-chat-skills-btn ${skillMenuOpen ? 'director-edit-chat-skills-btn--active' : ''}`}
+            title={t('director.editChat.skillsHint')}
+            onClick={() => {
+              setSkillMenuOpen((v) => !v);
+              void loadInstalledSkills();
+            }}
+            data-testid="director-edit-chat-skills-btn"
+          >
+            {skillIcon}
+            {t('director.editChat.skills')}
+            {skillNames.length > 0 && <span className="director-edit-chat-skills-count">{skillNames.length}</span>}
+          </button>
+          <button
+            type="button"
+            className="director-edit-chat-build-flow-btn"
+            title={t('director.lab.buildFlowFromChat')}
+            onClick={() => actions.buildFlowFromChat()}
+          >
+            {flowIcon}
+          </button>
+          {skillMenuOpen && (
+            <div className="director-edit-chat-skills-menu" data-testid="director-edit-chat-skills-menu">
+              <input
+                type="text"
+                className="director-edit-chat-skills-filter"
+                placeholder={t('director.editChat.skillsFilterPlaceholder')}
+                value={skillFilter}
+                autoFocus
+                onChange={(e) => setSkillFilter(e.target.value)}
+                onKeyDown={(e) => {
+                  // Esc 只收起这个下拉，不要冒泡出去（外层输入框有自己的按键
+                  // 处理），也不要清掉用户正在打的草稿。
+                  if (e.key === 'Escape') {
+                    e.stopPropagation();
+                    setSkillMenuOpen(false);
+                  }
+                }}
+                data-testid="director-edit-chat-skills-filter"
+              />
+              {skillsLoading && <div className="director-edit-chat-skills-empty">{t('director.editChat.skillsLoading')}</div>}
+              {!skillsLoading && !hasListedSkill && (
+                <div className="director-edit-chat-skills-empty">
+                  {skillFilter.trim()
+                    ? t('director.editChat.skillsNoMatch', { key: skillFilter.trim() })
+                    : t('director.editChat.skillsEmpty')}
+                </div>
+              )}
+              {!skillsLoading && showDefaultSkill && defaultSkill && (
+                <div
+                  className="director-edit-chat-skill-item director-edit-chat-skill-item--default"
+                  title={defaultSkill.description || defaultSkill.name}
+                  data-testid="director-edit-chat-skill-default"
+                  data-skill-name={defaultSkill.name}
+                  data-default-source={defaultSkill.defaultSource}
+                >
+                  <span className="director-edit-chat-skill-item-name">
+                    {defaultSkill.displayName}
+                    <span className="director-edit-chat-skill-item-badge">
+                      {t('director.editChat.skillDefaultBadge')}
+                    </span>
+                    <span className="director-edit-chat-skill-item-check">✓</span>
+                  </span>
+                  <span className="director-edit-chat-skill-item-desc">{defaultSkillHint(defaultSkill)}</span>
+                </div>
+              )}
+              {!skillsLoading &&
+                filteredSkills.map((skill) => {
+                  const selected = skillNames.includes(skill.name);
+                  return (
+                    <button
+                      key={skill.name}
+                      type="button"
+                      className={`director-edit-chat-skill-item ${selected ? 'director-edit-chat-skill-item--active' : ''}`}
+                      onClick={() => toggleSkill(skill.name)}
+                      data-testid="director-edit-chat-skill-item"
+                      data-skill-name={skill.name}
+                      data-selected={selected ? 'true' : 'false'}
+                    >
+                      <span className="director-edit-chat-skill-item-name">
+                        {skill.displayName}
+                        {selected && <span className="director-edit-chat-skill-item-check">✓</span>}
+                      </span>
+                      {skill.description && <span className="director-edit-chat-skill-item-desc">{skill.description}</span>}
+                    </button>
+                  );
+                })}
+              {!skillsLoading && !skillFilter.trim() && selectableSkills.length === 0 && showDefaultSkill && (
+                <div className="director-edit-chat-skills-empty">{t('director.editChat.skillsEmpty')}</div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="director-edit-chat-thread" ref={threadRef}>
@@ -297,6 +464,35 @@ export function EditChatPanel() {
                   {closeIcon}
                 </button>
               </div>
+            );
+          })}
+        </div>
+      )}
+
+      {(defaultSkill || skillNames.length > 0) && (
+        <div className="director-edit-chat-skills">
+          {/* 默认技能固定在最前面、没有删除按钮——它每轮都由后端加载，不是这一
+              轮的勾选项。 */}
+          {defaultSkill && (
+            <span
+              className="director-edit-chat-skill-chip director-edit-chat-skill-chip--default"
+              title={defaultSkill.description || defaultSkill.name}
+              data-testid="director-edit-chat-skill-default-chip"
+              data-skill-name={defaultSkill.name}
+            >
+              {defaultSkill.displayName}
+              <span className="director-edit-chat-skill-chip-badge">{t('director.editChat.skillDefaultBadge')}</span>
+            </span>
+          )}
+          {skillNames.map((name) => {
+            const option = installedSkills.find((s) => s.name === name);
+            return (
+              <span key={name} className="director-edit-chat-skill-chip" title={option?.description || name}>
+                {option?.displayName || name}
+                <button type="button" onClick={() => toggleSkill(name)} title={t('director.editChat.skillRemove')}>
+                  {closeIcon}
+                </button>
+              </span>
             );
           })}
         </div>

@@ -2046,6 +2046,222 @@
   border-top: 1px solid var(--d-border-default);
 }
 
+/* 标题行右侧的操作区（技能选择 + 生成实验室流程图）。下拉菜单以它为定位基准。 */
+.director-edit-chat-header-actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 剪辑助手的技能选择：标题行右侧的胶囊按钮 + 已选技能 chip（chip 行在输入框
+   上方单独一行，跟着面板宽度走）。下拉菜单从按钮下方展开——按钮现在在顶部，
+   往下弹才是朝面板内的方向。 */
+.director-edit-chat-skills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 18px 0;
+}
+
+.director-edit-chat-skills-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--d-border-default);
+  border-radius: 999px;
+  background: var(--d-bg-card);
+  color: var(--d-text-secondary);
+  font-size: 11.5px;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.director-edit-chat-skills-btn:hover,
+.director-edit-chat-skills-btn--active {
+  color: var(--d-text-primary);
+  border-color: var(--d-accent);
+}
+
+.director-edit-chat-skills-count {
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--d-accent);
+  color: #fff;
+  font-size: 9.5px;
+  line-height: 15px;
+  text-align: center;
+}
+
+.director-edit-chat-skill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 180px;
+  padding: 3px 6px 3px 8px;
+  border-radius: 999px;
+  background: var(--d-bg-hover);
+  color: var(--d-text-primary);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.director-edit-chat-skill-chip > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--d-text-secondary);
+  cursor: pointer;
+}
+
+.director-edit-chat-skill-chip > button:hover {
+  color: #d64545;
+}
+
+/* 默认技能专属：没有删除按钮，用一条强调色描边和"默认"徽标把它与可勾选的
+   技能区分开。 */
+.director-edit-chat-skill-chip--default {
+  padding-right: 8px;
+  border: 1px solid var(--d-accent);
+  color: var(--d-accent);
+}
+
+.director-edit-chat-skill-chip-badge {
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--d-accent);
+  color: #fff;
+  font-size: 9.5px;
+  line-height: 13px;
+}
+
+.director-edit-chat-skills-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  width: 300px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--d-border-default);
+  border-radius: var(--d-radius-md);
+  background: var(--d-bg-card);
+  box-shadow: var(--d-shadow-md);
+}
+
+/* 技能列表的文本过滤框——固定在菜单顶部，滚动列表时跟着一起滚（列表本身
+   很短，不需要 sticky）。 */
+.director-edit-chat-skills-filter {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 4px;
+  padding: 5px 8px;
+  border: 1px solid var(--d-border-default);
+  border-radius: var(--d-radius-sm);
+  background: var(--d-bg-card);
+  color: var(--d-text-primary);
+  font-size: 11.5px;
+  font-weight: 400;
+  font-family: inherit;
+}
+
+.director-edit-chat-skills-filter:focus {
+  outline: none;
+  border-color: var(--d-accent);
+}
+
+.director-edit-chat-skills-empty {
+  padding: 8px 10px;
+  color: var(--d-text-secondary);
+  font-size: 11px;
+}
+
+.director-edit-chat-skill-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--d-radius-sm);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.director-edit-chat-skill-item:hover {
+  background: var(--d-bg-hover);
+}
+
+.director-edit-chat-skill-item--active {
+  background: var(--d-bg-hover);
+}
+
+.director-edit-chat-skill-item-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--d-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.director-edit-chat-skill-item--active .director-edit-chat-skill-item-name {
+  color: var(--d-accent);
+}
+
+/* 默认技能：固定在列表最上方、始终勾选、不可点击取消。用浅色底 + 强调色描边
+   与下面可勾选的条目区分开（它是 <div>，没有 hover/pointer 反馈）。 */
+.director-edit-chat-skill-item--default {
+  margin-bottom: 4px;
+  border: 1px solid var(--d-accent);
+  background: var(--d-bg-hover);
+  cursor: default;
+}
+
+.director-edit-chat-skill-item--default .director-edit-chat-skill-item-name {
+  color: var(--d-accent);
+}
+
+.director-edit-chat-skill-item-badge {
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--d-accent);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 400;
+  line-height: 14px;
+}
+
+.director-edit-chat-skill-item-check {
+  font-weight: 700;
+}
+
+/* 技能描述可能很长（内置技能的 description 动辄上百字），压成两行——列表要
+   一眼能扫完，详细的说明留给 title 悬停。 */
+.director-edit-chat-skill-item-desc {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--d-text-secondary);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
 .director-edit-chat-input {
   flex: 1;
   min-height: 88px;

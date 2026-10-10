@@ -4,6 +4,7 @@
 import { create } from 'zustand';
 import i18n from '../../i18n';
 import { DEFAULT_AUDIO_VOICE } from './audioVoices';
+import type { DirectorSkillOption } from './directorApi';
 import type {
   ComposerMode,
   ComposerParams,
@@ -67,6 +68,18 @@ interface DirectorState {
   // 数组里，不需要另开一份。
   editChatDraft: string;
   editChatPendingImageIds: string[];
+  /** 剪辑助手「为这一轮选技能」里勾选的已安装技能（名字即技能目录名）。跟着
+   *  面板走、不落盘：它是"接下来这几轮想按哪个工作流做"的临时选择，不是项目
+   *  数据的一部分（真正生效的说明由后端每一轮读技能正文生成）。 */
+  editChatSkillNames: string[];
+  /** 可勾选的技能目录：第 0 项固定是剪辑助手的默认技能（isDefault，始终生效、
+   *  不可取消），其余是可勾选的已安装技能。做成 store 级缓存而不是面板局部
+   *  state——面板在切项目时会重新挂载，缓存住就不必每次都重新跑一趟
+   *  skills.list。 */
+  installedSkills: DirectorSkillOption[];
+  installedSkillsLoading: boolean;
+  loadInstalledSkills: (force?: boolean) => Promise<void>;
+  setEditChatSkillNames: (names: string[]) => void;
   editChatSending: boolean;
   editChatError: string | null;
   setEditChatDraft: (text: string) => void;
@@ -126,6 +139,9 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
 
   editChatDraft: '',
   editChatPendingImageIds: [],
+  editChatSkillNames: [],
+  installedSkills: [],
+  installedSkillsLoading: false,
   editChatSending: false,
   editChatError: null,
 
@@ -322,6 +338,23 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
   },
 
   setEditChatDraft: (text) => set({ editChatDraft: text }),
+  setEditChatSkillNames: (names) => set({ editChatSkillNames: names }),
+  loadInstalledSkills: async (force = false) => {
+    const state = get();
+    // 已经有一份目录且不是强制刷新就直接用——技能安装/停用后由调用方传
+    // force=true 重新拉一次。
+    if (!force && (state.installedSkills.length > 0 || state.installedSkillsLoading)) return;
+    set({ installedSkillsLoading: true });
+    try {
+      const { directorListSkills } = await import('./directorApi');
+      const skills = await directorListSkills();
+      set({ installedSkills: skills, installedSkillsLoading: false });
+    } catch {
+      // 拉不到就当目录为空（比如网关那一刻不可用），面板会显示"没有可选技能"；
+      // 不把这里做成阻断性错误——选技能是可选动作，不该挡住发消息。
+      set({ installedSkills: [], installedSkillsLoading: false });
+    }
+  },
   addEditChatPendingImage: (assetId) =>
     set((s) =>
       s.editChatPendingImageIds.includes(assetId)
@@ -344,7 +377,12 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
     set({ editChatSending: true, editChatError: null });
     try {
       const { directorEditChatSend } = await import('./directorApi');
-      const { project } = await directorEditChatSend(projectId, text, state.editChatPendingImageIds);
+      const { project } = await directorEditChatSend(
+        projectId,
+        text,
+        state.editChatPendingImageIds,
+        state.editChatSkillNames
+      );
       set((s) => ({
         projects: s.projects.map((p) => (p.project_id === project.project_id ? project : p)),
         editChatSending: false,

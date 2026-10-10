@@ -377,13 +377,37 @@ Other rules:
 
 ### 8.3 Edit chat (script → designs → shots → frames → clips)
 
-1. `EditChatPanel` sends the accumulated history plus pending reference images.
-2. The model may call `generate_design_image` / `generate_shot_video`; each
+1. `EditChatPanel` sends the accumulated history, pending reference images, and
+   the skills the user selected for the turn (`skill_names`).
+2. The system prompt is built by `director_manager._build_edit_chat_system_prompt`:
+   the assistant's own instructions are read from the installed
+   **`director-edit-assistant`** skill (see `director_skills.py`) so users can
+   read/edit them in the Skills panel — the built-in `_EDIT_CHAT_SYSTEM_PROMPT`
+   constant is the fallback when that skill is missing or unreadable. Any
+   selected skills are appended after it as extra workflows.
+3. The model may call `generate_design_image` / `generate_shot_video`; each
    call produces a real asset in the project.
-3. The assistant text plus the new `asset_id`s are appended to
+4. The assistant text plus the new `asset_id`s are appended to
    `edit_chat_messages`, which persists with the project.
-4. The model is explicitly told it **cannot** perform final edit/assembly — it
+5. The model is explicitly told it **cannot** perform final edit/assembly — it
    advises the user to assemble the generated clips on the timeline.
+
+The skill picker sits in the panel header next to 生成实验室流程图 and reuses the
+Skills panel's own `skills.list` RPC. The list always starts with the assistant's
+**default skill** (`director-edit-assistant`) pinned at the top, marked 默认, in the
+always-checked state and not clickable — it is the base prompt, so the backend
+loads it every turn regardless of what the user selects, and showing it is the only
+way to confirm *which* skill file is driving the assistant. Its row reports where
+the body came from: an installed workspace copy (`installed`), the built-in copy
+only (`builtin`, i.e. not installed — still loaded, since the resolver reads the
+built-in dir too), or neither (`missing`, the constant fallback). Everything below
+it is the selectable installed + enabled skills, and the text filter applies to name,
+display name and description. Selected skills show as removable chips above the
+input, with the default skill shown as a non-removable chip ahead of them. Skill
+names come from the client, so `director_skills._skill_md_path` accepts a bare
+directory name only and resolves strictly inside the workspace/builtin skills dirs;
+names that no longer resolve are skipped rather than failing the turn, and each
+prompt build logs the file it read.
 
 ---
 

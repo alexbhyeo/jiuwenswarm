@@ -48,6 +48,11 @@ from jiuwenswarm.agents.harness.common.tools.edit_chat_tools import (
     edit_chat_configured,
     edit_chat_enabled,
 )
+from jiuwenswarm.server.runtime.director.director_skills import (
+    ASSISTANT_SKILL_NAME,
+    load_assistant_skill,
+    load_skill_sections,
+)
 from jiuwenswarm.server.runtime.director.director_store import (
     DirectorAsset,
     DirectorProject,
@@ -132,6 +137,42 @@ _EDIT_CHAT_SYSTEM_PROMPT = (
     "最终成片，明确说明这一点，然后继续给出具体、可执行的建议，供用户自己"
     "在时间线上把生成好的这些视频片段拼起来。"
 )
+
+# 剪辑助手的基础说明：优先读已安装技能 director-edit-assistant 的正文
+# （用户可以在「技能」面板里查看/编辑它，改完下一轮就生效），技能不存在或读
+# 不出来时回退到 _EDIT_CHAT_SYSTEM_PROMPT——所以删掉技能也不会把助手搞坏。
+# 用户在这一轮勾选的其它技能，追加在基础说明之后作为额外工作流。
+def _build_edit_chat_system_prompt(skill_names: list[str]) -> str:
+    assistant = load_assistant_skill()
+    if assistant is None:
+        # 技能没装/被删/读不出来——回退到内置说明，助手照样能用。
+        logger.warning(
+            "[director] 未找到剪辑助手技能 %s，系统提示词回退到内置说明（%d 字）",
+            ASSISTANT_SKILL_NAME,
+            len(_EDIT_CHAT_SYSTEM_PROMPT),
+        )
+        base = _EDIT_CHAT_SYSTEM_PROMPT
+    else:
+        path, body = assistant
+        logger.info("[director] 剪辑助手系统提示词取自技能 %s（%d 字）", path, len(body))
+        base = body
+    sections = load_skill_sections(skill_names)
+    if not sections:
+        return base
+    parts = [
+        base,
+        "\n\n---\n\n## 用户为这一轮选中的技能\n\n"
+        "用户从「技能」里勾选了下面这些技能，这一轮请把它们当作额外的工作流要求"
+        "遵循；与本助手自身流程冲突时，以能真正落地的那一个为准，并向用户说明你"
+        "采用的是哪一个。",
+    ]
+    for section in sections:
+        header = f"### 技能：{section['name']}"
+        if section["description"]:
+            header += f"\n（{section['description']}）"
+        parts.append(f"{header}\n\n{section['body']}")
+    return "\n\n".join(parts)
+
 
 # generate_design_image：让模型在对话过程中真正生成一张角色/道具设计图或
 # 场景设计图（走 generate_visual，落成该项目的真实素材），而不是只在文字里
@@ -1033,6 +1074,10 @@ class DirectorManager:
         text = str(params.get("text") or "").strip()
         raw_image_ids = params.get("image_asset_ids")
         image_asset_ids = [str(x) for x in raw_image_ids if str(x)] if isinstance(raw_image_ids, list) else []
+        # 用户在剪辑助手里勾选的已安装技能（名字即技能目录名）；读不到的直接
+        # 跳过，不因为一个过期的名字把整轮对话判失败。
+        raw_skill_names = params.get("skill_names")
+        skill_names = [str(x) for x in raw_skill_names if str(x).strip()] if isinstance(raw_skill_names, list) else []
 
         if not project_id:
             raise DirectorRpcError("INVALID_PARAMS", "缺少 project_id")
@@ -1061,7 +1106,7 @@ class DirectorManager:
         project = self._store.append_edit_chat_messages(project_id, [user_message])
 
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _EDIT_CHAT_SYSTEM_PROMPT},
+            {"role": "system", "content": _build_edit_chat_system_prompt(skill_names)},
             *history_messages,
             build_multimodal_user_message(text, image_paths),
         ]
