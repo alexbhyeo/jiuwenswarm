@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -144,6 +144,7 @@ export function EditChatPanel() {
   const installedSkills = useDirectorStore((s) => s.installedSkills);
   const skillsLoading = useDirectorStore((s) => s.installedSkillsLoading);
   const loadInstalledSkills = useDirectorStore((s) => s.loadInstalledSkills);
+  const setAssistantSkillDefault = useDirectorStore((s) => s.setAssistantSkillDefault);
   const setSkillNames = useDirectorStore((s) => s.setEditChatSkillNames);
 
   const [expandedIndexes, setExpandedIndexes] = useState<Set<number>>(new Set());
@@ -151,6 +152,8 @@ export function EditChatPanel() {
   const [highlightIndex, setHighlightIndex] = useState(0);
   const [skillMenuOpen, setSkillMenuOpen] = useState(false);
   const [skillFilter, setSkillFilter] = useState('');
+  const [settingDefault, setSettingDefault] = useState<string | null>(null);
+  const [skillError, setSkillError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   const skillMenuRef = useRef<HTMLDivElement>(null);
@@ -164,6 +167,20 @@ export function EditChatPanel() {
   // 后端的系统提示词，而不是用户这一轮的勾选，把它做成可取消只会骗人。
   const defaultSkill = useMemo(() => installedSkills.find((s) => s.isDefault) ?? null, [installedSkills]);
   const selectableSkills = useMemo(() => installedSkills.filter((s) => !s.isDefault), [installedSkills]);
+
+  // 切换默认技能是异步写盘操作，成功后整个技能目录会换位（谁钉在最上面、谁变成可
+  // 勾选项都变了），所以在飞的时候禁掉按钮、失败时把错误显示在面板里而不是静默。
+  const handleSetDefault = async (name: string) => {
+    setSettingDefault(name);
+    setSkillError(null);
+    try {
+      await setAssistantSkillDefault(name);
+    } catch (err) {
+      setSkillError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSettingDefault(null);
+    }
+  };
 
   // 技能列表的文本过滤：名称/展示名/描述任一命中（大小写不敏感）即可。技能
   // 描述往往是唯一能区分两个同名近义技能的地方，所以描述也参与匹配，而不是
@@ -404,9 +421,8 @@ export function EditChatPanel() {
               {!skillsLoading &&
                 filteredSkills.map((skill) => {
                   const selected = skillNames.includes(skill.name);
-                  return (
+                  const row = (
                     <button
-                      key={skill.name}
                       type="button"
                       className={`director-edit-chat-skill-item ${selected ? 'director-edit-chat-skill-item--active' : ''}`}
                       onClick={() => toggleSkill(skill.name)}
@@ -420,6 +436,32 @@ export function EditChatPanel() {
                       </span>
                       {skill.description && <span className="director-edit-chat-skill-item-desc">{skill.description}</span>}
                     </button>
+                  );
+                  // 候选技能多给一个"设为默认"——默认技能是助手的基础说明，切换它
+                  // 就是换掉整套基础流程（另一个候选仍然可以勾选、作为附加工作流）。
+                  // 用 <div> 包一层而不是把它塞进主按钮里：按钮不能嵌套按钮。
+                  if (!skill.isCandidate) return <Fragment key={skill.name}>{row}</Fragment>;
+                  return (
+                    <div key={skill.name} className="director-edit-chat-skill-row">
+                      {row}
+                      <button
+                        type="button"
+                        className="director-edit-chat-skill-default-btn"
+                        title={
+                          skill.selectableAsDefault
+                            ? t('director.editChat.skillSetDefaultHint')
+                            : t('director.editChat.skillSetDefaultUnavailable')
+                        }
+                        disabled={!skill.selectableAsDefault || settingDefault !== null}
+                        onClick={() => void handleSetDefault(skill.name)}
+                        data-testid="director-edit-chat-skill-set-default"
+                        data-skill-name={skill.name}
+                      >
+                        {settingDefault === skill.name
+                          ? t('director.editChat.skillSetDefaultBusy')
+                          : t('director.editChat.skillSetDefault')}
+                      </button>
+                    </div>
                   );
                 })}
               {!skillsLoading && !skillFilter.trim() && selectableSkills.length === 0 && showDefaultSkill && (
@@ -451,6 +493,7 @@ export function EditChatPanel() {
       </div>
 
       {error && <div className="director-edit-chat-error">{error}</div>}
+      {skillError && <div className="director-edit-chat-error">{skillError}</div>}
 
       {pendingImageIds.length > 0 && (
         <div className="director-edit-chat-pending-images">

@@ -223,7 +223,11 @@
       "skillDefaultBadge": "Default",
       "skillDefaultHint": "The assistant's base skill — loaded every turn, no need to select it",
       "skillDefaultBuiltin": "Not installed to the workspace — using the built-in copy",
-      "skillDefaultMissing": "Skill not found — using the built-in instructions"
+      "skillDefaultMissing": "Skill not found — using the built-in instructions",
+      "skillSetDefault": "Set as default",
+      "skillSetDefaultHint": "Use this skill as the assistant's base instructions (takes effect next turn); it becomes always-on and leaves this list",
+      "skillSetDefaultUnavailable": "Not installed in the workspace (body unreadable) — cannot be set as default",
+      "skillSetDefaultBusy": "Switching…"
     }
   },
   "applicationPlugins": {

@@ -17,6 +17,7 @@ helpers in ``director_skills``, so nothing touches the real workspace.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -47,6 +48,9 @@ def skills_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     builtin.mkdir()
     monkeypatch.setattr(dsk, "get_agent_skills_dir", lambda: workspace)
     monkeypatch.setattr(dsk, "get_builtin_skills_dir", lambda: builtin)
+    # 默认技能的切换配置也落在 agent root 下——不隔离的话测试会读到（甚至写到）
+    # 真实工作区的选择。
+    monkeypatch.setattr(dsk, "get_agent_root_dir", lambda: tmp_path)
     return workspace
 
 
@@ -351,3 +355,192 @@ async def test_handler_tolerates_a_stale_skill_name(
     )
 
     assert seen[0][0]["content"] == _EDIT_CHAT_SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# Switchable default (base) skill: director-edit-assistant <-> ads-codirector
+# ---------------------------------------------------------------------------
+
+
+def test_default_skill_is_the_factory_one_without_config(skills_root: Path) -> None:
+    assert dsk.resolve_default_skill_name() == dsk.ASSISTANT_SKILL_NAME
+    assert dsk.ASSISTANT_SKILL_NAME in dsk.ASSISTANT_SKILL_CANDIDATES
+
+
+def test_candidates_report_availability(skills_root: Path) -> None:
+    """只有工作区（或内置目录）里真读得到正文的候选才算可用——切过去读不到只会
+    掉回内置常量说明，比不切更差。"""
+    _write_skill(skills_root, dsk.ASSISTANT_SKILL_NAME, body="剪辑助手说明")
+
+    candidates = {c["name"]: c for c in dsk.skill_candidates()}
+
+    assert candidates[dsk.ASSISTANT_SKILL_NAME]["available"] is True
+    assert candidates[dsk.ASSISTANT_SKILL_NAME]["is_default"] is True
+    assert candidates["ads-codirector"]["available"] is False
+    assert candidates["ads-codirector"]["is_default"] is False
+
+
+def test_switching_the_default_skill_takes_effect(skills_root: Path) -> None:
+    _write_skill(skills_root, dsk.ASSISTANT_SKILL_NAME, body="剪辑助手说明")
+    _write_skill(skills_root, "ads-codirector", body="广告片共创说明")
+
+    config = dsk.set_assistant_skill_config("ads-codirector")
+
+    assert config["default_skill"] == "ads-codirector"
+    assert dsk.resolve_default_skill_name() == "ads-codirector"
+    assert "广告片共创说明" in (_build_edit_chat_system_prompt([]))
+
+
+def test_switching_back_to_the_factory_default(skills_root: Path) -> None:
+    _write_skill(skills_root, dsk.ASSISTANT_SKILL_NAME, body="剪辑助手说明")
+    _write_skill(skills_root, "ads-codirector", body="广告片共创说明")
+
+    dsk.set_assistant_skill_config("ads-codirector")
+    config = dsk.set_assistant_skill_config(dsk.ASSISTANT_SKILL_NAME)
+
+    assert config["default_skill"] == dsk.ASSISTANT_SKILL_NAME
+    assert "剪辑助手说明" in _build_edit_chat_system_prompt([])
+
+
+def test_the_other_candidate_is_still_a_selectable_addon(skills_root: Path) -> None:
+    """默认技能只有一个；另一个候选仍是普通可勾选技能，被勾了就追加在后面。"""
+    _write_skill(skills_root, dsk.ASSISTANT_SKILL_NAME, body="剪辑助手说明")
+    _write_skill(skills_root, "ads-codirector", body="广告片共创说明")
+
+    prompt = _build_edit_chat_system_prompt(["ads-codirector"])
+
+    assert "剪辑助手说明" in prompt
+    assert "广告片共创说明" in prompt
+    assert prompt.index("剪辑助手说明") < prompt.index("广告片共创说明")
+
+
+def test_the_active_default_is_not_injected_twice(skills_root: Path) -> None:
+    _write_skill(skills_root, dsk.ASSISTANT_SKILL_NAME, body="剪辑助手说明")
+    _write_skill(skills_root, "ads-codirector", body="广告片共创说明")
+    dsk.set_assistant_skill_config("ads-codirector")
+
+    prompt = _build_edit_chat_system_prompt(["ads-codirector", dsk.ASSISTANT_SKILL_NAME])
+
+    assert prompt.count("广告片共创说明") == 1
+    assert prompt.count("剪辑助手说明") == 1
+
+
+def test_unknown_skill_cannot_be_set_as_default(skills_root: Path) -> None:
+    """写进配置的是下一轮的系统提示词来源，接口自己也要挡住乱填的名字。"""
+    _write_skill(skills_root, "evil-skill", body="不该被选中")
+
+    with pytest.raises(ValueError):
+        dsk.set_assistant_skill_config("evil-skill")
+    assert dsk.resolve_default_skill_name() == dsk.ASSISTANT_SKILL_NAME
+
+
+def test_unavailable_candidate_cannot_be_set_as_default(skills_root: Path) -> None:
+    with pytest.raises(ValueError):
+        dsk.set_assistant_skill_config("ads-codirector")
+    assert dsk.resolve_default_skill_name() == dsk.ASSISTANT_SKILL_NAME
+
+
+def test_default_skill_cannot_escape_the_skills_dir(skills_root: Path, tmp_path: Path) -> None:
+    (tmp_path / "director").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "director" / "assistant_skill.json").write_text(
+        json.dumps({"default_skill": "../../secret"}), encoding="utf-8"
+    )
+
+    assert dsk.resolve_default_skill_name() == dsk.ASSISTANT_SKILL_NAME
+
+
+def test_broken_config_falls_back_to_the_factory_default(skills_root: Path, tmp_path: Path) -> None:
+    config_dir = tmp_path / "director"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "assistant_skill.json").write_text("{ not json", encoding="utf-8")
+
+    assert dsk.resolve_default_skill_name() == dsk.ASSISTANT_SKILL_NAME
+
+
+def test_deleting_the_selected_skill_falls_back(skills_root: Path) -> None:
+    """选了 ads-codirector 之后把它删了/没装——助手要还能按出厂说明工作。"""
+    _write_skill(skills_root, dsk.ASSISTANT_SKILL_NAME, body="剪辑助手说明")
+    _write_skill(skills_root, "ads-codirector", body="广告片共创说明")
+    dsk.set_assistant_skill_config("ads-codirector")
+
+    import shutil
+
+    shutil.rmtree(skills_root / "ads-codirector")
+
+    assert dsk.resolve_default_skill_name() == dsk.ASSISTANT_SKILL_NAME
+    assert _build_edit_chat_system_prompt([]) == "剪辑助手说明"
+
+
+@pytest.mark.asyncio
+async def test_handler_get_and_set_the_default_skill(
+    monkeypatch: pytest.MonkeyPatch, skills_root: Path, tmp_path: Path
+) -> None:
+    from jiuwenswarm.server.runtime.director import director_store as ds
+    from jiuwenswarm.server.runtime.director.director_manager import DirectorManager
+
+    monkeypatch.setattr(ds, "get_agent_root_dir", lambda: tmp_path)
+    _write_skill(skills_root, dsk.ASSISTANT_SKILL_NAME, body="剪辑助手说明")
+    _write_skill(skills_root, "ads-codirector", body="广告片共创说明")
+
+    manager = DirectorManager()
+    before = await manager.handle_director_edit_chat_skill_get({})
+    assert before["default_skill"] == dsk.ASSISTANT_SKILL_NAME
+    assert {c["name"] for c in before["candidates"]} == set(dsk.ASSISTANT_SKILL_CANDIDATES)
+
+    after = await manager.handle_director_edit_chat_skill_set({"name": "ads-codirector"})
+    assert after["default_skill"] == "ads-codirector"
+
+
+@pytest.mark.asyncio
+async def test_handler_rejects_a_bad_default_skill(
+    monkeypatch: pytest.MonkeyPatch, skills_root: Path, tmp_path: Path
+) -> None:
+    from jiuwenswarm.server.runtime.director import director_store as ds
+    from jiuwenswarm.server.runtime.director.director_manager import (
+        DirectorManager,
+        DirectorRpcError,
+    )
+
+    monkeypatch.setattr(ds, "get_agent_root_dir", lambda: tmp_path)
+    manager = DirectorManager()
+
+    with pytest.raises(DirectorRpcError) as err:
+        await manager.handle_director_edit_chat_skill_set({"name": "xlsx"})
+    assert err.value.code == "INVALID_PARAMS"
+
+    with pytest.raises(DirectorRpcError):
+        await manager.handle_director_edit_chat_skill_set({})
+
+
+@pytest.mark.asyncio
+async def test_handler_uses_the_switched_default_skill_as_the_base_prompt(
+    monkeypatch: pytest.MonkeyPatch, skills_root: Path, tmp_path: Path
+) -> None:
+    """切换默认技能之后，下一轮的基础说明就是新技能——不需要重启服务。"""
+    from jiuwenswarm.server.runtime.director import director_manager as dm
+    from jiuwenswarm.server.runtime.director import director_store as ds
+    from jiuwenswarm.server.runtime.director.director_manager import DirectorManager
+
+    monkeypatch.setattr(ds, "get_agent_root_dir", lambda: tmp_path)
+    monkeypatch.setattr(dm, "edit_chat_enabled", lambda: True)
+    monkeypatch.setattr(dm, "edit_chat_configured", lambda: True)
+
+    seen: list[list[dict]] = []
+
+    async def fake_completion(messages, tools=None):  # noqa: ANN001, ARG001
+        seen.append(messages)
+        return {"content": "收到"}
+
+    monkeypatch.setattr(dm, "call_edit_chat_completion", fake_completion)
+
+    _write_skill(skills_root, dsk.ASSISTANT_SKILL_NAME, body="剪辑助手说明")
+    _write_skill(skills_root, "ads-codirector", body="广告片共创说明")
+
+    manager = DirectorManager()
+    created = await manager.handle_director_projects_create({"name": "切换默认技能"})
+    project_id = created["project"]["project_id"]
+
+    await manager.handle_director_edit_chat_skill_set({"name": "ads-codirector"})
+    await manager.handle_director_edit_chat_send({"project_id": project_id, "text": "开始"})
+
+    assert seen[0][0]["content"] == "广告片共创说明"

@@ -394,20 +394,34 @@ Other rules:
 
 The skill picker sits in the panel header next to 生成实验室流程图 and reuses the
 Skills panel's own `skills.list` RPC. The list always starts with the assistant's
-**default skill** (`director-edit-assistant`) pinned at the top, marked 默认, in the
-always-checked state and not clickable — it is the base prompt, so the backend
-loads it every turn regardless of what the user selects, and showing it is the only
-way to confirm *which* skill file is driving the assistant. Its row reports where
-the body came from: an installed workspace copy (`installed`), the built-in copy
-only (`builtin`, i.e. not installed — still loaded, since the resolver reads the
-built-in dir too), or neither (`missing`, the constant fallback). Everything below
-it is the selectable installed + enabled skills, and the text filter applies to name,
-display name and description. Selected skills show as removable chips above the
-input, with the default skill shown as a non-removable chip ahead of them. Skill
-names come from the client, so `director_skills._skill_md_path` accepts a bare
-directory name only and resolves strictly inside the workspace/builtin skills dirs;
-names that no longer resolve are skipped rather than failing the turn, and each
-prompt build logs the file it read.
+**default skill** pinned at the top, marked 默认, in the always-checked state and not
+clickable — it is the base prompt, so the backend loads it every turn regardless of
+what the user selects, and showing it is the only way to confirm *which* skill file is
+driving the assistant. Its row reports where the body came from: an installed
+workspace copy (`installed`), the built-in copy only (`builtin`, i.e. not installed —
+still loaded, since the resolver reads the built-in dir too), or neither (`missing`,
+the constant fallback). Everything below it is the selectable installed + enabled
+skills, and the text filter applies to name, display name and description. Selected
+skills show as removable chips above the input, with the default skill shown as a
+non-removable chip ahead of them.
+
+**The default skill is switchable, not hard-coded.** `director_skills
+.ASSISTANT_SKILL_CANDIDATES` lists the skills that can act as the base prompt —
+`director-edit-assistant` (factory default) and `ads-codirector` — and the choice is
+persisted to `<agent_root>/director/assistant_skill.json` via
+`director.edit_chat.skill_get` / `skill_set`. Candidate rows in the dropdown carry a
+设为默认 action; switching it promotes the chosen skill to the pinned, always-on base
+and demotes the previous default back into the selectable list, with the new base
+removed from the turn's selection so the same body is never injected twice.
+`resolve_default_skill_name` validates three things before honouring the config — the
+name is a candidate, it is still resolvable, and it differs from the factory default —
+so a hand-edited or stale config degrades to `director-edit-assistant` rather than
+silently falling back to the built-in constant. A candidate whose body cannot be read
+is reported `available: false` and cannot be selected at all. Skill names come from the
+client, so `director_skills._skill_md_path` accepts a bare directory name only and
+resolves strictly inside the workspace/builtin skills dirs; names that no longer
+resolve are skipped rather than failing the turn, and each prompt build logs the file
+it read.
 
 ---
 

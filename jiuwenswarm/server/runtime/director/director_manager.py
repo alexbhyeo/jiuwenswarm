@@ -49,9 +49,11 @@ from jiuwenswarm.agents.harness.common.tools.edit_chat_tools import (
     edit_chat_enabled,
 )
 from jiuwenswarm.server.runtime.director.director_skills import (
-    ASSISTANT_SKILL_NAME,
+    get_assistant_skill_config,
     load_assistant_skill,
     load_skill_sections,
+    resolve_default_skill_name,
+    set_assistant_skill_config,
 )
 from jiuwenswarm.server.runtime.director.director_store import (
     DirectorAsset,
@@ -138,17 +140,20 @@ _EDIT_CHAT_SYSTEM_PROMPT = (
     "在时间线上把生成好的这些视频片段拼起来。"
 )
 
-# 剪辑助手的基础说明：优先读已安装技能 director-edit-assistant 的正文
-# （用户可以在「技能」面板里查看/编辑它，改完下一轮就生效），技能不存在或读
-# 不出来时回退到 _EDIT_CHAT_SYSTEM_PROMPT——所以删掉技能也不会把助手搞坏。
-# 用户在这一轮勾选的其它技能，追加在基础说明之后作为额外工作流。
+# 剪辑助手的基础说明：优先读**当前默认技能**的正文（出厂是
+# director-edit-assistant，可以在「技能」下拉里切换成 ads-codirector 等候选技能，
+# 见 director_skills.resolve_default_skill_name）——用户可以在「技能」面板里查看/
+# 编辑它，改完下一轮就生效。技能不存在或读不出来时回退到 _EDIT_CHAT_SYSTEM_PROMPT
+# ——所以删掉技能也不会把助手搞坏。用户在这一轮勾选的其它技能，追加在基础说明之后
+# 作为额外工作流；勾了当前默认技能本身则跳过（同一份说明不重复注入）。
 def _build_edit_chat_system_prompt(skill_names: list[str]) -> str:
+    default_name = resolve_default_skill_name()
     assistant = load_assistant_skill()
     if assistant is None:
         # 技能没装/被删/读不出来——回退到内置说明，助手照样能用。
         logger.warning(
             "[director] 未找到剪辑助手技能 %s，系统提示词回退到内置说明（%d 字）",
-            ASSISTANT_SKILL_NAME,
+            default_name,
             len(_EDIT_CHAT_SYSTEM_PROMPT),
         )
         base = _EDIT_CHAT_SYSTEM_PROMPT
@@ -156,7 +161,7 @@ def _build_edit_chat_system_prompt(skill_names: list[str]) -> str:
         path, body = assistant
         logger.info("[director] 剪辑助手系统提示词取自技能 %s（%d 字）", path, len(body))
         base = body
-    sections = load_skill_sections(skill_names)
+    sections = load_skill_sections(skill_names, skip={default_name})
     if not sections:
         return base
     parts = [
@@ -1176,4 +1181,23 @@ class DirectorManager:
             raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}") from None
 
         return {"project": project.to_dict()}
+
+    async def handle_director_edit_chat_skill_get(self, params: dict) -> dict:
+        """剪辑助手的**默认（基础）技能**状态：当前生效的是哪一个 + 可切换的候选。
+
+        默认技能不是"这一轮勾选"，而是助手自身的说明来源——它决定每一轮的系统
+        提示词，所以读写都走这一对接口。candidates 里带上 available，读不到正文的
+        技能不能切换（切过去只会掉回内置常量说明）。
+        """
+        return get_assistant_skill_config()
+
+    async def handle_director_edit_chat_skill_set(self, params: dict) -> dict:
+        """切换剪辑助手的默认技能，返回切换后的状态。"""
+        name = str(params.get("name") or "").strip()
+        if not name:
+            raise DirectorRpcError("INVALID_PARAMS", "缺少 name")
+        try:
+            return set_assistant_skill_config(name)
+        except ValueError as exc:
+            raise DirectorRpcError("INVALID_PARAMS", str(exc)) from None
 

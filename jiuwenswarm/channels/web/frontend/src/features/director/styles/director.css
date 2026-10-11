@@ -2210,6 +2210,43 @@
   background: var(--d-bg-hover);
 }
 
+/* 候选技能（可一键设为默认）的行：主体是勾选按钮，右侧挂一个小的"设为默认"。
+   默认技能是助手的基础说明，切换它等于换掉整套基础流程，所以这个动作要在列表里
+   直接够得着，而不是藏到别的面板。 */
+.director-edit-chat-skill-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.director-edit-chat-skill-row .director-edit-chat-skill-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.director-edit-chat-skill-default-btn {
+  flex: none;
+  padding: 3px 6px;
+  border: 1px solid var(--d-border-default);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--d-text-secondary);
+  font-size: 10px;
+  font-weight: 400;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.director-edit-chat-skill-default-btn:hover:not(:disabled) {
+  color: var(--d-accent);
+  border-color: var(--d-accent);
+}
+
+.director-edit-chat-skill-default-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .director-edit-chat-skill-item-name {
   display: flex;
   align-items: center;

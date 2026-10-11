@@ -223,7 +223,11 @@
       "skillDefaultBadge": "默认",
       "skillDefaultHint": "剪辑助手的基础技能，每轮自动加载，无需勾选",
       "skillDefaultBuiltin": "未安装到工作区，正在使用内置副本的说明",
-      "skillDefaultMissing": "未找到该技能，正在使用内置说明"
+      "skillDefaultMissing": "未找到该技能，正在使用内置说明",
+      "skillSetDefault": "设为默认",
+      "skillSetDefaultHint": "把这个技能作为剪辑助手的基础说明（下一轮生效），它本身改为始终加载、不再出现在这里",
+      "skillSetDefaultUnavailable": "该技能未安装到工作区（读不到正文），不能设为默认",
+      "skillSetDefaultBusy": "切换中…"
     }
   },
   "applicationPlugins": {

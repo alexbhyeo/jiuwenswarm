@@ -79,6 +79,10 @@ interface DirectorState {
   installedSkills: DirectorSkillOption[];
   installedSkillsLoading: boolean;
   loadInstalledSkills: (force?: boolean) => Promise<void>;
+  /** 把某个候选技能切成剪辑助手的**默认（基础）技能**。切完必须重拉技能目录：
+   *  默认技能本身不出现在勾选列表里，切换后"谁被钉在最上面、谁变成可勾选项"整个
+   *  换位；同时把新默认技能从这一轮的勾选里摘掉（它已经是基础提示词了）。 */
+  setAssistantSkillDefault: (name: string) => Promise<void>;
   setEditChatSkillNames: (names: string[]) => void;
   editChatSending: boolean;
   editChatError: string | null;
@@ -354,6 +358,17 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
       // 不把这里做成阻断性错误——选技能是可选动作，不该挡住发消息。
       set({ installedSkills: [], installedSkillsLoading: false });
     }
+  },
+  setAssistantSkillDefault: async (name) => {
+    const { directorSetAssistantSkill } = await import('./directorApi');
+    await directorSetAssistantSkill(name);
+    // 新默认技能已经是"基础提示词"本身，再从勾选里留着只会把同一份说明注入两次。
+    set((s) => ({
+      editChatSkillNames: s.editChatSkillNames.filter((n) => n !== name),
+      installedSkills: [],
+      installedSkillsLoading: false,
+    }));
+    await get().loadInstalledSkills(true);
   },
   addEditChatPendingImage: (assetId) =>
     set((s) =>

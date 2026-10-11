@@ -28,6 +28,8 @@ const METHOD = {
   assetRename: 'director.asset.rename',
   assetDelete: 'director.asset.delete',
   editChatSend: 'director.edit_chat.send',
+  editChatSkillGet: 'director.edit_chat.skill_get',
+  editChatSkillSet: 'director.edit_chat.skill_set',
   labCanvasSave: 'director.lab_canvas.save',
 } as const;
 
@@ -246,11 +248,14 @@ export function directorEditChatSend(
     });
 }
 
-/** 剪辑助手自己的技能名。它是助手的**默认技能**：助手的基础说明就是这份技能
- *  的正文（后端每一轮直接从技能目录读它，见 director_skills.ASSISTANT_SKILL_NAME），
- *  所以它不参与「为这一轮额外选技能」的勾选——再选一遍只是重复同一份说明。
- *  但它仍然出现在列表里（固定在最上方、标记为默认、不可取消），否则用户无从
- *  确认助手到底有没有加载这份技能。 */
+/** 剪辑助手自己的技能名（出厂默认的基础技能）。它是助手的**默认技能**：助手的基础
+ *  说明就是这份技能的正文（后端每一轮从技能目录读它，见
+ *  director_skills.resolve_default_skill_name），所以它不参与「为这一轮额外选技能」
+ *  的勾选——再选一遍只是重复同一份说明。但它仍然出现在列表里（固定在最上方、标记为
+ *  默认、不可取消），否则用户无从确认助手到底有没有加载这份技能。
+ *
+ *  出厂默认可以被切换成别的候选技能（见 directorGetAssistantSkill），所以判断"哪一
+ *  个是默认"要看后端的 `default_skill`，不能只看这个名字。 */
 export const EDIT_ASSISTANT_SKILL_NAME = 'director-edit-assistant';
 
 /** 默认技能正文的来源：工作区已安装副本 / 只有内置副本（未安装到工作区）/
@@ -265,6 +270,58 @@ export interface DirectorSkillOption {
   isDefault?: boolean;
   /** 仅默认技能有：正文从哪里读到。 */
   defaultSource?: DirectorDefaultSkillSource;
+  /** 是「默认技能」的候选之一（当前默认之外的候选可以一键设为默认）。 */
+  isCandidate?: boolean;
+  /** 仅候选技能有：技能文件是否真的读得到——读不到就不能切过去。 */
+  selectableAsDefault?: boolean;
+}
+
+export interface DirectorAssistantSkillConfig {
+  /** 当前生效的默认（基础）技能名。 */
+  defaultSkill: string;
+  /** 出厂默认技能名（跟着后端 ASSISTANT_SKILL_NAME 走）。 */
+  factoryDefault: string;
+  candidates: { name: string; available: boolean; isDefault: boolean; description: string }[];
+}
+
+/** 读剪辑助手的默认技能状态（当前生效的那个 + 可切换的候选）。 */
+export function directorGetAssistantSkill(): Promise<DirectorAssistantSkillConfig> {
+  return webRequest<Record<string, unknown>>(METHOD.editChatSkillGet, {}, { timeoutMs: 30000 }).then(
+    (data) => ({
+      defaultSkill: String(data?.default_skill ?? EDIT_ASSISTANT_SKILL_NAME),
+      factoryDefault: String(data?.factory_default ?? EDIT_ASSISTANT_SKILL_NAME),
+      candidates: (Array.isArray(data?.candidates) ? data.candidates : []).map((item) => {
+        const c = item as Record<string, unknown>;
+        return {
+          name: String(c.name ?? ''),
+          available: c.available === true,
+          isDefault: c.is_default === true,
+          description: String(c.description ?? ''),
+        };
+      }),
+    })
+  );
+}
+
+/** 把某个候选技能设为默认（下一轮对话立即生效）。 */
+export function directorSetAssistantSkill(name: string): Promise<DirectorAssistantSkillConfig> {
+  return webRequest<Record<string, unknown>>(
+    METHOD.editChatSkillSet,
+    { name },
+    { timeoutMs: 30000 }
+  ).then((data) => ({
+    defaultSkill: String(data?.default_skill ?? name),
+    factoryDefault: String(data?.factory_default ?? EDIT_ASSISTANT_SKILL_NAME),
+    candidates: (Array.isArray(data?.candidates) ? data.candidates : []).map((item) => {
+      const c = item as Record<string, unknown>;
+      return {
+        name: String(c.name ?? ''),
+        available: c.available === true,
+        isDefault: c.is_default === true,
+        description: String(c.description ?? ''),
+      };
+    }),
+  }));
 }
 
 /** 列出技能：第 0 项固定是剪辑助手的**默认技能**（无论它是否装了），后面按
@@ -273,7 +330,8 @@ export interface DirectorSkillOption {
  *  直接复用「技能」面板同一个 skills.list RPC，而不是另开后端接口——列表口径
  *  与技能面板完全一致，用户在技能面板里装/停用技能后，这里刷新一次就能看到。
  *  勾选项的过滤规则：installed=true 且 enabled !== false（未安装的内置技能、
- *  marketplace 里还没装的条目都不该出现在"已安装技能"里）。
+ *  marketplace 里还没装的条目都不该出现在"已安装技能"里）；当前生效的默认技能
+ *  本身也不出现（它是基础提示词，不是这一轮的附加项）。
  *
  *  默认技能的状态只能从这份列表推断（后端读技能正文的搜索范围就是这两处，见
  *  director_skills._skill_search_dirs）：既在用户技能目录里（installed=true）
@@ -281,30 +339,41 @@ export interface DirectorSkillOption {
  *  ——后端照样读得到内置目录，所以助手仍按这份技能工作，只是没装到工作区；
  *  两处都没有就是'missing'，后端回退到内置常量说明。 */
 export async function directorListSkills(): Promise<DirectorSkillOption[]> {
-  const data = await webRequest<{ skills?: unknown[] }>('skills.list', {}, { timeoutMs: 30000 });
+  const [data, config] = await Promise.all([
+    webRequest<{ skills?: unknown[] }>('skills.list', {}, { timeoutMs: 30000 }),
+    directorGetAssistantSkill().catch(() => null),
+  ]);
   const raw = (Array.isArray(data?.skills) ? data.skills : []).map(
     (item) => item as Record<string, unknown>
   );
 
-  const assistant = raw.find((s) => String(s.name ?? '').trim() === EDIT_ASSISTANT_SKILL_NAME);
+  const defaultName = config?.defaultSkill || EDIT_ASSISTANT_SKILL_NAME;
+  const defaultMeta = raw.find((s) => String(s.name ?? '').trim() === defaultName);
+  const candidates = config?.candidates ?? [];
   const defaultSkill: DirectorSkillOption = {
-    name: EDIT_ASSISTANT_SKILL_NAME,
-    displayName: String(assistant?.display_name || EDIT_ASSISTANT_SKILL_NAME),
-    description: String(assistant?.description ?? ''),
+    name: defaultName,
+    displayName: String(defaultMeta?.display_name || defaultName),
+    description: String(defaultMeta?.description ?? ''),
     isDefault: true,
-    defaultSource: assistant ? (assistant.installed === true ? 'installed' : 'builtin') : 'missing',
+    defaultSource: !defaultMeta ? 'missing' : defaultMeta.installed === true ? 'installed' : 'builtin',
   };
 
   const options = raw
     .filter((s) => {
       const name = String(s.name ?? '').trim();
-      return name && name !== EDIT_ASSISTANT_SKILL_NAME && s.installed === true && s.enabled !== false;
+      return name && name !== defaultName && s.installed === true && s.enabled !== false;
     })
-    .map((s) => ({
-      name: String(s.name),
-      displayName: String(s.display_name || s.name),
-      description: String(s.description ?? ''),
-    }))
+    .map((s) => {
+      const name = String(s.name);
+      const candidate = candidates.find((c) => c.name === name);
+      return {
+        name,
+        displayName: String(s.display_name || name),
+        description: String(s.description ?? ''),
+        isCandidate: Boolean(candidate),
+        selectableAsDefault: candidate?.available === true,
+      };
+    })
     .sort((a, b) => a.displayName.localeCompare(b.displayName));
 
   return [defaultSkill, ...options];
