@@ -8,6 +8,11 @@
 一轮对话就生效，不需要改代码重新打包。常量 ``_EDIT_CHAT_SYSTEM_PROMPT`` 保留
 作为兜底：技能没装、被删、或读不出来时仍然按原来的说明工作。
 
+可选的**基础技能**不只一个（见 ASSISTANT_SKILL_CANDIDATES）：出厂是通用分镜
+助手 director-edit-assistant，也可以换成广告片共创 ads-codirector 或电商产品
+视觉全套 product-visual-suite。它们互为替身，同一轮只有被选中的那一份正文当
+系统提示词，其余的仍可勾选作为额外工作流追加。
+
 同时这里也负责把用户在剪辑助手里勾选的**已安装技能**读出来，交给
 director_manager 追加到系统提示词里——用户选中的技能就是这一轮要遵循的
 额外工作流。
@@ -35,13 +40,21 @@ from jiuwenswarm.common.utils import (
 logger = logging.getLogger(__name__)
 
 # 剪辑助手的**基础技能**（正文即助手的系统提示词）。它是可切换的：出厂默认是
-# director-edit-assistant，用户可以把它换成 ads-codirector（广告片共创），两者
-# 互为替身——谁被选为默认，谁就是这一轮的基础说明，另一个仍然可以像普通技能一样
-# 勾选、作为额外工作流追加在后面。切换选择落在 ``assistant_skill.json``。
+# director-edit-assistant，用户可以把它换成 ads-codirector（广告片共创）或
+# product-visual-suite（电商产品视觉全套）——谁被选为默认，谁就是这一轮的基础
+# 说明，其余的仍然可以像普通技能一样勾选、作为额外工作流追加在后面。切换选择落在
+# ``assistant_skill.json``。
+#
+# 候选之间是**替身**关系：同一轮只会有一份正文当系统提示词，所以它们各自的
+# "主战场"不一样——director-edit-assistant 是通用分镜助手，ads-codirector 是
+# 多智能体广告片共创（见 director_manager.TEAM_BASE_SKILL_NAME，选它会改走团队
+# 路径），product-visual-suite 是电商产品静态视觉套图（默认不出视频）。选哪个
+# 取决于用户这一阶段要做的事，不是升级关系。
 ASSISTANT_SKILL_NAME = "director-edit-assistant"
 ASSISTANT_SKILL_CANDIDATES: tuple[str, ...] = (
     "director-edit-assistant",
     "ads-codirector",
+    "product-visual-suite",
 )
 
 # 注入系统提示词的技能正文上限。技能正文是给人看的文档，个别技能可能很长；

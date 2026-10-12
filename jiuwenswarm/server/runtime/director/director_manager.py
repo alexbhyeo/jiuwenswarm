@@ -79,7 +79,15 @@ _MODE_IMAGE_AUDIO2VIDEO = "image_audio2video"
 
 _SUPPORTED_MODES = ("video", "image", "audio", "video2audio", "character", _MODE_IMAGE_AUDIO2VIDEO)
 
-_RE_STILL_RUNNING_JOB_ID = re.compile(r"^Video job (\S+) submitted and still")
+# 两种"任务还在跑"的文案都要能取回 job_id：generate_video 自己在预算内没等到
+# 完成时返回 "Video job {id} submitted and still {status} after {elapsed}s"，
+# 而它让调用方改用的 check_video_status 在还没完成时返回
+# "Video job {id} is still {status}." —— 两个都带 job_id，但句式不同。
+# 只认前者会让 _execute_generate_shot_video 的复查循环在第一圈之后丢掉
+# job_id（解析成没有 job_id 的 pending），于是"接着轮询到真正完成"变成
+# "只多查一次就放弃"：真实生成普遍超过 generate_video 自带的 ~120s 预算，
+# 结果是视频每次都停在"仍在生成中"，永远不落成素材。
+_RE_STILL_RUNNING_JOB_ID = re.compile(r"^Video job (\S+) (?:submitted and still|is still)")
 _RE_SAVED_TO = re.compile(r"Saved to:\s*(.+)")
 
 # 视频生音频的第一步：让视频理解模型把画面写成“可直接朗读”的解说文案。
@@ -233,7 +241,9 @@ _EDIT_CHAT_TOOLS_SCHEMA: list[dict[str, Any]] = [
             "name": "generate_shot_video",
             "description": (
                 "把一张已经生成的分镜关键帧真实转成一段视频片段（调用视频生成模型），"
-                "保存为该项目的素材。生成后可以用 @名称 引用这段视频。"
+                "保存为该项目的素材。生成后可以用 @名称 引用这段视频。默认生成**无声**"
+                "片段；只有用户明确要求这一段要有声音/口播/台词时，才把 generate_audio "
+                "设为 true。"
             ),
             "parameters": {
                 "type": "object",
@@ -257,6 +267,16 @@ _EDIT_CHAT_TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "duration_seconds": {
                         "type": "integer",
                         "description": "视频时长（秒），跟分镜列表里这一镜的时长保持一致，不确定时用 5",
+                    },
+                    "generate_audio": {
+                        "type": "boolean",
+                        "description": (
+                            "这一段是否要有声音，默认 false（无声片段）。设为 true 时由"
+                            "视频模型在生成画面的同时生成人声/台词，口型和声音是同一次"
+                            "生成出来的，因此天然同步——想让画面里的人开口说话就打开它，"
+                            "并把要说的台词写进 description。只有用户明确要求这一段有"
+                            "声音/口播/台词时才打开；用户没提就保持默认的无声。"
+                        ),
                     },
                 },
                 "required": ["name", "first_frame_name", "description"],
@@ -325,7 +345,9 @@ def _parse_generation_result(result_str: str) -> dict[str, Any]:
     明确排除在改造范围之外），因此这里做的是必要的字符串解析，而非结构化
     协议解析 —— 三种结果形态：
     - "[ERROR]: ..." 前缀 → 失败
-    - "Video job {job_id} submitted and still ..." → 视频任务仍在生成中
+    - "Video job {job_id} submitted and still ..."（generate_video 预算用尽）
+      或 "Video job {job_id} is still ..."（check_video_status 还没完成）
+      → 视频任务仍在生成中，**都要把 job_id 带出来**，复查循环才能接着轮询
     - 含 "Saved to: {path}" → 生成完成（视频/图片共用同一 _download_video
       文案；图片多路径以 ", " 拼接，这里取第一张）
     """
@@ -1001,6 +1023,13 @@ class DirectorManager:
             duration_seconds = int(args.get("duration_seconds") or 5)
         except (TypeError, ValueError):
             duration_seconds = 5
+        # 「这一段要不要有声音」由模型按用户这一轮的要求决定，缺省是无声：这是
+        # 剪辑助手原有的行为（历史上每一条镜头视频都是无声的），不能因为多了这个
+        # 开关就悄悄给所有片段配上声音。参考音频驱动的口型同步走不通——OpenRouter
+        # 只接受 HTTPS 的音频引用（本地 TTS 文件只能编成 data: URI，实测被 400
+        # 拒绝），所以这里走的是"视频模型在生成画面的同时生成人声"，口型与声音
+        # 同源、天然同步，不需要外挂音轨。
+        generate_audio_flag = bool(args.get("generate_audio") or False)
 
         if not video_name or not first_frame_name:
             return "缺少 name 或 first_frame_name，生成失败。", None
@@ -1042,7 +1071,7 @@ class DirectorManager:
                 duration_seconds=duration_seconds,
                 first_frame_path=first_frame_path,
                 last_frame_path=last_frame_path,
-                generate_audio=False,
+                generate_audio=generate_audio_flag,
                 save_dir=save_dir,
             )
         parsed = _parse_generation_result(result_str)
@@ -1079,7 +1108,7 @@ class DirectorManager:
             "aspect_ratio": "16:9",
             "resolution": "720p",
             "duration_seconds": duration_seconds,
-            "generate_audio": False,
+            "generate_audio": generate_audio_flag,
             "first_frame_path": first_frame_path,
         }
         if last_frame_path:

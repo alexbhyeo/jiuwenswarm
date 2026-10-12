@@ -380,6 +380,24 @@ def test_candidates_report_availability(skills_root: Path) -> None:
     assert candidates["ads-codirector"]["is_default"] is False
 
 
+def test_product_visual_suite_is_a_switchable_candidate(skills_root: Path) -> None:
+    """电商产品视觉全套（product-visual-suite）必须是一个默认技能候选——它顶替
+    director-edit-assistant 当剪辑助手基础说明的入口就是这里；不在候选名单里的话
+    ``resolve_default_skill_name`` 会把配置里的名字当违规值忽略掉。"""
+    assert "product-visual-suite" in dsk.ASSISTANT_SKILL_CANDIDATES
+
+    _write_skill(skills_root, dsk.ASSISTANT_SKILL_NAME, body="剪辑助手说明")
+    _write_skill(skills_root, "product-visual-suite", body="产品视觉全套说明")
+
+    config = dsk.set_assistant_skill_config("product-visual-suite")
+
+    assert config["default_skill"] == "product-visual-suite"
+    assert dsk.resolve_default_skill_name() == "product-visual-suite"
+    assert "产品视觉全套说明" in _build_edit_chat_system_prompt([])
+    # 换成产品视觉全套之后，出厂那份说明仍然是可勾选的普通技能，不重复注入。
+    assert _build_edit_chat_system_prompt(["product-visual-suite"]) == "产品视觉全套说明"
+
+
 def test_switching_the_default_skill_takes_effect(skills_root: Path) -> None:
     _write_skill(skills_root, dsk.ASSISTANT_SKILL_NAME, body="剪辑助手说明")
     _write_skill(skills_root, "ads-codirector", body="广告片共创说明")
@@ -518,10 +536,10 @@ async def test_handler_uses_the_switched_default_skill_as_the_base_prompt(
 ) -> None:
     """切换默认技能之后，下一轮的基础说明就是新技能——不需要重启服务。
 
-    注意 `ads-codirector` 现在会**改走多智能体团队**（见
-    test_director_codirector_team.py 的路由测试），所以这里用一个额外的候选技能
-    来验证"默认技能可切换"这套机制本身：它与路由无关，换成任何非团队候选都应
-    生效。
+    注意 `ads-codirector` 会**改走多智能体团队**（见
+    test_director_codirector_team.py 的路由测试），所以这里用另一个真实的候选
+    ——`product-visual-suite`（电商产品视觉全套）——来验证"默认技能可切换"
+    这套机制本身：它与团队路由无关，换成任何非团队候选都应生效。
     """
     from jiuwenswarm.server.runtime.director import director_manager as dm
     from jiuwenswarm.server.runtime.director import director_store as ds
@@ -530,9 +548,6 @@ async def test_handler_uses_the_switched_default_skill_as_the_base_prompt(
     monkeypatch.setattr(ds, "get_agent_root_dir", lambda: tmp_path)
     monkeypatch.setattr(dm, "edit_chat_enabled", lambda: True)
     monkeypatch.setattr(dm, "edit_chat_configured", lambda: True)
-    monkeypatch.setattr(
-        dsk, "ASSISTANT_SKILL_CANDIDATES", (*dsk.ASSISTANT_SKILL_CANDIDATES, "alt-assistant")
-    )
 
     seen: list[list[dict]] = []
 
@@ -543,13 +558,13 @@ async def test_handler_uses_the_switched_default_skill_as_the_base_prompt(
     monkeypatch.setattr(dm, "call_edit_chat_completion", fake_completion)
 
     _write_skill(skills_root, dsk.ASSISTANT_SKILL_NAME, body="剪辑助手说明")
-    _write_skill(skills_root, "alt-assistant", body="另一个助手说明")
+    _write_skill(skills_root, "product-visual-suite", body="产品视觉全套说明")
 
     manager = DirectorManager()
     created = await manager.handle_director_projects_create({"name": "切换默认技能"})
     project_id = created["project"]["project_id"]
 
-    await manager.handle_director_edit_chat_skill_set({"name": "alt-assistant"})
+    await manager.handle_director_edit_chat_skill_set({"name": "product-visual-suite"})
     await manager.handle_director_edit_chat_send({"project_id": project_id, "text": "开始"})
 
-    assert seen[0][0]["content"] == "另一个助手说明"
+    assert seen[0][0]["content"] == "产品视觉全套说明"

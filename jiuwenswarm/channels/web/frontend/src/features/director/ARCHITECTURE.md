@@ -248,7 +248,17 @@ sequenceDiagram
   general Agent.
 - `_EDIT_CHAT_MAX_TOOL_ITERATIONS = 6`.
 - `generate_shot_video` polls internally (10 s × 30 = up to 5 min) so the chat
-  never gets a half-finished `pending` asset.
+  never gets a half-finished `pending` asset. It only keeps that job id because
+  `_parse_generation_result` recognises **both** still-running phrasings —
+  `generate_video`'s `"…submitted and still…"` and `check_video_status`'s
+  `"…is still…"`; dropping the second one silently cut the loop to a single pass.
+- `generate_shot_video`'s `generate_audio` is **opt-in and off by default**: a
+  shot is silent unless the model was asked for sound, preserving the historical
+  behaviour of every existing clip. When on, the provider generates the speech
+  and the mouth movement in the same pass, so they are synced by construction —
+  `reference_audio_path` is *not* usable for this, because OpenRouter rejects
+  non-HTTPS audio references (`input_references[].audio_url.url: Only HTTPS URLs
+  are allowed`), and a locally generated TTS file can only be a `data:` URI.
 - Generated `asset_id`s are attached to the assistant message so the UI renders
   thumbnails inline.
 - There is **no server-side chat session state**: the client resends the whole
@@ -407,7 +417,8 @@ non-removable chip ahead of them.
 
 **The default skill is switchable, not hard-coded.** `director_skills
 .ASSISTANT_SKILL_CANDIDATES` lists the skills that can act as the base prompt —
-`director-edit-assistant` (factory default) and `ads-codirector` — and the choice is
+`director-edit-assistant` (factory default), `ads-codirector`, and
+`product-visual-suite` — and the choice is
 persisted to `<agent_root>/director/assistant_skill.json` via
 `director.edit_chat.skill_get` / `skill_set`. Candidate rows in the dropdown carry a
 设为默认 action; switching it promotes the chosen skill to the pinned, always-on base
@@ -431,6 +442,7 @@ The base skill decides *how* a turn executes, in
 | Base skill | Path |
 | --- | --- |
 | `director-edit-assistant` (factory default) | **Single agent** — one model with the chat history runs the tool loop (`_run_single_agent_edit_chat_turn`) |
+| `product-visual-suite` | **Single agent** — same loop, but the base prompt is the e-commerce product visual suite (product baseline → visual spec → shot list → generate → consistency audit). Image-first: it only reaches `generate_shot_video` when the user explicitly asks for a video/ad with a target duration |
 | `ads-codirector` | **Multi-agent team** — `_handle_team_edit_chat_turn` drives `director_team.DirectorTeamOrchestrator` |
 
 `director_team` is a genuinely multi-agent runtime, not one model role-playing:
