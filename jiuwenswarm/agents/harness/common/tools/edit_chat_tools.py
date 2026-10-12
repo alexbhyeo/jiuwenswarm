@@ -137,6 +137,8 @@ def build_multimodal_user_message(text: str, image_paths: list[str] | None) -> d
 async def call_edit_chat_completion(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None = None,
+    model: str | None = None,
+    temperature: float | None = None,
 ) -> dict[str, Any]:
     """Send one chat/completions turn to the configured Edit chat model and
     return the assistant's raw message object (OpenAI-compatible shape:
@@ -155,13 +157,20 @@ async def call_edit_chat_completion(
             already appended by an in-progress tool-calling loop.
         tools: OpenAI-style tool schema list to advertise to the model, or
             None to disable tool calling for this call.
+        model: Optional per-call model override. The Co-Director team gives each
+            member its own model so a cheap model can run the mechanical stages
+            while a stronger one writes/verifies; None keeps the configured
+            "Edit chat" model.
+        temperature: Optional per-call temperature override (None = provider
+            default), so deterministic stages can be pinned down.
 
     Returns:
         The assistant message dict on success. On failure, a dict with only
         {"content": "[ERROR]: ..."} so callers can uniformly check
         `content.startswith("[ERROR]:")` without a separate exception path.
     """
-    api_key, api_base, model = _get_edit_chat_api_credentials()
+    api_key, api_base, configured_model = _get_edit_chat_api_credentials()
+    model = (model or "").strip() or configured_model
     if not (api_key and api_base and model):
         return {
             "content": (
@@ -175,6 +184,8 @@ async def call_edit_chat_completion(
     body: dict[str, Any] = {"model": model, "messages": messages}
     if tools:
         body["tools"] = tools
+    if temperature is not None:
+        body["temperature"] = temperature
     headers = {"Authorization": f"Bearer {api_key}"}
     logger.info(
         "[call_edit_chat_completion] using model: %s (api_base: %s, turns: %d, tools: %d)",

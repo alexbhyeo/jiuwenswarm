@@ -423,6 +423,85 @@ resolves strictly inside the workspace/builtin skills dirs; names that no longer
 resolve are skipped rather than failing the turn, and each prompt build logs the file
 it read.
 
+### 8.4 Two execution paths: single agent vs. the Co-Director team
+
+The base skill decides *how* a turn executes, in
+`director_manager.handle_director_edit_chat_send`:
+
+| Base skill | Path |
+| --- | --- |
+| `director-edit-assistant` (factory default) | **Single agent** — one model with the chat history runs the tool loop (`_run_single_agent_edit_chat_turn`) |
+| `ads-codirector` | **Multi-agent team** — `_handle_team_edit_chat_turn` drives `director_team.DirectorTeamOrchestrator` |
+
+`director_team` is a genuinely multi-agent runtime, not one model role-playing:
+
+* The 13 members come from a real **AgentGroup package** at
+  `<agent_root>/workspace/.agent_teams/agent_groups/{local,built_in}/ads-codirector`
+  (shipped in-repo under `resources/agent/workspace/.agent_teams/...`), validated by
+  the product's own `load_agent_group_package`. Each member has its own
+  `manifest.json` + `persona/*.md` (the leader also has `AGENT.md`), so personas are
+  editable data rather than Python constants.
+* Each member is **one isolated `chat/completions` call**: system = its own persona,
+  user = only the inputs the orchestrator hands it. Members never share history — the
+  equivalent of the upstream ADK tree where each `LlmAgent` sees only its declared
+  state keys. Members may declare their own `model`/`temperature`.
+* Stage order, loops, escalation and submission are **code** (Python), not the model's
+  discretion.
+* The three `*_verifier` members are **independent**: they re-review the deliverable
+  without seeing the author's reasoning, so scores are not self-assessment.
+* `director_team_bandit.MabBandit` is the **real MAB** — factored reward updates only
+  the pulled arm per dimension, UCB is `mean + c·√(ln N / n)` with `c=50`, untried arms
+  are explored first, out-of-range rewards are rejected, and `arm_stats` round-trips.
+  State persists per project in `<agent_root>/director/team_state/<project_id>.json`,
+  which is what makes iteration 2 aware of iteration 1.
+* Production reuses `_execute_edit_chat_tool_call`, so team output lands in the same
+  project asset store as the single-agent path. Scene submissions are gathered
+  concurrently, but the actual image/video generation is serialized by the manager's
+  existing `asyncio.Lock` (the store's read-modify-write is only safe because its
+  mutations are synchronous between awaits).
+* A turn reports a **team trace** (member, stage, model, latency) plus the arm table,
+  scores and factorized-reward back-fill, so the multi-agent execution is visible and
+  auditable. `team_run` is also returned in the RPC payload.
+* `TeamUnavailableError` (missing/corrupt package) falls back to the single-agent path
+  with an `assert`-free degradation — a broken team must not take the panel down.
+
+`resolve_run_scope` decides how far a turn goes: `plan` (text only), `assets`
+(keyframes, no video), `full` (through shot videos). Plan markers such as 只出方案 /
+不要生成 / 不要调用 force `plan`.
+
+**Three operational details that are easy to get wrong here** (all three were real
+bugs, each now pinned by a regression test):
+
+1. **Asset identity.** `run_tool` returns an `asset_*` **id**; the report and the
+   verifiers need the **name**. Passing ids through made the keyframe verifier
+   conclude "nothing was generated" and score 0/100 while the assets were fine, and
+   the delivery checklist claimed 0 frames / 0 clips. `resolve_generated` (fed by
+   `resolve_assets` from the store) converts ids → `{id, name, type, path}`;
+   `named_for_prompt` strips the id before it reaches a member, and failing to
+   resolve falls back to the id rather than to an empty list.
+2. **Poll budget vs. queueing.** `_execute_generate_shot_video`'s poll budget counts
+   attempts, and each attempt includes time spent waiting on the manager's
+   `asyncio.Lock`. The single-agent path submits one video per turn so 5 minutes was
+   enough; the team submits the whole batch, so a queued clip burned its budget
+   before generation even started and reported "still generating". The team passes
+   `video_poll_attempts` (`_team_video_poll_attempts`), and a generation member that
+   produces **no** asset now marks its step ❌ instead of ✅.
+3. **Gateway lease.** A team turn legitimately exceeds AgentClient's 600 s default,
+   so `agent_request_timeout.resolve_agent_request_timeout_seconds` gives
+   `director.edit_chat.send` a long lease on the web channel
+   (`_WEB_LONG_RUNNING_UNARY_METHODS`, 3600 s) — and the resolved value must be
+   **passed into** `agent_client.send_request(env, timeout=...)`, because that call
+   has its own 600 s inner default that `asyncio.wait_for` outside it cannot
+   override. The frontend uses `TEAM_EDIT_CHAT_TIMEOUT_MS` (30 min) when the base
+   skill is the team skill.
+
+**Known limitation:** the verifier members are chat-completion calls, so they reason
+about the storyboard prompts and the asset inventory, not the pixels — they cannot
+inspect the generated frames or the rendered clips (the upstream project feeds real
+media to multimodal verifiers). The video verifier's payload states this explicitly.
+Their scores are therefore "does this plan hold up under the rubric", not "is this
+exactly what the file looks like".
+
 ---
 
 ## 9. Invariants worth knowing

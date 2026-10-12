@@ -55,6 +55,11 @@ from jiuwenswarm.server.runtime.director.director_skills import (
     resolve_default_skill_name,
     set_assistant_skill_config,
 )
+from jiuwenswarm.server.runtime.director.director_team import (
+    TeamUnavailableError,
+    DirectorTeamOrchestrator,
+    resolve_run_scope,
+)
 from jiuwenswarm.server.runtime.director.director_store import (
     DirectorAsset,
     DirectorProject,
@@ -260,6 +265,25 @@ _EDIT_CHAT_TOOLS_SCHEMA: list[dict[str, Any]] = [
     },
 ]
 _EDIT_CHAT_MAX_TOOL_ITERATIONS = 6
+# 「基础技能」为这个技能时，剪辑助手改走 Co-Director **多智能体团队**
+# （见 director_team）：团队成员各带独立上下文、由代码按固定流水线调度，而不是
+# 一个模型自导自演。其余情况（出厂默认 director-edit-assistant）仍是单智能体。
+TEAM_BASE_SKILL_NAME = "ads-codirector"
+
+# 团队一轮最多提交 8 条镜头视频（分镜上限），把它们串起来排队的上限大致就是
+# "每条 5 分钟 × 条数"；这里给一个按批量的确定性预算，而不是拍一个巨大的常数。
+_TEAM_VIDEO_BATCH_LIMIT = 8
+
+
+def _team_video_poll_attempts(_asset_count: int = 0) -> int:
+    """团队路径里单条视频的轮询预算（尝试次数，每次间隔
+    ``_EDIT_CHAT_VIDEO_POLL_INTERVAL_S``）。
+
+    单智能体路径一轮只出一条视频，默认 30 次（5 分钟）够用；团队并发提交整批、
+    供应商串行出片，排在后面的那几条会把预算全花在排队上。按"最坏情况排在最后
+    一位"给预算：整批上限 × 单条预算。
+    """
+    return _EDIT_CHAT_VIDEO_POLL_MAX_ATTEMPTS * _TEAM_VIDEO_BATCH_LIMIT
 # generate_video 自身的内部轮询预算只有 ~120s（见 video_gen_tools 模块
 # docstring），真实生成经常需要更久——generate_shot_video 在工具调用内部
 # 自己接着轮询到真正完成为止，而不是把一个 status=pending 的半成品素材扔
@@ -877,7 +901,10 @@ class DirectorManager:
         return {"project": project.to_dict(), "asset_counts": self._store.asset_counts()}
 
     async def _execute_edit_chat_tool_call(
-        self, project: DirectorProject, tool_call: dict[str, Any]
+        self,
+        project: DirectorProject,
+        tool_call: dict[str, Any],
+        poll_max_attempts: int | None = None,
     ) -> tuple[str, str | None]:
         """执行模型发起的一次工具调用（generate_design_image 或
         generate_shot_video），按 function.name 分派.
@@ -900,7 +927,9 @@ class DirectorManager:
         if function_name == "generate_design_image":
             return await self._execute_generate_design_image(project, args)
         if function_name == "generate_shot_video":
-            return await self._execute_generate_shot_video(project, args)
+            return await self._execute_generate_shot_video(
+                project, args, poll_max_attempts=poll_max_attempts
+            )
         return f"未知工具: {function_name}", None
 
     async def _execute_generate_design_image(
@@ -959,7 +988,10 @@ class DirectorManager:
         return f"已生成并保存「{design_name}」（{kind_label}设计图）。后续可以用 @{design_name} 引用这张图。", asset.asset_id
 
     async def _execute_generate_shot_video(
-        self, project: DirectorProject, args: dict[str, Any]
+        self,
+        project: DirectorProject,
+        args: dict[str, Any],
+        poll_max_attempts: int | None = None,
     ) -> tuple[str, str | None]:
         video_name = str(args.get("name") or "").strip()
         first_frame_name = str(args.get("first_frame_name") or "").strip()
@@ -1020,8 +1052,14 @@ class DirectorManager:
         # status=pending 的半成品素材扔给模型：剪辑对话没有实验室画布那样
         # 的后台轮询 UI，这里不等到底，用户在对话里就永远看不到这段视频
         # 到底成没成。
+        # 轮询预算按"尝试次数"计，而这其中包括了在 self._lock 前排队的等待时间。
+        # 单智能体路径一轮只提交一条视频，5 分钟够用；Co-Director 团队会并发提交
+        # 整场次（见 director_team.stage_generate_assets），供应商又是串行出片，
+        # 排在后面的那几条会把预算全花在排队上、还没真正生成完就被判超时——
+        # 所以团队调用方按"这一批有多少条"把预算放大（poll_max_attempts）。
+        max_attempts = poll_max_attempts or _EDIT_CHAT_VIDEO_POLL_MAX_ATTEMPTS
         attempts = 0
-        while parsed["status"] == "pending" and parsed.get("job_id") and attempts < _EDIT_CHAT_VIDEO_POLL_MAX_ATTEMPTS:
+        while parsed["status"] == "pending" and parsed.get("job_id") and attempts < max_attempts:
             await asyncio.sleep(_EDIT_CHAT_VIDEO_POLL_INTERVAL_S)
             async with self._lock:
                 result_str = await check_video_status._func(job_id=parsed["job_id"], save_dir=save_dir)
@@ -1058,6 +1096,82 @@ class DirectorManager:
         )
         self._store.append_asset(project.project_id, asset)
         return f"已生成视频「{video_name}」。后续可以用 @{video_name} 引用这段视频。", asset.asset_id
+
+    async def _handle_team_edit_chat_turn(self, project: DirectorProject, text: str) -> dict:
+        """用 Co-Director **多智能体团队**跑这一轮（基础技能是 ads-codirector 时）。
+
+        这一轮的用户消息先落盘（与单智能体路径一致：模型调用失败输入也不丢），
+        然后按 ``director_team`` 的流水线调度团队，最后把团队报表作为助手消息追加。
+
+        团队运行失败时**不**把整轮判死：回退到单智能体路径，用户至少还能拿到一个
+        回复——团队包缺失/损坏不应该让剪辑助手整个不可用。
+        """
+        project_id = project.project_id
+        user_message = EditChatMessage(role="user", content=text)
+        project = self._store.append_edit_chat_messages(project_id, [user_message])
+
+        available_assets = [
+            {"name": asset.name, "semantic_role": asset.type}
+            for asset in project.assets
+            if asset.name and asset.status == "ready"
+        ]
+        scope = resolve_run_scope(text)
+
+        def resolve_assets(asset_ids: list[str]) -> list[dict[str, str]]:
+            """asset_id → {id, name, type, path}。
+
+            团队报表与验证器都需要**名称**：只给 ID 的话验证器会判定"没有素材"，
+            分数直接失真（见 director_team.resolve_generated）。
+            """
+            current = self._store.get_project(project_id)
+            if current is None:
+                return []
+            wanted = set(asset_ids)
+            return [
+                {
+                    "id": asset.asset_id,
+                    "name": asset.name or asset.asset_id,
+                    "type": asset.type,
+                    "path": asset.file_path or "",
+                }
+                for asset in current.assets
+                if asset.asset_id in wanted
+            ]
+
+        async def run_tool(tool_call: dict[str, Any], poll_max_attempts: int | None = None) -> tuple[str, str | None]:
+            """团队成员的生成工具：与单智能体走同一个实现，产出同一套素材。
+
+            每次都从 store 重新读一份 project（而不是用闭包里那份可能已经过期的
+            快照），并发成员才能看到彼此刚生成的素材——``@名称`` 引用靠的就是这个。
+            """
+            current = self._store.get_project(project_id) or project
+            return await self._execute_edit_chat_tool_call(
+                current, tool_call, poll_max_attempts=poll_max_attempts
+            )
+
+        try:
+            orchestrator = DirectorTeamOrchestrator(
+                project_id=project_id,
+                project_name=project.name,
+                complete=call_edit_chat_completion,
+                run_tool=run_tool,
+                available_assets=available_assets,
+                resolve_assets=resolve_assets,
+                # 团队会并发提交整批镜头视频，而供应商串行出片：轮询预算必须覆盖
+                # "排队等待 + 真正生成"，否则排在后面的场次会被误判超时。
+                video_poll_attempts=_team_video_poll_attempts(len(project.assets)),
+            )
+            result = await orchestrator.run(text, scope, global_style=text)
+        except TeamUnavailableError as exc:
+            logger.warning("[director] 团队不可用，回退单智能体: %s", exc)
+            return await self._run_single_agent_edit_chat_turn(project, text)
+
+        assistant_message = EditChatMessage(
+            role="assistant", content=result.report, image_asset_ids=result.asset_ids
+        )
+        project = self._store.append_edit_chat_messages(project_id, [assistant_message])
+        payload = {"project": project.to_dict(), "team_run": result.to_dict()}
+        return payload
 
     async def handle_director_edit_chat_send(self, params: dict) -> dict:
         """剪辑 tab 创作助手：发一条用户消息，让模型规划故事板/分镜，并在
@@ -1100,6 +1214,42 @@ class DirectorManager:
             for path in (self._resolve_asset_path(project, asset_id) for asset_id in image_asset_ids)
             if path
         ]
+
+        # 基础技能决定执行路径：ads-codirector → 真正的多智能体团队；其余
+        # （出厂默认 director-edit-assistant）→ 原来的单智能体工具循环。两条路径
+        # 的产出都落成同一种项目素材，用户侧看到的差别是"这一轮回复里有没有团队追踪"。
+        if resolve_default_skill_name() == TEAM_BASE_SKILL_NAME:
+            return await self._handle_team_edit_chat_turn(project, text)  # noqa: RET504
+
+        # 这一轮开始前的历史（不含这一轮用户消息本身）——用户这一轮的文本
+        # 连同参考图片，作为一条多模态消息单独构造并追加在后面；单智能体路径
+        # 自己负责落盘用户消息、拼系统提示词、跑工具循环。
+        return await self._run_single_agent_edit_chat_turn(
+            project,
+            text,
+            image_asset_ids=image_asset_ids,
+            image_paths=image_paths,
+            skill_names=skill_names,
+        )
+
+    async def _run_single_agent_edit_chat_turn(
+        self,
+        project: DirectorProject,
+        text: str,
+        *,
+        image_asset_ids: list[str] | None = None,
+        image_paths: list[str] | None = None,
+        skill_names: list[str] | None = None,
+    ) -> dict:
+        """单智能体路径：一个模型带着历史对话自己走完流程（出厂默认行为）。
+
+        也是团队路径的兜底——团队包缺失/损坏时，用户至少还能拿到一个回复，
+        不会因为一个坏掉的团队定义让剪辑助手整个不可用。
+        """
+        project_id = project.project_id
+        image_asset_ids = list(image_asset_ids or [])
+        image_paths = list(image_paths or [])
+        skill_names = list(skill_names or [])
 
         # 这一轮开始前的历史（不含这一轮用户消息本身）——用户这一轮的文本
         # 连同参考图片，作为一条多模态消息单独构造并追加在后面。

@@ -41,6 +41,13 @@ const METHOD = {
 // 生成和多轮模型往返，给比其余 director.* 调用宽裕得多的超时。
 const EDIT_CHAT_TIMEOUT_MS = 600_000;
 
+// Co-Director 多智能体团队（基础技能 = ads-codirector）一轮要跑十几次互相隔离的
+// 成员调用，再串行提交一批图片/视频生成——实测一轮完整成片在 10 分钟以上。
+// 600s 会在团队还在正常工作时就被前端判超时（后端其实成功了，用户只看到失败）。
+// 单智能体路径仍然用上面那个 600s：它一轮的工作量小得多，超时太长只会让真正的
+// 配置错误更晚暴露。
+export const TEAM_EDIT_CHAT_TIMEOUT_MS = 1_800_000;
+
 // generate_video 内部轮询上限是 120s（12 次 * 10s sleep），每次 sleep 之间还有一次
 // GET 轮询请求的真实网络耗时。首帧/尾帧引用（@名称）会把参考图片整张
 // base64 编码进提交请求体——多图（尤其是首尾两张）会明显拖慢提交 POST 本身
@@ -235,12 +242,13 @@ export function directorEditChatSend(
   projectId: string,
   text: string,
   imageAssetIds: string[] = [],
-  skillNames: string[] = []
+  skillNames: string[] = [],
+  timeoutMs: number = EDIT_CHAT_TIMEOUT_MS
 ): Promise<ProjectResult> {
   return webRequest<unknown>(
     METHOD.editChatSend,
     { project_id: projectId, text, image_asset_ids: imageAssetIds, skill_names: skillNames },
-    { timeoutMs: EDIT_CHAT_TIMEOUT_MS }
+    { timeoutMs }
   )
     .then(normalizeProjectResult)
     .catch((err) => {

@@ -45,6 +45,21 @@ _TUI_UNARY_TIMEOUT_EXEMPT_METHODS = frozenset({
     "harmonyos.dev_init",
 })
 
+# Web-channel unary methods whose latency is bounded by slow, serialized
+# background work rather than by network round-trips, so they legitimately
+# outlive AgentClient's 600s default. Without this, a full Co-Director team run
+# (剪辑助手 with the ads-codirector base skill: ~13 isolated member calls plus a
+# batch of image/video generations that the provider serializes) drops the
+# response at 600s even though the backend keeps working and persists the
+# result — the user sees a timeout for a turn that actually succeeded.
+#
+# Only these methods get the longer lease; every other web request keeps
+# returning None here and therefore keeps AgentClient's default.
+_WEB_LONG_RUNNING_UNARY_TIMEOUT_SECONDS = 3600.0
+_WEB_LONG_RUNNING_UNARY_METHODS = frozenset({
+    "director.edit_chat.send",
+})
+
 
 class AgentRequestTimeoutError(TimeoutError):
     """Raised when Gateway stops waiting for a slow AgentServer unary request."""
@@ -77,12 +92,20 @@ def resolve_agent_request_timeout_seconds(
     client_timeout_ms: Any = None,
 ) -> float | None:
     """Return a Gateway-side wait limit, or None to keep AgentClient's default."""
-    if is_stream or channel_id != _TUI_CHANNEL_ID:
+    if is_stream:
+        return None
+
+    method_value = str(method or "")
+    if channel_id != _TUI_CHANNEL_ID:
+        # Web (and any non-TUI) channel: only the explicitly allow-listed
+        # long-running methods get a longer lease; everything else keeps
+        # AgentClient's default by returning None.
+        if method_value in _WEB_LONG_RUNNING_UNARY_METHODS:
+            return _WEB_LONG_RUNNING_UNARY_TIMEOUT_SECONDS
         return None
 
     # Exempt long-lived methods (e.g. chat.swarmflow_reply whose latency tracks
     # the human-turn timeout) from the TUI unary cap.
-    method_value = str(method or "")
     if method_value in _TUI_UNARY_TIMEOUT_EXEMPT_METHODS:
         return None
 
@@ -137,8 +160,17 @@ async def send_agent_request_with_timeout(
     if timeout is None:
         return await agent_client.send_request(env)
 
+    # 必须把同一个上限**透传给 AgentClient**：send_request 自己也有一个 600s 的
+    # 内层默认值，只在外面套 asyncio.wait_for 是没用的——内层会先超时，调用方看到
+    # 的还是 600s（这正是"给导演团队放了长租约却仍然 600s 超时"的原因）。
     try:
-        return await asyncio.wait_for(agent_client.send_request(env), timeout=timeout)
+        pending = agent_client.send_request(env, timeout=timeout)
+    except TypeError:
+        # 老客户端/测试替身不接受 timeout 关键字，退回只看外层上限
+        pending = agent_client.send_request(env)
+
+    try:
+        return await asyncio.wait_for(pending, timeout=timeout)
     except asyncio.TimeoutError as exc:
         logger.warning(
             "[%s] AgentServer unary request timed out: request_id=%s method=%s "

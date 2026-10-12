@@ -391,12 +391,16 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
 
     set({ editChatSending: true, editChatError: null });
     try {
-      const { directorEditChatSend } = await import('./directorApi');
+      const { directorEditChatSend, TEAM_EDIT_CHAT_TIMEOUT_MS } = await import('./directorApi');
+      // 默认技能是团队技能时给更长的前端超时——一轮团队完整成片可能超过 10 分钟，
+      // 用单智能体的 600s 会把一个还在正常工作的回合误判成失败。
+      const isTeamBaseSkill = state.installedSkills[0]?.name === 'ads-codirector';
       const { project } = await directorEditChatSend(
         projectId,
         text,
         state.editChatPendingImageIds,
-        state.editChatSkillNames
+        state.editChatSkillNames,
+        isTeamBaseSkill ? TEAM_EDIT_CHAT_TIMEOUT_MS : undefined
       );
       set((s) => ({
         projects: s.projects.map((p) => (p.project_id === project.project_id ? project : p)),

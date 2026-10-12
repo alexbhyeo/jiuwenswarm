@@ -1,5 +1,6 @@
 import asyncio
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -24,6 +25,41 @@ def test_resolve_timeout_skips_stream_and_non_tui_requests():
         method="history.get",
         is_stream=False,
     ) is None
+
+
+def test_resolve_timeout_gives_the_director_edit_chat_a_long_web_lease():
+    """剪辑助手的团队回合（ads-codirector 基础技能）会超过 AgentClient 的 600s
+    默认值——网关不能在后端还在正常工作时就把响应丢掉。"""
+    from jiuwenswarm.gateway.routing.agent_request_timeout import (
+        _WEB_LONG_RUNNING_UNARY_TIMEOUT_SECONDS,
+    )
+
+    timeout = resolve_agent_request_timeout_seconds(
+        channel_id="web",
+        method="director.edit_chat.send",
+        is_stream=False,
+    )
+
+    assert timeout == _WEB_LONG_RUNNING_UNARY_TIMEOUT_SECONDS
+    assert timeout > 600.0, "必须长于 AgentClient 的默认 600s"
+
+
+def test_long_web_lease_is_scoped_to_the_allowlist():
+    """只有白名单里的方法拿到长租约，其余 web 方法保持默认。"""
+    for method in ("director.generate", "director.projects.list", "chat.send"):
+        assert (
+            resolve_agent_request_timeout_seconds(
+                channel_id="web", method=method, is_stream=False
+            )
+            is None
+        ), method
+    # 流式请求永远不受影响
+    assert (
+        resolve_agent_request_timeout_seconds(
+            channel_id="web", method="director.edit_chat.send", is_stream=True
+        )
+        is None
+    )
 
 
 def test_resolve_timeout_defaults_tui_unary_before_frontend_window():
@@ -167,3 +203,61 @@ async def test_send_agent_request_with_timeout_raises_stable_timeout_error(monke
 
     assert str(exc_info.value) == AGENT_SERVER_TIMEOUT_ERROR
     assert exc_info.value.code == AGENT_SERVER_TIMEOUT_CODE
+
+
+@pytest.mark.asyncio
+async def test_resolved_timeout_is_passed_into_agent_client():
+    """回归：解析出的上限必须**透传**给 AgentClient。
+
+    AgentClient.send_request 自己还有一个 600s 内层默认值；只在外层套
+    asyncio.wait_for 时，内层会先超时，调用方看到的仍然是 600s——曾经就是这样让
+    剪辑助手的团队回合（超过 10 分钟）被误判超时。
+    """
+    from jiuwenswarm.gateway.routing.agent_request_timeout import (
+        send_agent_request_with_timeout,
+    )
+
+    seen: dict[str, Any] = {}
+
+    class FakeClient:
+        async def send_request(self, env, *, timeout=None):  # noqa: ANN001, ARG002
+            seen["timeout"] = timeout
+            return "ok"
+
+    env = SimpleNamespace(
+        request_id="r1",
+        method="director.edit_chat.send",
+        channel="web",
+        is_stream=False,
+        channel_context={},
+        metadata={},
+    )
+
+    result = await send_agent_request_with_timeout(FakeClient(), env, label="t")
+
+    assert result == "ok"
+    assert seen["timeout"] is not None, "上限没有透传给 AgentClient（内层会提前 600s 超时）"
+    assert seen["timeout"] > 600.0
+
+
+@pytest.mark.asyncio
+async def test_client_without_timeout_kwarg_still_works():
+    """老客户端/测试替身不接受 timeout 关键字时不能炸。"""
+    from jiuwenswarm.gateway.routing.agent_request_timeout import (
+        send_agent_request_with_timeout,
+    )
+
+    class LegacyClient:
+        async def send_request(self, env):  # noqa: ANN001, ARG002
+            return "legacy-ok"
+
+    env = SimpleNamespace(
+        request_id="r2",
+        method="director.edit_chat.send",
+        channel="web",
+        is_stream=False,
+        channel_context={},
+        metadata={},
+    )
+
+    assert await send_agent_request_with_timeout(LegacyClient(), env, label="t") == "legacy-ok"
