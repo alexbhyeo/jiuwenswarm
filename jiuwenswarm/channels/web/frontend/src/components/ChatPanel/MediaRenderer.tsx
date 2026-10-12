@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { MediaItem } from '../../types';
 import { FileIcon, getFileExtensionLabel } from '../FileIcon';
+import { normalizePath } from '../../features/sessionAssets/sessionAssets';
 import { stripUploadDocumentBlocks } from '../../utils/documentMessage';
 
 export { stripUploadDocumentBlocks };
@@ -217,13 +218,41 @@ function MediaItemView({ item }: { item: MediaItem }) {
   }
 }
 
+/**
+ * 同一份素材只留一张卡片。
+ *
+ * 一张附件会被两条路径各补一张：消息自带的 mediaItems 是一张，@素材 引用再按名字解析
+ * 一张（发送端 useWebSocket 和渲染端 MessageItem 各自都做了一次去重）。任一侧因为路径
+ * 写法不同没对上，气泡上就会并排出现两张一样的卡片。渲染是最后一道关，这里再收一次：
+ * 优先按路径判重（Windows 路径忽略大小写/斜杠方向），路径缺失时退一步按展示名——用户
+ * 看到的就是名字，两张同名的卡片正是用户口中的“重复素材”。
+ */
+function dedupeMediaItems(items: MediaItem[]): MediaItem[] {
+  if (items.length < 2) return items;
+  const seen = new Set<string>();
+  const deduped: MediaItem[] = [];
+  for (const item of items) {
+    const filename = item.filename || 'file';
+    const label = item.displayName || filename;
+    const source = mediaSrc(item) ?? normalizePath(item.path ?? '');
+    // 键取“实际渲染出来的东西”：同一张缩略图 + 同一个显示名，在用户眼里就是同一张卡片，
+    // 无论两条路径各自记的是什么。图不同（src 不同）时不会误合并。
+    const key = `${source}|${label}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(item);
+  }
+  return deduped.length === items.length ? items : deduped;
+}
+
 export function MediaRenderer({ items, align = 'end', variant = 'inline' }: MediaRendererProps) {
   if (!items.length) {
     return null;
   }
 
-  const cardItems = items.filter(isCardItem);
-  const richItems = items.filter((item) => !isCardItem(item));
+  const dedupedItems = dedupeMediaItems(items);
+  const cardItems = dedupedItems.filter(isCardItem);
+  const richItems = dedupedItems.filter((item) => !isCardItem(item));
 
   return (
     <div
