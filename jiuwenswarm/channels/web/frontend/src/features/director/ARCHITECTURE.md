@@ -290,7 +290,7 @@ Lab process card kinds (`labTypes.ts`):
 | `ProcessKind` | Mode | Image ports | Video ports | Audio ports | Notes |
 |---------------|------|-------------|-------------|-------------|-------|
 | `text2image` | image | 0 | 0 | 0 | |
-| `text2video` | video | 0 | 0 | 0 | |
+| `text2video` | video | 0 | 0 | 0 | Exposes the same 有声音/无声音 picker as `imageAudio2video`, because Seedance returns a silent clip unless the request asks for audio output — even for text-to-video, with no reference audio wired in. Unlike `imageAudio2video` it defaults to **无声音** (`generate_audio=false`), matching the pre-existing behaviour of every historical `mode="video"` caller. |
 | `image2video` | video | 2 | 0 | 0 | Distinct first/last-frame slots; one edge each. |
 | `imageRef` | image | 1 | 0 | 0 | The single port accepts **multiple** edges (multi-reference). |
 | `text2audio` | audio | 0 | 0 | 0 | Text-to-speech (`generate_audio`). Text-only: no reference ports, and the params popover swaps aspect/resolution/duration for a voice picker. Its output node is an `audio` node wrapping `<audio controls>`. |

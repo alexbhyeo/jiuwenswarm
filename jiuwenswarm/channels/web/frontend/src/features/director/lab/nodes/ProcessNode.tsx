@@ -11,6 +11,7 @@ import {
   PROCESS_KIND_MAX_VIDEOS,
   PROCESS_KIND_MODE,
   PROCESS_KIND_MULTI_REF,
+  supportsAudioOutput,
 } from '../labTypes';
 
 const ASPECT_RATIO_OPTIONS = ['16:9', '9:16', '1:1', '4:3'];
@@ -146,10 +147,19 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   // 文生音频没有宽高比/分辨率/时长这些画面参数，改成音色选择。
   const isAudio = mode === 'audio';
   const voice = data.voice || DEFAULT_AUDIO_VOICE;
-  // 只有带音频输入端口的卡片（imageAudio2video）才需要选"成片有没有声音"。
-  const hasAudioOption = maxAudios >= 1;
+  // 视频类卡片（文生视频/图生视频/图音生视频）都要能选"成片有没有声音"——
+  // 判据是产物是不是视频，不是"有没有音频输入端口"，见 supportsAudioOutput。
+  const hasAudioOption = supportsAudioOutput(data.kind);
+  // "音频链接"是"参考音频"的替代输入，只有本来就吃参考音频的卡片（图音生视频）
+  // 才有意义——文生视频/图生视频没有参考音频，给一个填了也没人读的输入框只会
+  // 误导用户。所以它单独判据，跟上面的声音选项不是一回事。
+  const hasAudioUrlOption = maxAudios >= 1;
   const audioOutput = data.generateAudio !== false;
   const audioOutputLabel = t(audioOutput ? 'director.lab.audioOn' : 'director.lab.audioOff');
+  // 文生视频/图生视频没有参考音频，"有声音"的含义是让生成模型自己配一条音轨；
+  // 图音生视频的音轨来自连进来的参考音频。两者的说明文案不同。
+  const audioHintKey =
+    maxAudios >= 1 ? 'director.lab.audioOutputFromRefHint' : 'director.lab.audioOutputGeneratedHint';
 
   return (
     <div className={`lab-node lab-node--process lab-node--process-${data.kind}`}>
@@ -322,7 +332,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
               </div>
             )}
 
-            {hasAudioOption && (
+            {hasAudioUrlOption && (
               <div className="lab-node-params-popover-section">
                 <div className="lab-node-params-popover-label">{t('director.lab.audioUrlLabel')}</div>
                 <input
@@ -350,6 +360,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
                     type="button"
                     className={`lab-node-param-pill ${audioOutput ? 'lab-node-param-pill--active' : ''}`}
                     onClick={() => actions.patchProcessNode(id, { generateAudio: true })}
+                    data-testid="director-lab-audio-on"
                   >
                     {t('director.lab.audioOn')}
                   </button>
@@ -357,10 +368,12 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
                     type="button"
                     className={`lab-node-param-pill ${!audioOutput ? 'lab-node-param-pill--active' : ''}`}
                     onClick={() => actions.patchProcessNode(id, { generateAudio: false })}
+                    data-testid="director-lab-audio-off"
                   >
                     {t('director.lab.audioOff')}
                   </button>
                 </div>
+                <div className="lab-node-params-popover-hint">{t(audioHintKey)}</div>
               </div>
             )}
 

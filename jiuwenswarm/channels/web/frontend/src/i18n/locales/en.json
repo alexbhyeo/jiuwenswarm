@@ -171,7 +171,9 @@
         "text2audio": "Text to Audio",
         "video2audio": "Video to Audio",
         "imageAudio2video": "Image + Audio to Video"
-      }
+      },
+      "audioOutputFromRefHint": "Whether the final clip carries the connected reference audio; turn it off to keep the picture only.",
+      "audioOutputGeneratedHint": "“With audio” asks the model to generate a soundtrack (ambience/voice); “Silent” renders the picture only."
     },
     "edit": {
       "breadcrumb": "Edit",

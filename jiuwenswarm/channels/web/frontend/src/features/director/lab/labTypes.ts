@@ -58,6 +58,26 @@ export const PROCESS_KIND_MAX_AUDIOS: Record<ProcessKind, number> = {
   imageAudio2video: 1,
 };
 
+/** "有声音/无声音"这个成片选项适用于哪些卡片。
+ *
+ *  判据是**产物是不是视频**，而不是"有没有音频输入端口"：图音生视频
+ *  （参考音频当口型依据）、文生视频/图生视频（让模型自己配一条音轨）都
+ *  会产出带音轨的视频，所以都要能选；文生图/参考图合成产的是静态图，
+ *  视频生音频产的是音频，都没有"成片音轨"这回事。 */
+export function supportsAudioOutput(kind: ProcessKind): boolean {
+  return PROCESS_KIND_MODE[kind] === 'video';
+}
+
+/** 新建卡片时"有声音/无声音"的初始值。
+ *
+ *  只有**输入本身就是音频**的卡片（图音生视频）默认开声——它的输入就是
+ *  一段音轨，默认给成片配上最符合预期。文生视频/图生视频的输入是文字或
+ *  图片，历史上产出的都是无声片段，默认沿用"无声音"以免悄悄改变已有
+ *  画布的行为；想要音轨的用户在卡片上显式选"有声音"。 */
+export function defaultGenerateAudio(kind: ProcessKind): boolean {
+  return PROCESS_KIND_MAX_AUDIOS[kind] > 0;
+}
+
 /** 每种处理节点渲染几个视频输入端口。目前只有 video2audio（视频生音频）
  *  需要一路输入视频（先用视频理解写成解说文案，再用 TTS 配音），其余
  *  卡片都不吃视频。 */
@@ -130,10 +150,13 @@ export interface ProcessNodeData {
   /** 仅 text2audio（文生音频）使用：TTS 音色名。旧数据没有这个字段时按
    *  DEFAULT_AUDIO_VOICE 处理。 */
   voice?: string;
-  /** 仅 imageAudio2video（图音生视频）使用：成片是否带音轨。参考音频既是
-   *  口型同步的依据、也是成片音轨的来源，但有时用户只想要一段无声的成片
-   *  （比如当作纯画面素材），所以做成卡片上的显式选项。旧数据/未设置时按
-   *  true（有声音）处理，与该卡片最初的行为一致。 */
+  /** 视频类卡片（文生视频 / 图生视频 / 图音生视频）的"声音"选项：成片是否带
+   *  音轨。两种卡片的音轨来源不同——
+   *  * imageAudio2video：参考音频既是口型同步的依据、也是成片音轨的来源；
+   *  * text2video / image2video：没有参考音频，选"有声音"就是让生成模型
+   *    自己配一条音轨（环境音/人声等），选"无声音"则只要画面。
+   *  所以取值由卡片上的显式选项决定，见 supportsAudioOutput / defaultGenerateAudio
+   *  （默认值随卡片不同：以音频为输入的默认开声，其余默认静音）。 */
   generateAudio?: boolean;
   /** 仅 imageAudio2video（图音生视频）使用：参考音频的 HTTPS 直链，作为
    *  "参考音频"端口连线的替代输入——手头只有一条可公网访问的音频地址（比如

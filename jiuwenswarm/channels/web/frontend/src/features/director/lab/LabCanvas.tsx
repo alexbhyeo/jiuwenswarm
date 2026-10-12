@@ -27,7 +27,7 @@ import { TextNode } from './nodes/TextNode';
 import { ProcessNode } from './nodes/ProcessNode';
 import { DEFAULT_AUDIO_VOICE } from '../audioVoices';
 import type { ImageNodeData, ProcessKind, ProcessMode, ProcessNodeData } from './labTypes';
-import { PROCESS_KIND_MAX_AUDIOS, PROCESS_KIND_MODE, PROCESS_KIND_MULTI_REF } from './labTypes';
+import { PROCESS_KIND_MODE, PROCESS_KIND_MULTI_REF, defaultGenerateAudio, supportsAudioOutput } from './labTypes';
 
 const nodeTypes: NodeTypes = {
   image: ImageNode,
@@ -283,9 +283,10 @@ function LabCanvasInner() {
         durationSeconds: 5,
         // 仅 text2audio（文生音频）会读取；图片/视频卡片忽略它。
         voice: DEFAULT_AUDIO_VOICE,
-        // 仅 imageAudio2video（图音生视频）会读取：默认给成片配上音轨，用户
-        // 可在卡片的生成参数里改成"无声音"。其余卡片恒为 false 且不带上线。
-        generateAudio: PROCESS_KIND_MAX_AUDIOS[kind] > 0,
+        // 视频类卡片的"有声音/无声音"：以音频为输入的卡片（图音生视频）默认
+        // 开声，其余视频卡片沿用历史上的静音默认；非视频卡片恒为 false 且不
+        // 参与生成参数。见 defaultGenerateAudio / supportsAudioOutput。
+        generateAudio: defaultGenerateAudio(kind),
         outputCount: 1,
       };
       addNode({ id, type: 'process', position, data });
@@ -563,6 +564,11 @@ function LabCanvasInner() {
         } else if (mode === 'video') {
           if (resolved.image1?.assetId) params.firstFrameAssetId = resolved.image1.assetId;
           if (resolved.image2?.assetId) params.lastFrameAssetId = resolved.image2.assetId;
+          // 文生视频/图生视频的"声音"选项：显式带上，未设置过按无声音处理
+          // （与后端 `bool(params.get("generate_audio") or False)` 的默认一致，
+          // 也就与本卡片历史上的行为一致）。不能省——这张映射表是唯一的
+          // camelCase → snake_case 出口，漏掉就等于用户选了也没用。
+          params.generateAudio = data.generateAudio === true;
         } else {
           const referenceAssetIds = resolved.images.map((img) => img.assetId).filter((v): v is string => !!v);
           if (referenceAssetIds.length > 0) params.referenceAssetIds = referenceAssetIds;
@@ -969,10 +975,10 @@ function LabCanvasInner() {
         outputCount: 1,
         // 音频卡片重建后音色不能变回默认值——params 里存了当时用的 voice。
         voice: typeof params.voice === 'string' ? params.voice : DEFAULT_AUDIO_VOICE,
-        // 图音生视频重建后"有声音/无声音"也要跟着素材走，否则重摆一遍流程
-        // 就把用户当初关掉的声音又打开了；音频链接同理（填了链接的素材
-        // params 里存的是链接本身，没有可还原的素材连线）。
-        generateAudio: kind === 'imageAudio2video' ? params.generate_audio !== false : false,
+        // 视频类卡片重建后"有声音/无声音"要跟着素材走，否则重摆一遍流程就把
+        // 用户当初的选择改回去了；音频链接同理（填了链接的素材 params 里存的
+        // 是链接本身，没有可还原的素材连线）。
+        generateAudio: supportsAudioOutput(kind) ? params.generate_audio === true : false,
         audioUrl:
           kind === 'imageAudio2video' && typeof params.input_audio_path === 'string' && /^https?:\/\//i.test(params.input_audio_path)
             ? params.input_audio_path
