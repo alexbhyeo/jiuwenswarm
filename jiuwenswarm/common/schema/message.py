@@ -298,6 +298,7 @@ class ReqMethod(Enum):
     DIRECTOR_EDIT_CHAT_SKILL_GET = "director.edit_chat.skill_get"
     DIRECTOR_EDIT_CHAT_SKILL_SET = "director.edit_chat.skill_set"
     DIRECTOR_LAB_CANVAS_SAVE = "director.lab_canvas.save"
+    DIRECTOR_CLIP_COMPOSE = "director.clip.compose"
 
     # Task (session) assets: named files referenceable with @name in the chat box.
     SESSION_ASSETS_LIST = "session.assets.list"

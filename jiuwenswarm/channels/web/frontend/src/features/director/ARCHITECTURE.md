@@ -385,6 +385,42 @@ Other rules:
 3. On remount, the canvas restores from the in-memory copy first, avoiding the
    race where the debounced RPC has not landed yet.
 
+### 8.2a Save to project (timeline → one clip)
+
+1. The 剪辑 tab keeps its `tracks: EditClip[][]` in `editTimelineByProject`
+   (session-authoritative, not persisted to the project file).
+2. 保存到项目 sends the **whole track array** to `director.clip.compose`. The
+   client deliberately does *not* flatten it: occlusion (topmost track wins) and
+   gaps (black) are computed server-side by the same rule the preview uses, so
+   "what you watched" and "what you exported" cannot drift apart.
+3. `director_clip_compose.flatten_timeline` cuts the timeline at every clip
+   boundary into abutting, non-overlapping segments (a moment nothing covers
+   becomes a black segment), then `build_command` emits one ffmpeg graph:
+   every segment is `-ss/-t` trimmed, scaled and letterboxed onto a common
+   canvas, and `concat`ed in one pass.
+4. The canvas follows the **first video** segment's resolution, falling back to
+   the first image and then 1280×720 — so a portrait product shot dropped in as
+   a still cannot turn a 16:9 ad into a vertical export.
+5. Audio is layered back with `adelay` per source and `amix`ed against a
+   same-length silent base (so a short final source cannot truncate the video).
+   `normalize=0` keeps the levels of each source instead of dividing by the
+   input count. **Silent clips are dropped before the graph is built** — a video
+   without an audio stream contributes no `[n:a]` input, otherwise ffmpeg fails
+   the whole render with "matches no streams".
+6. The result is appended as an ordinary `video` asset (name defaults to
+   `剪辑成片`), so it lands under 素材 · 视频 and can be `@`-referenced, dragged
+   back onto the timeline, or composed again.
+
+Note the deliberate divergence from the preview: the preview `muted`s its
+`<video>` element (only `audio` clips make sound), while the export keeps every
+clip's own audio. Exporting a shot with a spoken line as a silent clip would be
+a bug, not a feature.
+
+ffmpeg comes from `imageio-ffmpeg`, declared in `pyproject.toml`, so installing
+the project provides the binary; a system `ffmpeg` on `PATH` is the fallback.
+That bundled build ships **no ffprobe**, so media probing parses `ffmpeg -i`
+stderr (`director_clip_compose.probe_media`).
+
 ### 8.3 Edit chat (script → designs → shots → frames → clips)
 
 1. `EditChatPanel` sends the accumulated history, pending reference images, and
@@ -399,8 +435,9 @@ Other rules:
    call produces a real asset in the project.
 4. The assistant text plus the new `asset_id`s are appended to
    `edit_chat_messages`, which persists with the project.
-5. The model is explicitly told it **cannot** perform final edit/assembly — it
-   advises the user to assemble the generated clips on the timeline.
+5. The model is explicitly told it **cannot** perform final edit/assembly itself
+   — it hands the user a timeline, and 保存到项目 (§8.2a) is what actually turns
+   that timeline into a single clip.
 
 The skill picker sits in the panel header next to 生成实验室流程图 and reuses the
 Skills panel's own `skills.list` RPC. The list always starts with the assistant's

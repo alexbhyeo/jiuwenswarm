@@ -4,7 +4,7 @@
 import { create } from 'zustand';
 import i18n from '../../i18n';
 import { DEFAULT_AUDIO_VOICE } from './audioVoices';
-import type { DirectorSkillOption } from './directorApi';
+import type { DirectorSkillOption, TimelineClipPayload } from './directorApi';
 import type {
   ComposerMode,
   ComposerParams,
@@ -62,6 +62,12 @@ interface DirectorState {
   uploadAsset: (projectId: string, file: File, assetType?: 'image' | 'video' | 'audio' | 'character') => Promise<void>;
   uploading: boolean;
   uploadError: string | null;
+
+  // 「剪辑」时间线 → 一条成片素材。成功后返回新素材的名字（供调用方提示），
+  // 失败时抛出 DirectorApiError，由剪辑页自己提示——它已经有 notice 机制，
+  // 不需要 store 再存一份错误状态。
+  composeTimeline: (projectId: string, tracks: TimelineClipPayload[][], name?: string) => Promise<string>;
+  composing: boolean;
 
   // 剪辑 tab 对话助手。draft/pendingImageIds 是输入框还没发送出去的草稿，
   // 消息历史本身随 DirectorProject.edit_chat_messages 一起存在 projects
@@ -140,6 +146,7 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
 
   uploading: false,
   uploadError: null,
+  composing: false,
 
   editChatDraft: '',
   editChatPendingImageIds: [],
@@ -338,6 +345,25 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
     } catch (e) {
       const message = e instanceof DirectorApiError ? e.message : e instanceof Error ? e.message : String(e);
       set({ uploading: false, uploadError: message });
+    }
+  },
+
+  composeTimeline: async (projectId, tracks, name) => {
+    set({ composing: true });
+    try {
+      const { directorClipCompose } = await import('./directorApi');
+      const { project } = await directorClipCompose(projectId, tracks, name);
+      set((s) => ({
+        composing: false,
+        projects: s.projects.map((p) => (p.project_id === project.project_id ? project : p)),
+      }));
+      // 新成片的名字由后端定（没传就落到它自己的默认名），所以从返回的项目里
+      // 反查最后那一条视频素材，把名字回给调用方去提示。
+      const composed = [...project.assets].reverse().find((a) => a.type === 'video');
+      return composed?.name || name || '';
+    } catch (e) {
+      set({ composing: false });
+      throw e;
     }
   },
 

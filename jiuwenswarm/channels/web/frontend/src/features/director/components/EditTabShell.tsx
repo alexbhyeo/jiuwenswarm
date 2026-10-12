@@ -320,6 +320,8 @@ export function EditTabShell() {
   const setActiveTab = useDirectorStore((s) => s.setActiveTab);
   const selectedProjectId = useDirectorStore((s) => s.selectedProjectId);
   const uploadAsset = useDirectorStore((s) => s.uploadAsset);
+  const composeTimeline = useDirectorStore((s) => s.composeTimeline);
+  const composing = useDirectorStore((s) => s.composing);
 
   // tracks[0] 是主轨——唯一没有"轨道 N"标签的那条，但不再是唯一参与播放的
   // 轨道：所有轨道都会参与播放，播放优先级按轨道从上到下（见 locateActive）。
@@ -1004,6 +1006,36 @@ export function EditTabShell() {
   // 花点时间，按钮上转圈并禁止重复点击。
   const [exportingClipId, setExportingClipId] = useState<string | null>(null);
 
+  /** 「保存到项目」：把整条时间线（所有轨道、每个片段自己的裁剪窗口与摆放
+   *  位置）交给后端渲染成一条成片，落成项目的「素材 · 视频」。保存之后它就
+   *  是一条普通视频素材——能被 @名称 引用、能再拖回时间线接着剪。
+   *
+   *  这里刻意**不**在本地摊平片段：遮挡关系（上层轨道胜出）和空隙（黑场）由
+   *  后端按与预览相同的规则算，两边不会各算各的；前端只负责如实交出 tracks。 */
+  const handleSaveToProject = useCallback(async () => {
+    if (!selectedProjectId || composing || !hasAnyClip) return;
+    const payload = tracks.map((track) =>
+      track.map((clip) => ({
+        file_path: clip.filePath,
+        type: clip.type,
+        trim_in: clip.trimIn,
+        trim_out: clip.trimOut,
+        start: clip.start,
+        name: clip.name,
+      })),
+    );
+    // 名字带时间戳：同一条时间线保存两次时，素材面板里能分得清哪条是哪次。
+    const stamp = new Date();
+    const name = `剪辑成片 ${String(stamp.getHours()).padStart(2, '0')}-${String(stamp.getMinutes()).padStart(2, '0')}-${String(stamp.getSeconds()).padStart(2, '0')}`;
+    try {
+      const savedName = await composeTimeline(selectedProjectId, payload, name);
+      showNotice('ok', t('director.edit.savedToProject', { name: savedName || name }));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      showNotice('error', t('director.edit.saveToProjectFailed', { message }));
+    }
+  }, [composeTimeline, composing, hasAnyClip, selectedProjectId, showNotice, t, tracks]);
+
   /** 把音频片段裁剪出来的那一段导出成一个新的音频素材，落到项目的「素材 ·
    *  音频」分类里。裁剪用的是片段自己的 trimIn/trimOut（分割出来的两段各自
    *  带着自己的源窗口），所以导出结果与时间线上听到的完全一致。 */
@@ -1188,9 +1220,15 @@ export function EditTabShell() {
       <div className="director-edit-subheader">
         <span className="director-edit-subheader-title">{t('director.edit.timelineEditor')}</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button type="button" className="director-edit-btn director-edit-btn--primary" disabled title={t('director.comingSoon')}>
+          <button
+            type="button"
+            className="director-edit-btn director-edit-btn--primary"
+            onClick={() => void handleSaveToProject()}
+            disabled={!hasAnyClip || composing}
+            data-testid="director-edit-save-to-project"
+          >
             {saveIcon}
-            {t('director.edit.saveToProject')}
+            {composing ? t('director.edit.savingToProject') : t('director.edit.saveToProject')}
           </button>
           <button type="button" className="director-edit-btn director-edit-btn--secondary" onClick={() => setActiveTab('create')}>
             {t('director.edit.exit')}

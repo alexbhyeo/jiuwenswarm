@@ -1009,6 +1009,7 @@ _DIRECTOR_ROUTES: dict[ReqMethod, str] = {
     ReqMethod.DIRECTOR_EDIT_CHAT_SKILL_GET: "handle_director_edit_chat_skill_get",
     ReqMethod.DIRECTOR_EDIT_CHAT_SKILL_SET: "handle_director_edit_chat_skill_set",
     ReqMethod.DIRECTOR_LAB_CANVAS_SAVE: "handle_director_lab_canvas_save",
+    ReqMethod.DIRECTOR_CLIP_COMPOSE: "handle_director_clip_compose",
 }
 
 _SESSION_ASSET_ROUTES: dict[ReqMethod, str] = {

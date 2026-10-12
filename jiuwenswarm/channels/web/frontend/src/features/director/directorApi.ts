@@ -31,6 +31,7 @@ const METHOD = {
   editChatSkillGet: 'director.edit_chat.skill_get',
   editChatSkillSet: 'director.edit_chat.skill_set',
   labCanvasSave: 'director.lab_canvas.save',
+  clipCompose: 'director.clip.compose',
 } as const;
 
 // 剪辑对话每轮都要把该项目已有的历史消息整份重发一遍给模型（无服务端会话
@@ -54,6 +55,12 @@ export const TEAM_EDIT_CHAT_TIMEOUT_MS = 1_800_000;
 // 的上传耗时，叠加轮询上限后实测可轻松超过 200s，之前 200s 的边际还是太薄，
 // 会在正常（非异常）情况下就先于后端返回而超时。
 const GENERATE_TIMEOUT_MS = 300_000;
+
+// 合成成片是本地 ffmpeg 的一次编码：几秒到几十秒的时间线通常几秒就压完，
+// 但成片越长、机器越忙就越慢，后端自己也留了 120s~20min 的渲染超时
+// （见 director_clip_compose._timeout_for）。前端给得比它略短一点点没有意义
+// ——真超时了后端也已经写不出文件了，所以按同一个量级给一个宽裕值。
+const COMPOSE_TIMEOUT_MS = 900_000;
 
 function toDirectorError(err: unknown): DirectorApiError {
   if (err instanceof DirectorApiError) return err;
@@ -395,6 +402,36 @@ export function directorLabCanvasSave(
   edges: unknown[]
 ): Promise<ProjectResult> {
   return webRequest<unknown>(METHOD.labCanvasSave, { project_id: projectId, nodes, edges })
+    .then(normalizeProjectResult)
+    .catch((err) => {
+      throw toDirectorError(err);
+    });
+}
+
+export interface TimelineClipPayload {
+  file_path: string;
+  type: 'image' | 'video' | 'audio';
+  trim_in: number;
+  trim_out: number;
+  start: number;
+  name: string;
+}
+
+/** 把「剪辑」时间线整体交给后端渲染成一条成片，落成项目的视频素材。
+ *
+ *  传的是**轨道数组**而不是已经摊平的片段：遮挡关系（上层轨道胜出）与空隙
+ *  （黑场）由后端按与预览相同的规则算，两边不会各算各的。返回的项目里已经
+ *  带上新素材，直接替换 store 里那一份即可。 */
+export function directorClipCompose(
+  projectId: string,
+  tracks: TimelineClipPayload[][],
+  name?: string
+): Promise<ProjectResult> {
+  return webRequest<unknown>(
+    METHOD.clipCompose,
+    { project_id: projectId, tracks, name },
+    { timeoutMs: COMPOSE_TIMEOUT_MS }
+  )
     .then(normalizeProjectResult)
     .catch((err) => {
       throw toDirectorError(err);

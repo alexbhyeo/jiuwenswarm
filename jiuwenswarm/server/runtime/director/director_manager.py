@@ -48,6 +48,11 @@ from jiuwenswarm.agents.harness.common.tools.edit_chat_tools import (
     edit_chat_configured,
     edit_chat_enabled,
 )
+from jiuwenswarm.server.runtime.director.director_clip_compose import (
+    ComposeError,
+    compose_timeline,
+    parse_tracks as compose_parse_tracks,
+)
 from jiuwenswarm.server.runtime.director.director_skills import (
     get_assistant_skill_config,
     load_assistant_skill,
@@ -1360,6 +1365,54 @@ class DirectorManager:
             raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}") from None
 
         return {"project": project.to_dict()}
+
+    async def handle_director_clip_compose(self, params: dict) -> dict:
+        """「剪辑」时间线 → 一条成片素材（素材 · 视频）。
+
+        用户在剪辑标签页里把素材摆到若干条轨道上（可裁剪、分割、留空隙、上下
+        叠轨），点「保存到项目」时把整条时间线交给 ``director_clip_compose``
+        渲染成一条 mp4，再作为一个普通视频素材落进项目——之后它就和其他生成
+        出来的片段一样可以被 `@名称` 引用、拖回时间线、继续剪。
+
+        前端只负责把 ``tracks``（轨道数组的数组）如实地送过来，遮挡关系（上层
+        轨道胜出）与空隙（黑场）都由服务端决定，这样"预览看到的"和"导出得到
+        的"用的是同一套规则，不会各算各的。时长不单独传——成片长度就是时间线
+        上最晚结束的那个片段，渲染计划自己算出来。
+        """
+        project_id = str(params.get("project_id") or "").strip()
+        if not project_id:
+            raise DirectorRpcError("INVALID_PARAMS", "缺少 project_id")
+
+        project = self._store.get_project(project_id)
+        if project is None:
+            raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")
+
+        try:
+            tracks = compose_parse_tracks(params.get("tracks"))
+            out_path, plan, canvas = await compose_timeline(
+                tracks, get_project_assets_dir(project_id)
+            )
+        except ComposeError as exc:
+            raise DirectorRpcError(exc.code, exc.message) from None
+
+        asset = DirectorAsset(
+            asset_id=f"asset_{secrets.token_hex(4)}",
+            type="video",
+            status="ready",
+            prompt="",
+            params={
+                "source": "timeline",
+                "duration_seconds": round(plan.duration, 3),
+                "segment_count": len(plan.visuals),
+                "audio_source_count": len(plan.audios),
+                "width": canvas[0],
+                "height": canvas[1],
+            },
+            file_path=str(out_path),
+            name=str(params.get("name") or "").strip() or "剪辑成片",
+        )
+        project = self._store.append_asset(project_id, asset)
+        return {"project": project.to_dict(), "asset_id": asset.asset_id}
 
     async def handle_director_edit_chat_skill_get(self, params: dict) -> dict:
         """剪辑助手的**默认（基础）技能**状态：当前生效的是哪一个 + 可切换的候选。
