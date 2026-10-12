@@ -229,17 +229,29 @@ function MediaItemView({ item }: { item: MediaItem }) {
  */
 function dedupeMediaItems(items: MediaItem[]): MediaItem[] {
   if (items.length < 2) return items;
-  const seen = new Set<string>();
+  const seenPaths = new Set<string>();
+  const seenLooseNames = new Set<string>();
   const deduped: MediaItem[] = [];
   for (const item of items) {
-    const filename = item.filename || 'file';
-    const label = item.displayName || filename;
-    const source = mediaSrc(item) ?? normalizePath(item.path ?? '');
-    // 键取“实际渲染出来的东西”：同一张缩略图 + 同一个显示名，在用户眼里就是同一张卡片，
-    // 无论两条路径各自记的是什么。图不同（src 不同）时不会误合并。
-    const key = `${source}|${label}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const label = item.displayName || item.filename || '';
+    const nameKey = label
+      .split(/[\\/]/)
+      .pop()!
+      .replace(/\.[^.]+$/, '')
+      .trim()
+      .toLowerCase();
+    const path = normalizePath(item.path ?? '').trim();
+    // 新任务里这条消息的第一个附件往往还没落盘：那条记录只有 base64 和文件名，没有路径，
+    // 而 @素材 引用解析出来的那条带着落盘路径。两者的 src 也各不相同（data: 对 raw-file），
+    // 所以只比路径或只比 src 都认不出是同一张卡片——名字才是两边都有的身份。
+    // 两条都带路径时只认路径，避免把两个不同目录下的同名文件并成一张。
+    if (path) {
+      if (seenPaths.has(path) || (nameKey && seenLooseNames.has(nameKey))) continue;
+      seenPaths.add(path);
+    } else {
+      if (nameKey && seenLooseNames.has(nameKey)) continue;
+      if (nameKey) seenLooseNames.add(nameKey);
+    }
     deduped.push(item);
   }
   return deduped.length === items.length ? items : deduped;
