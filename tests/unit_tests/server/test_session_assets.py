@@ -71,7 +71,17 @@ async def test_rename_rules(manager, tmp_path):
 
 @pytest.mark.asyncio
 async def test_session_id_is_validated(manager):
-    for bad in ("", "../escape", "a/b"):
+    for bad in ("", "../escape", "a/b", ".."):
         with pytest.raises(sa.SessionAssetError) as exc:
             await manager.handle_session_assets_list({"session_id": bad})
         assert exc.value.code == "INVALID_PARAMS"
+
+
+@pytest.mark.asyncio
+async def test_state_file_cannot_escape_sessions_dir(manager, tmp_path):
+    # ".." matches the session_id regex (only [A-Za-z0-9_.-]) but must still be
+    # rejected: unresolved, it would point outside the sessions directory and let
+    # a caller read/write a file in its parent instead of an isolated session.
+    with pytest.raises(sa.SessionAssetError) as exc:
+        sa.SessionAssetManager._state_file("..")
+    assert exc.value.code == "INVALID_PARAMS"
