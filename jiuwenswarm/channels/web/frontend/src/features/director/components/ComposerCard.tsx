@@ -20,6 +20,10 @@ const sendIcon = (
   </svg>
 );
 
+/** 生成中的转圈。用 span + CSS 动画而不是 SVG：与实验室卡片里的
+ *  .lab-node-spinner 是同一套观感（白环、同一个 lab-spin 关键帧）。 */
+const spinnerIcon = <span className="director-send-spinner" data-testid="director-composer-spinner" />;
+
 const imageIcon = (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
     <rect x="3" y="3" width="18" height="18" rx="2.5" />
@@ -260,9 +264,13 @@ export function ComposerCard() {
           className="director-send-btn"
           disabled={!canSend}
           onClick={() => generate()}
-          title={t('director.composer.send')}
+          title={busy ? t('director.composer.generating') : t('director.composer.send')}
+          data-testid="director-composer-send"
         >
-          {sendIcon}
+          {/* 生成期间按钮是禁用的（canSend 为 false），单看"变灰"用户不知道是
+              在跑还是没反应——尤其是视频要等两三分钟。所以这一整段时间（含后端
+              返回 pending 后前端继续轮询的那段）都换成转圈。 */}
+          {busy ? spinnerIcon : sendIcon}
         </button>
       </div>
 

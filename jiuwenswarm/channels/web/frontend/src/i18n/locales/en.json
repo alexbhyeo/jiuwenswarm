@@ -81,6 +81,7 @@
       "placeholderAudio": "What should the voice say? Enter the exact text to be spoken aloud, and pick a voice from the toolbar…",
       "durationLabel": "{{seconds}}s",
       "send": "Generate",
+      "generating": "Generating…",
       "modes": {
         "video": "Video",
         "image": "Image",

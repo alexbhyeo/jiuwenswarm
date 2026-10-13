@@ -81,6 +81,7 @@
       "placeholderAudio": "需要一段什么样的语音？输入要朗读的文本，并在工具栏选择音色…",
       "durationLabel": "{{seconds}} 秒",
       "send": "生成",
+      "generating": "生成中…",
       "modes": {
         "video": "视频",
         "image": "图片",

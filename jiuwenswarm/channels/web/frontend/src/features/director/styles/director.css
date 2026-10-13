@@ -725,6 +725,17 @@
   cursor: default;
 }
 
+/* 生成中的转圈（见 ComposerCard 的 spinnerIcon）。故意复用实验室卡片的
+   lab-spin 关键帧——同一个 360° 旋转，没必要定义第二套。 */
+.director-send-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  animation: lab-spin 0.7s linear infinite;
+}
+
 .director-generate-error {
   margin-top: 12px;
   font-size: 12.5px;

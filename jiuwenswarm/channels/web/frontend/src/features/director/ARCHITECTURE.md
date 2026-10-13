@@ -377,6 +377,15 @@ Other rules:
 5. `check_status` transitions the asset to `ready` (with `file_path`) or
    `failed` (with `error`), and returns updated counts.
 
+The whole of steps 2–5 is `busy = generating || pendingGeneration !== null` in
+the store, and the send button swaps its arrow for a **spinning ring**
+(`.director-send-spinner`, reusing the lab's `lab-spin` keyframes) whenever
+`busy` — not just while disabled. A disabled button alone reads as "nothing
+happened", and the video path spends most of its wall-clock time in step 4's
+background polling (measured 213 s end to end, of which the first ~2 m 20 s is
+the RPC), so the spinner has to span both phases. Its `title` switches to
+生成中… at the same time.
+
 ### 8.2 Lab canvas save
 
 1. `LabCanvas` writes node/edge changes synchronously to
