@@ -1257,15 +1257,7 @@
   width: 16px;
   height: 16px;
   flex: 0 0 auto;
-  border: 1.5px solid currentColor;
-  border-radius: 4px;
   color: var(--color-text-primary);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.chat-composer-suggestion__slash-icon--skill {
-  border: 0;
 }
 
 .chat-composer-suggestion__slash-icon--skill::before {
@@ -3219,6 +3211,13 @@
   opacity: 0.7;
 }
 
+.chat-swarmflow-config-panel__worktree-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .chat-skill-select__trigger {
   display: inline-flex;
   align-items: center;
@@ -4916,4 +4915,20 @@
 .chat-input-attachment-card:hover .chat-input-attachment-rename,
 .chat-input-attachment-rename:focus-visible {
   opacity: 1;
+}
+
+.chat-team-select__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.chat-team-select__dot--running {
+  background: var(--color-feedback-success);
+}
+
+.chat-team-select__dot--idle {
+  background: var(--color-feedback-warning);
 }

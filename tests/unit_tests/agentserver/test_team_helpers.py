@@ -4277,9 +4277,86 @@ async def test_consume_stream_with_query_broadcasts_leader_and_teammate_outputs(
 
 
 @pytest.mark.anyio
+async def test_finalize_org_bound_team_after_idle_calls_finalize(monkeypatch):
+    from openjiuwen.agent_teams.runtime.pool import RuntimeState
+
+    finalize_calls: list[tuple[str, str]] = []
+
+    class _Pool:
+        async def get(self, team_name: str):
+            assert team_name == "owner-team"
+            return SimpleNamespace(
+                current_session_id="sess-org",
+                state=RuntimeState.RUNNING,
+                agent=SimpleNamespace(
+                    team_backend=SimpleNamespace(org_task_manager=object()),
+                ),
+            )
+
+    class _Runtime:
+        pool = _Pool()
+
+        async def finalize(self, *, team_name: str, session_id: str) -> None:
+            finalize_calls.append((team_name, session_id))
+
+    import jiuwenswarm.agents.harness.team.team_manager as team_manager_mod
+
+    monkeypatch.setattr(
+        team_manager_mod,
+        "_runner_team_runtime_manager",
+        lambda runner: _Runtime(),
+    )
+
+    await team_helpers._finalize_org_bound_team_after_idle(
+        session_id="sess-org",
+        team_name="owner-team",
+    )
+    assert finalize_calls == [("owner-team", "sess-org")]
+
+
+@pytest.mark.anyio
+async def test_finalize_org_bound_team_after_idle_skips_non_org(monkeypatch):
+    from openjiuwen.agent_teams.runtime.pool import RuntimeState
+
+    finalize_calls: list[tuple[str, str]] = []
+
+    class _Pool:
+        async def get(self, team_name: str):
+            return SimpleNamespace(
+                current_session_id="sess-plain",
+                state=RuntimeState.RUNNING,
+                agent=SimpleNamespace(team_backend=SimpleNamespace(org_task_manager=None)),
+            )
+
+    class _Runtime:
+        pool = _Pool()
+
+        async def finalize(self, *, team_name: str, session_id: str) -> None:
+            finalize_calls.append((team_name, session_id))
+
+    import jiuwenswarm.agents.harness.team.team_manager as team_manager_mod
+
+    monkeypatch.setattr(
+        team_manager_mod,
+        "_runner_team_runtime_manager",
+        lambda runner: _Runtime(),
+    )
+
+    await team_helpers._finalize_org_bound_team_after_idle(
+        session_id="sess-plain",
+        team_name="plain-team",
+    )
+    assert finalize_calls == []
+
+
+@pytest.mark.anyio
 async def test_consume_stream_with_query_reports_team_idle_as_round_end(monkeypatch):
     """A team.idle marker ends the round for clients, just like team.completed."""
     broadcasted: list[dict] = []
+    finalize_calls: list[tuple[str, str]] = []
+
+    async def _fake_finalize(*, session_id: str, team_name: str) -> None:
+        finalize_calls.append((session_id, team_name))
 
     async def _fake_stream(**kwargs):
         yield SimpleNamespace(
@@ -4340,6 +4417,7 @@ async def test_consume_stream_with_query_reports_team_idle_as_round_end(monkeypa
     monkeypatch.setattr(team_helpers, "ensure_team_evolution_watcher", lambda *args, **kwargs: None)
     monkeypatch.setattr(team_helpers, "get_session_metadata", lambda session_id: {})
     monkeypatch.setattr(team_helpers, "update_session_metadata", lambda **kwargs: None)
+    monkeypatch.setattr(team_helpers, "_finalize_org_bound_team_after_idle", _fake_finalize)
 
     await _TeamHelpersTestApi.consume_stream_with_query(
         "web",
@@ -4365,6 +4443,8 @@ async def test_consume_stream_with_query_reports_team_idle_as_round_end(monkeypa
         and event.get("is_processing") is False
         for event in broadcasted
     ) == 1
+    # An idle marker must not finalize a non-organization Team.
+    assert finalize_calls == []
 
 
 @pytest.mark.anyio
@@ -6733,6 +6813,7 @@ def test_resolve_session_swarmflow_config_request_overrides_config() -> None:
     assert _resolve_session_swarmflow_config(params, config_base, session_id="s1") == {
         "enable_swarmflow": True,
         "swarmflow_budget": 50000,
+        "swarmflow_worktree": None,
     }
 
 
@@ -6749,6 +6830,7 @@ def test_resolve_session_swarmflow_config_falls_back_to_config() -> None:
     assert _resolve_session_swarmflow_config(params, config_base, session_id="s1") == {
         "enable_swarmflow": True,
         "swarmflow_budget": 200000,
+        "swarmflow_worktree": None,
     }
 
 
@@ -6790,7 +6872,71 @@ def test_resolve_session_swarmflow_config_falls_back_to_metadata(
     assert _resolve_session_swarmflow_config({}, config_base, session_id="sess-resolve-meta") == {
         "enable_swarmflow": True,
         "swarmflow_budget": 30000,
+        "swarmflow_worktree": None,
     }
+
+
+def test_resolve_session_swarmflow_config_worktree_param_overrides_persisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """explicit worktree param wins over the session's persisted sticky value."""
+    from jiuwenswarm.server.runtime.agent_adapter import team_helpers
+    from jiuwenswarm.server.runtime.agent_adapter.team_helpers import (
+        _resolve_session_swarmflow_config,
+    )
+
+    monkeypatch.setattr(
+        team_helpers,
+        "restore_session_swarmflow_config",
+        lambda session_id: {"enable_swarmflow": True, "swarmflow_worktree": False},
+    )
+
+    params = {"enable_swarmflow": True, "swarmflow_worktree": True}
+    config_base = {"modes": {"team": {"jiuwen_team": {"enable_swarmflow": False}}}}
+    result = _resolve_session_swarmflow_config(params, config_base, session_id="s1")
+    assert result["swarmflow_worktree"] is True
+
+
+def test_resolve_session_swarmflow_config_worktree_sticky_when_param_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """a client omitting the worktree key keeps the session's persisted value."""
+    from jiuwenswarm.server.runtime.agent_adapter import team_helpers
+    from jiuwenswarm.server.runtime.agent_adapter.team_helpers import (
+        _resolve_session_swarmflow_config,
+    )
+
+    monkeypatch.setattr(
+        team_helpers,
+        "restore_session_swarmflow_config",
+        lambda session_id: {"enable_swarmflow": True, "swarmflow_worktree": False},
+    )
+
+    params = {"enable_swarmflow": True}
+    config_base = {"modes": {"team": {"jiuwen_team": {"enable_swarmflow": False}}}}
+    result = _resolve_session_swarmflow_config(params, config_base, session_id="s1")
+    assert result["swarmflow_worktree"] is False
+
+
+def test_resolve_session_swarmflow_config_worktree_none_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """no param and no persisted value → None (team config's worktree stands)."""
+    from jiuwenswarm.server.runtime.agent_adapter import team_helpers
+    from jiuwenswarm.server.runtime.agent_adapter.team_helpers import (
+        _resolve_session_swarmflow_config,
+    )
+
+    monkeypatch.setattr(
+        team_helpers,
+        "restore_session_swarmflow_config",
+        lambda session_id: None,
+    )
+
+    params = {"enable_swarmflow": True}
+    config_base = {"modes": {"team": {"jiuwen_team": {"enable_swarmflow": False}}}}
+    result = _resolve_session_swarmflow_config(params, config_base, session_id="s1")
+    assert result["swarmflow_worktree"] is None
 
 
 def _wf_run_with_agents(*agent_statuses: str) -> WorkflowRunState:
