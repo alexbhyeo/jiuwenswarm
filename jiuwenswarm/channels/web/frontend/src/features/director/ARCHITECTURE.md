@@ -458,6 +458,19 @@ stderr (`director_clip_compose.probe_media`).
    — it hands the user a timeline, and 保存到项目 (§8.2a) is what actually turns
    that timeline into a single clip.
 
+**One stage per turn is the assistant's own contract, not an engine rule.** The
+storyboard pipeline is 脚本 → 设计图 → 分镜列表 → 关键帧 → 镜头视频, and the
+`director-edit-assistant` skill opens with a 硬性纪律 section requiring each turn to
+finish exactly one of those stages and close by asking about the next one. Nothing
+enforces this in code: the turn loop (`_EDIT_CHAT_MAX_TOOL_ITERATIONS = 6`) will
+happily run a multi-stage chain if the model decides to, which is exactly what
+regressed — one turn produced designs + keyframes + three clips (9 tool calls) and
+signed off with 全部生成完成. The gate lives in the prompt because the **explicit
+user override has to stay available**: a user who says 不用问我了，直接做完 must be
+able to get the whole pipeline in one turn. A deterministic cap in the tool loop
+cannot tell that case from the default one, so it would break the override; the
+skill instead states the default (一步一停) and the exception (明确授权) in prose.
+
 The skill picker sits in the panel header next to 生成实验室流程图 and reuses the
 Skills panel's own `skills.list` RPC. The list always starts with the assistant's
 **default skill** pinned at the top, marked 默认, in the always-checked state and not
