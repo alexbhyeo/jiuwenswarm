@@ -387,6 +387,16 @@ Other rules:
 
 ### 8.2a Save to project (timeline → one clip)
 
+The button's **appearance carries its state**: 保存到项目 is disabled (grey pill,
+`not-allowed` cursor) only while the timeline is empty, and once a clip is dragged
+in it switches to the same look as 退出剪辑 (transparent background, 1 px border,
+secondary text) and becomes clickable. `--primary` therefore has both a base
+(disabled) and a `:not(:disabled)` rule, and the border is always present
+(transparent when disabled) so the box never shifts between states.
+`.director-edit-btn` sets `cursor: pointer` and `:disabled` overrides it — the
+reverse of the original file, where a hardcoded `not-allowed` made the clickable
+退出剪辑 show a forbidden cursor while the disabled save showed a default one.
+
 1. The 剪辑 tab keeps its `tracks: EditClip[][]` in `editTimelineByProject`
    (session-authoritative, not persisted to the project file).
 2. 保存到项目 sends the **whole track array** to `director.clip.compose`. The
@@ -567,6 +577,19 @@ exactly what the file looks like".
   parsing; the two paths never combine.
 - **Session-authoritative UI copies** exist only to survive tab remounts; disk
   remains the durable source.
+- **A frame reference overrides the requested aspect ratio at the provider.**
+  When a request carries `frame_images` (首帧/尾帧), the provider derives the
+  output geometry from that frame and ignores `aspect_ratio` entirely — measured
+  on Seedance 2.0 Fast via OpenRouter: a 1376×768 frame with `9:16` came back
+  `1280x720`, while the same `9:16` request **without** a frame correctly
+  returned `496x864`. `video_gen_tools` therefore center-crops local frames to
+  the requested ratio before embedding them (`_center_crop_to_ratio`, tolerance
+  `_ASPECT_RATIO_TOLERANCE`) so the card's ratio pill is not a lie. Cropping, not
+  letterboxing, because bars baked into the first frame are content the model
+  animates and keeps. A ratio already matching the frame is left untouched, so
+  an ordinary 16:9 frame is never needlessly re-encoded; a **remote** http(s)/
+  data-URI frame is passed through untouched (it is not downloaded here) and logs
+  a warning that the frame may still win.
 
 ---
 

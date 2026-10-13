@@ -1205,13 +1205,31 @@
   border-radius: var(--d-radius-full);
   font-size: 13px;
   font-weight: 600;
-  cursor: not-allowed;
+  /* 光标按"能不能点"来：可点的给 pointer，禁用的才给 not-allowed（见下面的
+     :disabled 覆盖）。这里以前无条件写死 not-allowed，结果可点的「退出剪辑」
+     显示禁止光标、禁用的「保存到项目」反倒显示默认光标——两边都是反的。 */
+  cursor: pointer;
 }
 
+/* 「保存到项目」：有时间线内容才能点。可点时它要与「退出剪辑」同色（普通
+ * 按钮外观），不可点时才是灰底白字的弱化样式——两者以前长得一模一样，用户
+ * 在有内容时也会以为"不能保存"（这就是那个观感问题的来源）。
+ * border 常驻（禁用时透明）而非只在可点时加，保证两种状态盒子尺寸完全一致，
+ * 切换时按钮不会跳动。 */
 .director-edit-btn--primary {
   background: var(--d-border-strong);
-  border: none;
+  border: 1px solid transparent;
   color: #fff;
+}
+
+.director-edit-btn--primary:not(:disabled) {
+  background: none;
+  border: 1px solid var(--d-border-default);
+  color: var(--d-text-secondary);
+}
+
+.director-edit-btn:disabled {
+  cursor: not-allowed;
 }
 
 .director-edit-btn--secondary {

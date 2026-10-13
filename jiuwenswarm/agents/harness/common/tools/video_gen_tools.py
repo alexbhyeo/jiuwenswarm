@@ -62,6 +62,17 @@ _TRANSIENT_RETRY_BASE_DELAY_S = 1.5
 _MAX_REFERENCE_DIMENSION = 1280
 _REFERENCE_JPEG_QUALITY = 85
 
+# Frame references also have to carry the **requested aspect ratio**: with a
+# frame present the provider derives the output geometry from that frame and
+# ignores the `aspect_ratio` field entirely (measured: 16:9 frame + 9:16 request
+# -> 1280x720 output, while the same request without a frame correctly returns
+# 496x864). So a frame that doesn't match the request silently vetoes it. The
+# frame is therefore center-cropped to the requested ratio here - cropping
+# rather than letterboxing, because bars baked into the first frame are content
+# the model would animate and keep. Tolerance below is loose enough that a
+# 1376x768 frame still counts as 16:9 (1.792 vs 1.778) and is left untouched.
+_ASPECT_RATIO_TOLERANCE = 0.02
+
 # Reference audio (multimodal reference-to-video, e.g. "lip-sync to this clip")
 # is base64-embedded into the submit body exactly like frame images, so it hits
 # the same provider-side connection drops once the body gets large. Unlike an
@@ -115,34 +126,107 @@ def video_gen_configured() -> bool:
     return bool(api_key and api_base and model)
 
 
-def _downscale_reference_image(path: Path) -> tuple[bytes, str]:
+def parse_aspect_ratio(value: str | None) -> float | None:
+    """``"9:16"`` -> ``0.5625`` (width/height); ``None`` when unusable.
+
+    Only the ``W:H`` form is understood - that is what every caller in this
+    project passes (the lab's cards, the composer presets). Anything else
+    (empty, ``"adaptive"``, ``"16x9"``, a zero denominator) returns ``None``,
+    which callers read as "no target ratio, don't touch the frame".
+    """
+    text = (value or "").strip()
+    if ":" not in text:
+        return None
+    left, _, right = text.partition(":")
+    try:
+        width, height = float(left), float(right)
+    except ValueError:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return width / height
+
+
+def _center_crop_to_ratio(img: "Image.Image", ratio: float) -> "Image.Image":
+    """Center-crop ``img`` to ``ratio`` (width/height), keeping the middle.
+
+    Center is the right anchor for the material this feature handles: generated
+    scenes and product shots put the subject near the middle, so a center crop
+    keeps it. A ratio already within :data:`_ASPECT_RATIO_TOLERANCE` is returned
+    untouched so an ordinary 16:9 frame is never needlessly re-encoded.
+    """
+    width, height = img.size
+    if height <= 0 or width <= 0:
+        return img
+    if abs((width / height) - ratio) < _ASPECT_RATIO_TOLERANCE:
+        return img
+    if width / height > ratio:
+        # Wider than the target: trim the sides.
+        new_width = max(1, round(height * ratio))
+        left = (width - new_width) // 2
+        return img.crop((left, 0, left + new_width, height))
+    # Taller than the target: trim top and bottom.
+    new_height = max(1, round(width / ratio))
+    top = (height - new_height) // 2
+    return img.crop((0, top, width, top + new_height))
+
+
+def _downscale_reference_image(
+    path: Path, target_ratio: float | None = None
+) -> tuple[bytes, str]:
     """Downscale + re-encode a local reference image as JPEG (see module-level
-    comment above _MAX_REFERENCE_DIMENSION for why)."""
+    comment above _MAX_REFERENCE_DIMENSION for why).
+
+    ``target_ratio`` (width/height) center-crops first, because a frame that
+    disagrees with the requested ``aspect_ratio`` overrides it at the provider
+    (see _ASPECT_RATIO_TOLERANCE). Crop before thumbnail so the output keeps the
+    requested shape while still bounded by _MAX_REFERENCE_DIMENSION.
+    """
     with Image.open(path) as img:
         img = img.convert("RGB")
+        if target_ratio:
+            cropped = _center_crop_to_ratio(img, target_ratio)
+            if cropped.size != img.size:
+                logger.info(
+                    "[generate_video] 首/尾帧按请求比例重新构图: %dx%d -> %dx%d",
+                    img.size[0], img.size[1], cropped.size[0], cropped.size[1],
+                )
+            img = cropped
         img.thumbnail((_MAX_REFERENCE_DIMENSION, _MAX_REFERENCE_DIMENSION), Image.LANCZOS)
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=_REFERENCE_JPEG_QUALITY)
         return buf.getvalue(), "image/jpeg"
 
 
-def _resolve_frame_reference(path_or_url: str) -> tuple[str | None, str | None]:
+def _resolve_frame_reference(
+    path_or_url: str, target_ratio: float | None = None
+) -> tuple[str | None, str | None]:
     """first_frame_path may be a real http(s) URL, an already-complete data:
     URI, or a local file path - resolved to a data: URI here (server-side)
     rather than asked of the calling agent, since a large base64 blob is not
     something an LLM can reliably reproduce byte-for-byte through its own
     generation.
+
+    ``target_ratio`` is honored only for a **local file**, since cropping a
+    remote http(s)/data: URI would mean downloading and re-encoding it here; a
+    remote frame is passed through untouched and may therefore win over the
+    requested ratio at the provider.
     """
     value = (path_or_url or "").strip()
     if not value:
         return None, None
     if value.startswith(("http://", "https://", "data:")):
+        if target_ratio:
+            logger.warning(
+                "[generate_video] 首/尾帧是远程 URL/data URI，无法在本端按请求比例重新构图，"
+                "成片比例可能由该帧决定而非 aspect_ratio"
+            )
         return value, None
     path = Path(value).expanduser()
     if not path.is_file():
         return None, f"[ERROR]: first_frame_path {value!r} is not a URL/data URI and no such file exists."
     try:
-        data, mime = _downscale_reference_image(path)
+        data, mime = _downscale_reference_image(path, target_ratio)
     except Exception:
         logger.exception("[generate_video] downscaling reference image failed, using raw file: %s", path)
         data = path.read_bytes()
@@ -312,7 +396,10 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
 
     Args:
         prompt: Text description of the video to generate.
-        aspect_ratio: e.g. "16:9", "9:16", "1:1".
+        aspect_ratio: e.g. "16:9", "9:16", "1:1". With a first/last frame this is
+            enforced by center-cropping that frame to the requested ratio, because
+            the provider otherwise derives the output geometry from the frame and
+            ignores this field.
         resolution: e.g. "480p", "720p", "1080p".
         duration_seconds: Clip length in seconds (model-dependent, typically 5-15).
         first_frame_path: Optional local file path, http(s) URL, or data: URI to
@@ -348,10 +435,14 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
         return "[ERROR]: prompt is required."
 
     frame_images: list[dict[str, Any]] = []
+    # 首/尾帧必须与请求的画面比例一致：服务商在有帧时按**帧的比例**决定成片
+    # 几何，aspect_ratio 字段会被整个忽略（实测 16:9 帧 + 9:16 请求 → 输出
+    # 1280x720）。所以这里把请求比例传给帧解析，由它对本地帧重新构图（居中裁切）。
+    target_ratio = parse_aspect_ratio(aspect_ratio)
     for path_or_url, frame_type in ((first_frame_path, "first_frame"), (last_frame_path, "last_frame")):
         if not path_or_url:
             continue
-        frame_data_uri, err = _resolve_frame_reference(path_or_url)
+        frame_data_uri, err = _resolve_frame_reference(path_or_url, target_ratio)
         if err:
             return err
         frame_images.append({"type": "image_url", "image_url": {"url": frame_data_uri}, "frame_type": frame_type})

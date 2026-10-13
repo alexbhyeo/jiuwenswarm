@@ -542,3 +542,189 @@ async def test_generate_video_oversized_audio_reference_fails_before_submit(
 
     assert result.startswith("[ERROR]:") and "reference_audio_path" in result
     assert requests_seen == []
+
+
+# ---------------------------------------------------------------------------
+# Requested aspect_ratio vs. the first/last frame
+#
+# With a frame in the request the provider derives the output geometry from that
+# frame and ignores ``aspect_ratio`` entirely (measured: 16:9 frame + 9:16
+# request -> 1280x720 output, while the identical request without a frame
+# correctly returned 496x864). The frame therefore has to be reframed to the
+# requested ratio, or the card's ratio pill is a lie.
+# ---------------------------------------------------------------------------
+
+
+def _write_image(path: Path, size: tuple[int, int], color: tuple[int, int, int] = (120, 140, 160)) -> Path:
+    from PIL import Image
+
+    Image.new("RGB", size, color).save(path)
+    return path
+
+
+def _decode_frame_size(data_uri: str) -> tuple[int, int]:
+    """Pull the embedded image back out of the data: URI and return its size -
+    the only way to assert what the provider actually receives."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    payload = data_uri.split(",", 1)[1]
+    with Image.open(io.BytesIO(base64.b64decode(payload))) as img:
+        return img.size
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("9:16", 9 / 16),
+        ("16:9", 16 / 9),
+        ("1:1", 1.0),
+        ("4:3", 4 / 3),
+    ],
+)
+def test_parse_aspect_ratio_understands_w_h(raw: str, expected: float) -> None:
+    assert vg.parse_aspect_ratio(raw) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("raw", ["", None, "adaptive", "16x9", "16:", ":9", "0:9", "16:0", "abc:def"])
+def test_parse_aspect_ratio_rejects_anything_else(raw: str | None) -> None:
+    """看不懂就当没有目标比例（返回 None）——绝不能拿一个瞎猜的比例去裁用户的帧。"""
+    assert vg.parse_aspect_ratio(raw) is None
+
+
+def test_local_frame_is_reframed_to_the_requested_ratio(tmp_path: Path) -> None:
+    landscape = _write_image(tmp_path / "wide.png", (1376, 768))
+
+    data_uri, error = vg._resolve_frame_reference(str(landscape), 9 / 16)
+
+    assert error is None and data_uri is not None
+    width, height = _decode_frame_size(data_uri)
+    assert width / height == pytest.approx(9 / 16, abs=0.01)
+
+
+def test_frame_matching_the_request_is_left_alone(tmp_path: Path) -> None:
+    """请求比例与帧本来一致时不做任何裁切——否则每一张普通 16:9 帧都会被白白
+    重新编码一次（1376x768 的 1.792 与 16:9 的 1.778 之差在容差内）。"""
+    landscape = _write_image(tmp_path / "wide.png", (1376, 768))
+
+    data_uri, _ = vg._resolve_frame_reference(str(landscape), 16 / 9)
+
+    width, height = _decode_frame_size(data_uri)
+    assert width / height == pytest.approx(1376 / 768, abs=0.02)
+    assert width > height
+
+
+def test_portrait_frame_is_reframed_to_a_landscape_request(tmp_path: Path) -> None:
+    """反方向也要成立：竖版帧 + 横版请求 → 成片是横版。"""
+    portrait = _write_image(tmp_path / "tall.png", (720, 1280))
+
+    data_uri, _ = vg._resolve_frame_reference(str(portrait), 16 / 9)
+
+    width, height = _decode_frame_size(data_uri)
+    assert width / height == pytest.approx(16 / 9, abs=0.01)
+    assert width > height
+
+
+def test_no_target_ratio_keeps_the_frame_untouched(tmp_path: Path) -> None:
+    landscape = _write_image(tmp_path / "wide.png", (1376, 768))
+
+    data_uri, _ = vg._resolve_frame_reference(str(landscape), None)
+
+    width, height = _decode_frame_size(data_uri)
+    assert (width, height) == (1280, 714)  # only the max-dimension bound applied
+
+
+def test_remote_frame_is_passed_through_untouched() -> None:
+    """远程 http(s)/data URI 帧不下载、不重编码，原样透传（并在日志里说明成片
+    比例可能由该帧决定）——不能为了裁切去抓一个远端文件。"""
+    url = "https://example.com/frame.png"
+
+    data_uri, error = vg._resolve_frame_reference(url, 9 / 16)
+
+    assert error is None
+    assert data_uri == url
+
+
+def test_unreadable_image_still_falls_back_to_raw_bytes(tmp_path: Path) -> None:
+    """PIL 打不开的载荷（既有测试用的假 PNG 就是这种）仍然要能发出去：
+    重新构图失败不能把整次生成变成错误。"""
+    broken = tmp_path / "broken.png"
+    broken.write_bytes(b"\x89PNG\r\n\x1a\nfakepngbytes")
+
+    data_uri, error = vg._resolve_frame_reference(str(broken), 9 / 16)
+
+    assert error is None
+    assert data_uri is not None and data_uri.startswith("data:image/png;base64,")
+
+
+@pytest.mark.asyncio
+async def test_generate_video_sends_a_frame_matching_the_requested_ratio(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """端到端那一条：请求 9:16 时，**发出去的帧**必须已经是 9:16——否则服务商
+    按帧的比例出片，卡片上的比例就是摆设（这正是线上复现出来的 bug）。"""
+    _set_video_model_config(monkeypatch)
+    frame = _write_image(tmp_path / "wide.png", (1376, 768))
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        if request.url.path == "/api/v1/videos" and request.method == "POST":
+            return httpx.Response(200, json={"id": "job-ratio", "status": "completed"})
+        if request.url.path == "/api/v1/videos/job-ratio/content":
+            return httpx.Response(200, content=b"video-bytes")
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    _patch_async_client(monkeypatch, handler)
+
+    result = await generate_video(
+        prompt="animate this scene",
+        aspect_ratio="9:16",
+        first_frame_path=str(frame),
+        save_dir=str(tmp_path),
+    )
+
+    assert "Video generated successfully!" in result
+    body = json.loads(requests_seen[0].content)
+    assert body["aspect_ratio"] == "9:16"  # still sent for the no-frame case
+    width, height = _decode_frame_size(body["frame_images"][0]["image_url"]["url"])
+    assert width / height == pytest.approx(9 / 16, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_generate_video_reframes_both_frames_to_the_same_ratio(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """首尾帧必须被裁到**同一个**比例，否则首尾插值出来的画面会一宽一窄。"""
+    _set_video_model_config(monkeypatch)
+    first = _write_image(tmp_path / "first.png", (1376, 768))
+    last = _write_image(tmp_path / "last.png", (720, 1280))
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        if request.url.path == "/api/v1/videos" and request.method == "POST":
+            return httpx.Response(200, json={"id": "job-both", "status": "completed"})
+        if request.url.path == "/api/v1/videos/job-both/content":
+            return httpx.Response(200, content=b"video-bytes")
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    _patch_async_client(monkeypatch, handler)
+
+    result = await generate_video(
+        prompt="transition",
+        aspect_ratio="9:16",
+        first_frame_path=str(first),
+        last_frame_path=str(last),
+        save_dir=str(tmp_path),
+    )
+
+    assert "Video generated successfully!" in result
+    frames = json.loads(requests_seen[0].content)["frame_images"]
+    assert [f["frame_type"] for f in frames] == ["first_frame", "last_frame"]
+    for frame in frames:
+        width, height = _decode_frame_size(frame["image_url"]["url"])
+        assert width / height == pytest.approx(9 / 16, abs=0.01), frame["frame_type"]
+
