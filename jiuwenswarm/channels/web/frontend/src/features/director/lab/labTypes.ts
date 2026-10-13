@@ -10,7 +10,8 @@ export type ProcessKind =
   | 'imageRef'
   | 'text2audio'
   | 'video2audio'
-  | 'imageAudio2video';
+  | 'imageAudio2video'
+  | 'video2video';
 
 /** 处理节点的产物类型。audio 走 generate_audio（文生音频）：与 image/video
  *  一样是一张处理卡片 + 一张输出节点，只是输出节点渲染成音频播放器。
@@ -25,6 +26,9 @@ export const PROCESS_KIND_MODE: Record<ProcessKind, ProcessMode> = {
   text2audio: 'audio',
   video2audio: 'audio',
   imageAudio2video: 'video',
+  // 视频生视频的产物是视频——因此它自动获得"有声音/无声音"选项
+  // （见 supportsAudioOutput），音轨默认沿用（见 defaultGenerateAudio）。
+  video2video: 'video',
 };
 
 /** 每种处理节点渲染几个不同的图片输入端口——与后端 generate_video（首帧+
@@ -43,6 +47,9 @@ export const PROCESS_KIND_MAX_IMAGES: Record<ProcessKind, number> = {
   // 图音生视频的参考图是"多模态参考"里的图片参考（不是首帧），一个端口
   // 就够——参考音频另算，见 PROCESS_KIND_MAX_AUDIOS。
   imageAudio2video: 1,
+  // 视频生视频不吃图片（源片通过视频端口/HTTPS 直链进来），重绘完全由
+  // 提示词驱动，见 PROCESS_KIND_MAX_VIDEOS。
+  video2video: 0,
 };
 
 /** 每种处理节点渲染几个音频输入端口。目前只有 imageAudio2video
@@ -56,6 +63,8 @@ export const PROCESS_KIND_MAX_AUDIOS: Record<ProcessKind, number> = {
   text2audio: 0,
   video2audio: 0,
   imageAudio2video: 1,
+  // 源片（视频）本身的音轨就是"音频输入"，没有第二条音频来路。
+  video2video: 0,
 };
 
 /** "有声音/无声音"这个成片选项适用于哪些卡片。
@@ -73,14 +82,18 @@ export function supportsAudioOutput(kind: ProcessKind): boolean {
  *  只有**输入本身就是音频**的卡片（图音生视频）默认开声——它的输入就是
  *  一段音轨，默认给成片配上最符合预期。文生视频/图生视频的输入是文字或
  *  图片，历史上产出的都是无声片段，默认沿用"无声音"以免悄悄改变已有
- *  画布的行为；想要音轨的用户在卡片上显式选"有声音"。 */
+ *  画布的行为；想要音轨的用户在卡片上显式选"有声音"。
+ *
+ *  视频生视频的输入是一段**带音轨的源片**，默认开声——重绘画面不该顺手把
+ *  源片的声音抹掉，静音是用户显式选择的结果。 */
 export function defaultGenerateAudio(kind: ProcessKind): boolean {
+  if (kind === 'video2video') return true;
   return PROCESS_KIND_MAX_AUDIOS[kind] > 0;
 }
 
-/** 每种处理节点渲染几个视频输入端口。目前只有 video2audio（视频生音频）
- *  需要一路输入视频（先用视频理解写成解说文案，再用 TTS 配音），其余
- *  卡片都不吃视频。 */
+/** 每种处理节点渲染几个视频输入端口。目前 video2audio（视频生音频，先用视频
+ *  理解写成解说文案再用 TTS 配音）与 video2video（视频生视频，拿源片当参考
+ *  重绘）各需要一路输入视频，其余卡片都不吃视频。 */
 export const PROCESS_KIND_MAX_VIDEOS: Record<ProcessKind, number> = {
   text2image: 0,
   text2video: 0,
@@ -89,6 +102,8 @@ export const PROCESS_KIND_MAX_VIDEOS: Record<ProcessKind, number> = {
   text2audio: 0,
   video2audio: 1,
   imageAudio2video: 0,
+  // 视频生视频必须拿到一路源视频——端口连线，或卡片上填的 HTTPS 直链。
+  video2video: 1,
 };
 
 /** 哪些处理节点的 image1 端口允许同时接多条连线——imageRef（"图片参考"）
@@ -150,9 +165,10 @@ export interface ProcessNodeData {
   /** 仅 text2audio（文生音频）使用：TTS 音色名。旧数据没有这个字段时按
    *  DEFAULT_AUDIO_VOICE 处理。 */
   voice?: string;
-  /** 视频类卡片（文生视频 / 图生视频 / 图音生视频）的"声音"选项：成片是否带
-   *  音轨。两种卡片的音轨来源不同——
+  /** 视频类卡片（文生视频 / 图生视频 / 图音生视频 / 视频生视频）的"声音"选项：
+ *  成片是否带音轨。各种卡片的音轨来源不同——
    *  * imageAudio2video：参考音频既是口型同步的依据、也是成片音轨的来源；
+   *  * video2video：源片自带的音轨；选"无声音"就是只要画面；
    *  * text2video / image2video：没有参考音频，选"有声音"就是让生成模型
    *    自己配一条音轨（环境音/人声等），选"无声音"则只要画面。
    *  所以取值由卡片上的显式选项决定，见 supportsAudioOutput / defaultGenerateAudio
@@ -163,6 +179,12 @@ export interface ProcessNodeData {
    *  对象存储里的 wav）时，不必先把它上传成素材再连线。非空时优先于端口
    *  连线（见 ProcessNode 的 audioSourceInUse）。 */
   audioUrl?: string;
+  /** 仅 video2video（视频生视频）使用：源视频的 HTTPS 直链，作为"源视频"
+   *  端口连线的替代输入。生视频接口只接受 **HTTPS** 的 video_url 引用
+   *  （data: URI 与本地文件一律被拒），所以素材库里连过来的本地片段送不进
+   *  去——那种情况后端会明确报错，而不是让用户在生成失败里猜原因。非空时
+   *  优先于端口连线（同 audioUrl 的取舍，避免"连了素材却在用链接"）。 */
+  videoUrl?: string;
   /** 一次"生成"要产出几份独立结果（1-5），每份各自成一个输出节点，从
    *  同一个 "out" 端口扇出多条连线——不是同一份结果的多个帧，而是同样的
    *  提示词/参数各自独立生成 N 次，供用户挑选。旧数据没有这个字段时按 1

@@ -313,6 +313,7 @@ Lab process card kinds (`labTypes.ts`):
 | `text2audio` | audio | 0 | 0 | 0 | Text-to-speech (`generate_audio`). Text-only: no reference ports, and the params popover swaps aspect/resolution/duration for a voice picker. Its output node is an `audio` node wrapping `<audio controls>`. |
 | `video2audio` | audio | 0 | 1 | 0 | 视频生音频: chains two existing capabilities — `video_understanding` writes a narration script from the connected video, then `generate_audio` speaks it. The `video1` port accepts video nodes only, and the optional text node's content is appended to the narration prompt as extra requirements. Its persisted asset is an **`audio`** asset (not `video2audio`) whose `params` carry `script` / `input_video_path`; `buildFlowFromChat` uses `input_video_path` to redraw the dependency edge. Needs **both** the 语音生成 and 视频理解 slots configured. On the wire it is its **own `mode`**: the Lab sends `mode="video2audio"` explicitly (a plain `mode="audio"` would take the TTS-only branch and feed the empty prompt straight to `generate_audio`), and the backend also normalises `mode="audio"` + an input video to it so no client can land in the wrong branch. |
 | `imageAudio2video` | video | 1 | 0 | 1 | 图音生视频: one reference-to-video call with **both** references in `input_references` — the image as `image_url` (deliberately *not* a first frame: OpenRouter drops `input_references` when `frame_images` is also present) and the audio as `audio_url`, which the model lip-syncs to. The `audio1` port accepts audio nodes only. Its own `mode` on the wire (`image_audio2video`); the persisted asset is a **`video`** asset whose `params` carry `reference_image_path` / `input_audio_path` / `generate_audio`, and `buildFlowFromChat` redraws both dependency edges from those. The card exposes a 有声音/无声音 picker (`generateAudio`) because Seedance returns a silent clip unless the request asks for audio output, plus an 音频链接 text field: a public HTTPS audio URL can be typed directly as the reference instead of wiring an audio clip, in which case it wins (`input_audio_url` on the wire, `input_audio_path` in `params`) and the 参考音频 row shows 链接 instead of ✓. The field exists because the app can't host local files publicly — the provider must fetch the audio itself. Other provider constraints: OpenRouter only accepts an **HTTPS URL** for an audio reference (base64/data URIs are rejected), and BytePlus rejects reference images containing real people. |
+| `video2video` | video | 0 | 1 | 0 | 视频生视频: one reference-to-video call whose reference is **the source clip itself** (`video_url` in `input_references`, see `_resolve_video_reference`) — the model re-renders the clip per the prompt while keeping its subject and motion. The `video1` port accepts video nodes only, and the prompt is **required** (it is the whole description of the intended change). Its own `mode` on the wire (`video2video`); the persisted asset is a **`video`** asset whose `params` carry `input_video_path` / `generate_audio`, and `buildFlowFromChat` restores either the 视频链接 field (HTTPS input) or the dependency edge (local input). Audio defaults to **有声音** (`defaultGenerateAudio`) so re-rendering a picture doesn't silently mute the source clip, with a source-specific hint string. **Only a public HTTPS URL can actually be generated from**: the provider fetches reference videos itself and rejects local files / data: URIs, so a wired clip fails fast with an actionable 视频链接 message instead of a wasted upload. |
 
 Port capacity is declared by `PROCESS_KIND_MAX_IMAGES` / `PROCESS_KIND_MAX_VIDEOS` /
 `PROCESS_KIND_MAX_AUDIOS`,
@@ -619,6 +620,23 @@ exactly what the file looks like".
   an ordinary 16:9 frame is never needlessly re-encoded; a **remote** http(s)/
   data-URI frame is passed through untouched (it is not downloaded here) and logs
   a warning that the frame may still win.
+- **Reference audio and video must be HTTPS URLs the provider fetches itself.**
+  Both `audio_url` and `video_url` references are fetched server-side by the
+  provider, which rejects every non-HTTPS address (`Only HTTPS URLs are allowed`,
+  verified against the live API for both). Nothing in this app hosts local files
+  publicly, so a clip wired in from the asset library cannot be sent as-is:
+  `video2video` fails fast with a message pointing at the 视频链接 field rather
+  than embedding a multi-MB clip as a data URI only to be refused. Only the
+  `image_url` references have a local-file path (base64 downscaling).
+- **`video2video` follows the source clip's length, not the duration pill.**
+  Measured on Seedance 2.0 Fast via OpenRouter with a 5.04 s / 864×496 source
+  clip: a 5 s request came back 5.04 s, so the pill is a hint the model treats as
+  the source clip's own rhythm. Geometry, by contrast, **is** honoured here —
+  there are no `frame_images` to override it, so `1280x720` came back as asked
+  (the same clip via 首帧 would have been re-derived from the frame). The source
+  clip had **no** audio track and `generate_audio=true` still produced a real
+  AAC track (mean −18.1 dB), i.e. the flag means "the output has audio", not
+  "copy the source's audio" — which is why the card's hint text covers both.
 
 ---
 

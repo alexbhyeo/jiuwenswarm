@@ -52,8 +52,13 @@ function timerKey(nodeId: string, slotIndex: number): string {
 }
 
 const IMAGE_PROCESS_KINDS: ProcessKind[] = ['text2image', 'imageRef'];
-const VIDEO_PROCESS_KINDS: ProcessKind[] = ['text2video', 'image2video', 'imageAudio2video'];
+const VIDEO_PROCESS_KINDS: ProcessKind[] = ['text2video', 'image2video', 'imageAudio2video', 'video2video'];
 const AUDIO_PROCESS_KINDS: ProcessKind[] = ['text2audio', 'video2audio'];
+
+/** 是不是一条能被服务商直接抓取的远端地址（相对于本地文件路径、data: URI）。
+ *  生成接口只收 HTTPS 的参考地址，本地文件送不进去，所以重构流程图时要用它
+ *  区分"还原成一条素材连线"还是"填回卡片上的链接输入框"。 */
+const isRemoteUrl = (value: string): boolean => /^https?:\/\//i.test(value);
 
 // director.generate 的客户端超时（GENERATE_TIMEOUT_MS，见 directorApi.ts）
 // 只是前端等不下去了主动放弃——WS 请求本身没有取消机制，后端那次
@@ -538,7 +543,9 @@ function LabCanvasInner() {
               ? 'video2audio'
               : data.kind === 'imageAudio2video'
                 ? 'image_audio2video'
-                : mode,
+                : data.kind === 'video2video'
+                  ? 'video2video'
+                  : mode,
           prompt,
           aspectRatio: data.aspectRatio,
           resolution: data.resolution,
@@ -560,6 +567,15 @@ function LabCanvasInner() {
           if (audioUrl) params.inputAudioUrl = audioUrl;
           else if (resolved.audio1?.assetId) params.inputAudioAssetId = resolved.audio1.assetId;
           // 卡片上的"有声音/无声音"选项：未设置过按有声音处理（与后端默认一致）。
+          params.generateAudio = data.generateAudio !== false;
+        } else if (data.kind === 'video2video') {
+          // 视频生视频：源片优先用卡片上填的 HTTPS 链接（与卡片上"输入视频"
+          // 行的显示一致），没填链接才回落到端口连进来的视频素材。
+          const videoUrl = (data.videoUrl ?? '').trim();
+          if (videoUrl) params.inputVideoUrl = videoUrl;
+          else if (resolved.video1?.assetId) params.inputVideoAssetId = resolved.video1.assetId;
+          // 视频生视频的"声音"选项默认开声（见 defaultGenerateAudio）：源片
+          // 自带的音轨不该在重绘画面时被顺手抹掉。
           params.generateAudio = data.generateAudio !== false;
         } else if (mode === 'video') {
           if (resolved.image1?.assetId) params.firstFrameAssetId = resolved.image1.assetId;
@@ -844,7 +860,8 @@ function LabCanvasInner() {
       const firstFramePath = typeof params.first_frame_path === 'string' ? params.first_frame_path : null;
       const lastFramePath = typeof params.last_frame_path === 'string' ? params.last_frame_path : null;
       // 视频生音频把自己的输入视频路径也存进了 params，这里照旧还原成一条
-      // 依赖连线（与首帧/尾帧/参考图同一套路子）。
+      // 依赖连线（与首帧/尾帧/参考图同一套路子）；视频生视频走同一个字段，
+      // 区别只在产物类型（video vs audio），见下面的 kind 判定。
       const inputVideoPath = typeof params.input_video_path === 'string' ? params.input_video_path : null;
       // 图音生视频把参考图和参考音频的路径也存了下来——两者都要还原成
       // 依赖连线，否则重建出来的流程图会退化成一张没有输入的"文生视频"。
@@ -857,11 +874,13 @@ function LabCanvasInner() {
           ? 'video2audio'
           : 'text2audio'
         : isVideo
-          ? inputAudioPath
-            ? 'imageAudio2video'
-            : firstFramePath || lastFramePath
-              ? 'image2video'
-              : 'text2video'
+          ? inputVideoPath
+            ? 'video2video'
+            : inputAudioPath
+              ? 'imageAudio2video'
+              : firstFramePath || lastFramePath
+                ? 'image2video'
+                : 'text2video'
           : referenceImagePaths.length > 0
             ? 'imageRef'
             : 'text2image';
@@ -983,6 +1002,12 @@ function LabCanvasInner() {
           kind === 'imageAudio2video' && typeof params.input_audio_path === 'string' && /^https?:\/\//i.test(params.input_audio_path)
             ? params.input_audio_path
             : '',
+        // 源片是一条 HTTPS 链接时没有可还原的素材连线，把链接填回卡片上；
+        // 本地片段则由下面的 inputVideoPath 还原成一条连线。
+        videoUrl:
+          kind === 'video2video' && typeof params.input_video_path === 'string' && isRemoteUrl(params.input_video_path)
+            ? params.input_video_path
+            : '',
       };
       addNode({ id: processNodeId, type: 'process', position: { x: processX, y }, data: processData });
       setEdges((eds) =>
@@ -1012,9 +1037,10 @@ function LabCanvasInner() {
           addEdge({ id: nextNodeId('edge'), source: refId, sourceHandle: 'image', target: processNodeId, targetHandle: 'image2' }, eds)
         );
       }
-      if (inputVideoPath) {
+      if (inputVideoPath && !isRemoteUrl(inputVideoPath)) {
         // 视频生音频的输入视频：复用那路视频素材自己的卡片，连到 video1
-        // 端口——与首帧/尾帧/参考图同一套路子。
+        // 端口——与首帧/尾帧/参考图同一套路子。视频生视频填的是 HTTPS 链接
+        // 时没有素材卡片可复用，链接已经填回卡片上，不再多摆一个节点。
         const refId = ensureVideoNode(inputVideoPath, refX, y);
         setEdges((eds) =>
           addEdge({ id: nextNodeId('edge'), source: refId, sourceHandle: 'video', target: processNodeId, targetHandle: 'video1' }, eds)

@@ -270,6 +270,29 @@ def _resolve_audio_reference(path_or_url: str) -> tuple[str | None, str | None]:
     return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}", None
 
 
+def _resolve_video_reference(path_or_url: str) -> tuple[str | None, str | None]:
+    """Resolve a reference video to the HTTPS URL the provider has to fetch.
+
+    Unlike images and audio there is deliberately **no** local-file / data: URI
+    fallback here: the provider fetches reference videos itself and rejects every
+    non-HTTPS address with "Invalid reference URL: ... Only HTTPS URLs are
+    allowed" (verified against the live API). Embedding a clip as base64 would
+    only produce the same rejection after a much larger upload, so a local path
+    fails fast with an actionable message instead.
+    """
+    value = (path_or_url or "").strip()
+    if not value:
+        return None, None
+    if value.startswith("https://"):
+        return value, None
+    return None, (
+        f"[ERROR]: reference_video_path {value[:60]!r} is not a usable reference video: the "
+        "provider downloads reference videos itself and only accepts publicly reachable "
+        "https:// URLs (local files, data: URIs and plain http:// are rejected with "
+        "'Only HTTPS URLs are allowed'). Host the clip somewhere public and pass that URL."
+    )
+
+
 def _resolve_save_path(save_dir: str | None, filename: str) -> Path:
     root = Path(save_dir).expanduser() if save_dir else (get_agent_workspace_dir() / "generated_videos")
     root.mkdir(parents=True, exist_ok=True)
@@ -375,6 +398,7 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
     last_frame_path: str | None = None,
     reference_image_path: str | None = None,
     reference_audio_path: str | None = None,
+    reference_video_path: str | None = None,
     generate_audio: bool = False,
     save_dir: str | None = None,
 ) -> str:
@@ -415,6 +439,12 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
             of an audio clip used as a reference - models that support it (BytePlus
             Seedance 2.0 and newer) lip-sync the generated video to this audio.
             References are only honored by providers that support them.
+        reference_video_path: Optional **https:// URL** of a video clip to restyle
+            (video-to-video): the model re-renders the clip according to prompt
+            while keeping its subject and motion. Must be a publicly reachable
+            HTTPS URL - unlike the image/audio references there is no local-file
+            fallback, because the provider fetches it itself and rejects every
+            non-HTTPS address.
         generate_audio: Whether to request native audio generation, if supported
             by the model. Leave false when reference_audio_path supplies the audio.
         save_dir: Optional directory to save the video (defaults to the agent
@@ -462,17 +492,33 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
         reference_audio_data_uri, err = _resolve_audio_reference(reference_audio_path)
         if err:
             return err
+    # 参考视频走 video_url 引用（视频生视频）：与图片/音频参考并列放在
+    # input_references 里，服务商自己去抓这条地址。
+    reference_video_url: str | None = None
+    if reference_video_path:
+        reference_video_url, err = _resolve_video_reference(reference_video_path)
+        if err:
+            return err
 
     input_references: list[dict[str, Any]] = []
     if reference_image_data_uri:
         input_references.append({"type": "image_url", "image_url": {"url": reference_image_data_uri}})
     if reference_audio_data_uri:
         input_references.append({"type": "audio_url", "audio_url": {"url": reference_audio_data_uri}})
+    if reference_video_url:
+        input_references.append({"type": "video_url", "video_url": {"url": reference_video_url}})
 
     # MiniMax (v2 task API) and BytePlus ModelArk (Seedance, contents/generations/tasks)
     # are not OpenRouter's /videos API, so they have their own backends.
     backend = gen_toolkits.detect_backend("VIDEO_GEN_PROTOCOL", api_base)
     if backend:
+        # 这些专用后端（MiniMax / BytePlus ModelArk）的 VideoRequest 没有参考视频
+        # 这一路，静默丢掉就等于用户填了地址却拿回一段和源片无关的视频。
+        if reference_video_url:
+            return (
+                "[ERROR]: reference_video_path (video-to-video) is only supported by the "
+                f"OpenRouter /videos backend, but this deployment uses {backend!r}."
+            )
         target = gen_toolkits.GenerationTarget(backend, api_key, api_base, model)
         request = gen_toolkits.VideoRequest(
             prompt,

@@ -82,7 +82,20 @@ logger = logging.getLogger(__name__)
 # 走线上单独一个模式名，与 video2audio 的待遇一致。
 _MODE_IMAGE_AUDIO2VIDEO = "image_audio2video"
 
-_SUPPORTED_MODES = ("video", "image", "audio", "video2audio", "character", _MODE_IMAGE_AUDIO2VIDEO)
+# 视频生视频 = 一次 reference-to-video 调用，参考的是**源片本身**：模型按提示词
+# 重绘画面，保留源片的主体与运动。与图音生视频一样有自己独立的连线语义（源片
+# 走 video1 端口 / 视频链接），所以走线上单独一个模式名。
+_MODE_VIDEO2VIDEO = "video2video"
+
+_SUPPORTED_MODES = (
+    "video",
+    "image",
+    "audio",
+    "video2audio",
+    "character",
+    _MODE_IMAGE_AUDIO2VIDEO,
+    _MODE_VIDEO2VIDEO,
+)
 
 # 两种"任务还在跑"的文案都要能取回 job_id：generate_video 自己在预算内没等到
 # 完成时返回 "Video job {id} submitted and still {status} after {elapsed}s"，
@@ -543,6 +556,7 @@ class DirectorManager:
             else []
         )
         input_video_asset_id = str(params.get("input_video_asset_id") or "").strip()
+        input_video_url = str(params.get("input_video_url") or "").strip()
         input_audio_asset_id = str(params.get("input_audio_asset_id") or "").strip()
         input_audio_url = str(params.get("input_audio_url") or "").strip()
         # 显式连线本身就是一次完整的请求——视频生音频只连了一路视频、没写
@@ -586,7 +600,7 @@ class DirectorManager:
         aspect_ratio = str(params.get("aspect_ratio") or "16:9")
         resolution = str(
             params.get("resolution")
-            or ("720p" if mode in ("video", _MODE_IMAGE_AUDIO2VIDEO) else "512")
+            or ("720p" if mode in ("video", _MODE_IMAGE_AUDIO2VIDEO, _MODE_VIDEO2VIDEO) else "512")
         )
         save_dir = str(get_project_assets_dir(project_id))
 
@@ -635,6 +649,78 @@ class DirectorManager:
                 duration_seconds=duration_seconds,
                 first_frame_path=first_frame_path,
                 last_frame_path=last_frame_path,
+                generate_audio=generate_audio_flag,
+                save_dir=save_dir,
+            )
+        elif mode == _MODE_VIDEO2VIDEO:
+            # 视频生视频 = 一次 reference-to-video 调用，参考的是**源片本身**：
+            # 模型按提示词重绘画面，保留源片的主体与运动。源片有两条来路——
+            # 卡片上填的公网 HTTPS 直链，或端口连进来的视频素材；填了链接就以
+            # 链接为准（卡片上也会显示当前用的是哪一路），与图音生视频的
+            # 音频链接完全同构。
+            if not (video_gen_enabled() and video_gen_configured()):
+                raise DirectorRpcError("NOT_CONFIGURED", "视频生成未配置，请先在设置中配置「视频处理」")
+            # 提示词就是"要改成什么样"的全部说明，这张卡片没有它就没有生成目标
+            # （不能像文生视频那样回落到一句默认提示词）。
+            if not prompt:
+                raise DirectorRpcError("INVALID_PARAMS", "视频生视频需要填写提示词，说明要把这段视频改成什么样")
+            if input_video_url:
+                if not input_video_url.lower().startswith("https://"):
+                    raise DirectorRpcError(
+                        "INVALID_PARAMS",
+                        "视频链接必须是 https 开头的可公网访问地址（生成接口只接受 HTTPS 直链）",
+                    )
+                source_video_path = input_video_url
+            else:
+                # 连进来的本地素材目前送不出去：参考视频由服务商自己去抓，只认
+                # HTTPS 直链，本地文件（以及 data: URI）一律被拒。在能明确说明
+                # 原因的地方就明确说，好过让用户对着服务商那句
+                # "Only HTTPS URLs are allowed" 猜是哪一步出了问题。
+                wired_asset = next(
+                    (
+                        asset
+                        for asset in project.assets
+                        if asset.asset_id == input_video_asset_id
+                        and asset.type == "video"
+                        and asset.status == "ready"
+                        and asset.file_path
+                    ),
+                    None,
+                )
+                if wired_asset is None:
+                    raise DirectorRpcError(
+                        "INVALID_PARAMS", "视频生视频需要先连接一个已就绪的视频素材，或填写视频链接"
+                    )
+                source_label = (
+                    wired_asset.name or wired_asset.prompt or Path(str(wired_asset.file_path)).name
+                )
+                raise DirectorRpcError(
+                    "INVALID_PARAMS",
+                    f"视频生视频目前只认公网 HTTPS 的视频链接，本地素材「{source_label}」无法直接送给生成接口。"
+                    "请先把这段视频放到可公网访问的地址（如对象存储），再把链接填到卡片的「视频链接」里。",
+                )
+            duration_seconds = int(params.get("duration_seconds") or 15)
+            # 成片是否带音轨由卡片上的选项决定；没带这个字段（旧画布数据、或别的
+            # 调用方）时按"有声音"处理——这张卡片的输入是一段带音轨的源片，重绘
+            # 画面不该顺手把源片的声音抹掉。
+            raw_generate_audio = params.get("generate_audio")
+            generate_audio_flag = True if raw_generate_audio is None else bool(raw_generate_audio)
+            # 源片路径记进 params：既供事后追溯"这段成片是从哪条源片改出来的"，
+            # 也供前端 buildFlowFromChat 还原输入（链接还原成卡片上的输入框，
+            # 本地素材还原成一条依赖连线，与 input_video_path 同一套路子）。
+            gen_params = {
+                "aspect_ratio": aspect_ratio,
+                "resolution": resolution,
+                "duration_seconds": duration_seconds,
+                "generate_audio": generate_audio_flag,
+                "input_video_path": source_video_path,
+            }
+            result_str = await generate_video._func(
+                prompt=prompt,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                duration_seconds=duration_seconds,
+                reference_video_path=source_video_path,
                 generate_audio=generate_audio_flag,
                 save_dir=save_dir,
             )
@@ -832,6 +918,10 @@ class DirectorManager:
         if mode == "video2audio":
             asset_type = "audio"
         elif mode == _MODE_IMAGE_AUDIO2VIDEO:
+            asset_type = "video"
+        elif mode == _MODE_VIDEO2VIDEO:
+            # 视频生视频的产物当然还是视频——前端按 video/image/audio/character
+            # 四类分栏展示，直接拿 mode 当 type 会漏出一类没人认识的素材。
             asset_type = "video"
         else:
             asset_type = mode

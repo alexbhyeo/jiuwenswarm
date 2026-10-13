@@ -155,9 +155,13 @@
       "inputVideo": "输入视频",
       "inputAudio": "参考音频",
       "audioFromUrl": "链接",
+      "videoFromUrl": "链接",
       "audioUrlLabel": "音频链接",
       "audioUrlPlaceholder": "https://…/audio.wav",
       "audioUrlHint": "填了链接就用它，替代「参考音频」端口连线；需是可直接访问的 HTTPS 地址。",
+      "videoUrlLabel": "视频链接",
+      "videoUrlPlaceholder": "https://…/clip.mp4",
+      "videoUrlHint": "填了链接就用它，替代「输入视频」端口连线。生视频接口只认 HTTPS 直链（本地素材无法上传给它），所以素材库里连进来的片段要在这一步换成可公网访问的地址。",
       "audioOutputLabel": "声音",
       "audioOn": "有声音",
       "audioOff": "无声音",
@@ -171,9 +175,11 @@
         "imageRef": "图生图",
         "text2audio": "文生音频",
         "video2audio": "视频生音频",
-        "imageAudio2video": "图音生视频"
+        "imageAudio2video": "图音生视频",
+        "video2video": "视频生视频"
       },
       "audioOutputFromRefHint": "成片是否带上连进来的参考音频；关掉就只保留画面。",
+      "audioOutputFromSourceHint": "成片是否带音轨：源片本身有声音就保留它，源片本身没有声音则由生成模型配一条。关掉就只保留画面。",
       "audioOutputGeneratedHint": "「有声音」让生成模型自己配一条音轨（环境音/人声）；「无声音」只出画面。"
     },
     "edit": {

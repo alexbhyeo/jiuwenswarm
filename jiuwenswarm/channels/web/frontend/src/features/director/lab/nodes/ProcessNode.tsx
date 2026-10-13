@@ -67,8 +67,8 @@ function useConnectedImages(nodeId: string, handleId: string): { assetId: string
   });
 }
 
-/** video2audio（视频生音频）的 video1 端口：取那一路输入视频。与
- *  useConnectedImage 同构，只是读的是视频输出节点的 data。 */
+/** video2audio（视频生音频）与 video2video（视频生视频）的 video1 端口：取
+ *  那一路输入视频。与 useConnectedImage 同构，只是读的是视频输出节点的 data。 */
 function useConnectedVideo(nodeId: string, handleId: string): { assetId: string | null; filePath: string } | null {
   const connections = useNodeConnections({ id: nodeId, handleType: 'target', handleId });
   const sourceId = connections[0]?.source;
@@ -112,6 +112,15 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   const hasAudioUrl = audioUrl.length > 0;
   const audioConnected = !!audio1;
 
+  // 源视频同理：video2video 的源片可以从"源视频"端口连进来，也可以直接填
+  // 一条 HTTPS 地址（生视频接口只收 HTTPS 的 video_url 引用，本地素材送不
+  // 进去，所以这条链接不是可有可无的便利功能，而是本地片段唯一可行的替代）。
+  const videoUrl = (data.videoUrl ?? '').trim();
+  const hasVideoUrl = videoUrl.length > 0;
+  // "视频链接"只有 video2video 有——video2audio 的输入视频是本地做理解用的，
+  // 不发给生视频接口，给个填了也没人读的输入框只会误导用户。
+  const hasVideoUrlOption = data.kind === 'video2video';
+
   const requiresImage = maxImages > 0;
   // 视频生音频必须先连一路视频（解说文案是从它写出来的）；文本节点可选，
   // 连了就当作用户对解说的额外要求。
@@ -120,11 +129,15 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   // 链接都算，两条都没有时这张卡片就不再是"图音生视频"了。
   const requiresAudio = maxAudios > 0;
   const hasAnyImage = isMultiRef ? images.length > 0 : !!image1;
+  // 视频生视频"改成什么样"完全由提示词指定，没有提示词就没有生成目标，
+  // 所以这张卡片的提示词是必填的（其余卡片允许只靠输入素材出片）。
+  const requiresPrompt = data.kind === 'video2video';
   const canGenerate =
     data.status !== 'generating' &&
     (!requiresImage || hasAnyImage) &&
-    (!requiresVideo || !!video1) &&
+    (!requiresVideo || !!video1 || (hasVideoUrlOption && hasVideoUrl)) &&
     (!requiresAudio || audioConnected || hasAudioUrl) &&
+    (!requiresPrompt || text.trim().length > 0) &&
     (text.trim().length > 0 || hasAnyImage || !!video1 || audioConnected || hasAudioUrl);
 
   const [paramsOpen, setParamsOpen] = useState(false);
@@ -157,9 +170,14 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   const audioOutput = data.generateAudio !== false;
   const audioOutputLabel = t(audioOutput ? 'director.lab.audioOn' : 'director.lab.audioOff');
   // 文生视频/图生视频没有参考音频，"有声音"的含义是让生成模型自己配一条音轨；
-  // 图音生视频的音轨来自连进来的参考音频。两者的说明文案不同。
+  // 图音生视频的音轨来自连进来的参考音频；视频生视频的音轨来自源片本身。三者
+  // 的说明文案不同。
   const audioHintKey =
-    maxAudios >= 1 ? 'director.lab.audioOutputFromRefHint' : 'director.lab.audioOutputGeneratedHint';
+    data.kind === 'video2video'
+      ? 'director.lab.audioOutputFromSourceHint'
+      : maxAudios >= 1
+        ? 'director.lab.audioOutputFromRefHint'
+        : 'director.lab.audioOutputGeneratedHint';
 
   return (
     <div className={`lab-node lab-node--process lab-node--process-${data.kind}`}>
@@ -203,7 +221,13 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
             <Handle type="target" position={Position.Left} id="video1" />
             <span className="lab-node-input-dot" />
             {t('director.lab.inputVideo')}
-            {video1 && <span className="lab-node-input-filled">✓</span>}
+            {hasVideoUrl ? (
+              <span className="lab-node-input-filled" title={videoUrl}>
+                {t('director.lab.videoFromUrl')}
+              </span>
+            ) : (
+              video1 && <span className="lab-node-input-filled">✓</span>
+            )}
           </div>
         )}
         {maxAudios >= 1 && (
@@ -349,6 +373,24 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
                   data-testid="director-lab-audio-url-input"
                 />
                 <div className="lab-node-params-popover-hint">{t('director.lab.audioUrlHint')}</div>
+              </div>
+            )}
+
+            {hasVideoUrlOption && (
+              <div className="lab-node-params-popover-section">
+                <div className="lab-node-params-popover-label">{t('director.lab.videoUrlLabel')}</div>
+                <input
+                  type="text"
+                  className="lab-node-param-input nodrag"
+                  value={data.videoUrl ?? ''}
+                  placeholder={t('director.lab.videoUrlPlaceholder')}
+                  onChange={(e) => actions.patchProcessNode(id, { videoUrl: e.target.value })}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
+                  data-testid="director-lab-video-url-input"
+                />
+                <div className="lab-node-params-popover-hint">{t('director.lab.videoUrlHint')}</div>
               </div>
             )}
 

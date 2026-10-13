@@ -163,6 +163,7 @@ export function directorGenerate(params: GenerateParams): Promise<GenerateResult
     input_video_asset_id: params.inputVideoAssetId,
     input_audio_asset_id: params.inputAudioAssetId,
     input_audio_url: params.inputAudioUrl,
+    input_video_url: params.inputVideoUrl,
   };
   return webRequest<unknown>(METHOD.generate, wire, { timeoutMs: GENERATE_TIMEOUT_MS })
     .then(normalizeGenerateResult)

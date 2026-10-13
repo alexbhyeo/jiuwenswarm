@@ -728,3 +728,96 @@ async def test_generate_video_reframes_both_frames_to_the_same_ratio(
         width, height = _decode_frame_size(frame["image_url"]["url"])
         assert width / height == pytest.approx(9 / 16, abs=0.01), frame["frame_type"]
 
+
+
+# ---------------------------------------------------------------------------
+# generate_video - reference video input (video-to-video)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_video_sends_video_url_reference_untouched(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """视频生视频：源片走 input_references 里的 video_url，并且原样透传这条
+    HTTPS 地址——服务商自己去抓它，本地下载再编码成 base64 只会被拒绝。"""
+    _set_video_model_config(monkeypatch)
+    source_url = "https://examdatalake.blob.core.windows.net/examdatalake/clips/dragon_flame.mp4"
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        if request.url.path == "/api/v1/videos" and request.method == "POST":
+            return httpx.Response(200, json={"id": "job-v2v", "status": "completed"})
+        if request.url.path == "/api/v1/videos/job-v2v/content":
+            return httpx.Response(200, content=b"video-bytes")
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    _patch_async_client(monkeypatch, handler)
+
+    result = await generate_video(
+        prompt="change the flame to blue",
+        reference_video_path=source_url,
+        duration_seconds=5,
+        save_dir=str(tmp_path),
+    )
+
+    assert "Video generated successfully!" in result
+    body = json.loads(requests_seen[0].content)
+    assert "frame_images" not in body
+    assert body["input_references"] == [{"type": "video_url", "video_url": {"url": source_url}}]
+    # 只有提交 + 下载两次请求：源片不由我们再取一遍。
+    assert len(requests_seen) == 2
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "/Users/someone/clips/local.mp4",
+        "file:///Users/someone/clips/local.mp4",
+        "data:video/mp4;base64,AAAA",
+        "http://example.com/clip.mp4",
+    ],
+)
+def test_resolve_video_reference_only_accepts_https_urls(value: str):
+    """服务商自己抓参考视频，只认 HTTPS 直链——本地文件/data:/http: 都要在
+    提交前就被挡下来（否则要白上传一次几十 MB 再被拒）。"""
+    resolved, error = vg._resolve_video_reference(value)
+
+    assert resolved is None
+    assert error is not None
+    assert error.startswith("[ERROR]: reference_video_path")
+    assert "https://" in error
+
+
+def test_resolve_video_reference_passes_https_url_through():
+    url = "https://example.com/clips/clip.mp4"
+
+    assert vg._resolve_video_reference(url) == (url, None)
+
+
+def test_resolve_video_reference_ignores_empty_value():
+    assert vg._resolve_video_reference("") == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_generate_video_local_video_reference_fails_before_submit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    _set_video_model_config(monkeypatch)
+    local_clip = tmp_path / "clip.mp4"
+    local_clip.write_bytes(b"fake-mp4-bytes")
+    submitted: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        submitted.append(request)
+        raise AssertionError("no request may be sent for an unusable reference video")
+
+    _patch_async_client(monkeypatch, handler)
+
+    result = await generate_video(
+        prompt="make the flame blue", reference_video_path=str(local_clip), save_dir=str(tmp_path)
+    )
+
+    assert result.startswith("[ERROR]: reference_video_path")
+    assert submitted == []

@@ -70,11 +70,12 @@ export interface ComposerParams {
 
 export interface GenerateParams {
   projectId: string;
-  /** `video2audio`（视频生音频）与 `image_audio2video`（图音生视频）都是后端
-   *  独立模式：前者串了"视频理解写解说 → TTS 配音"两步，后者是一次带参考图
-   *  + 参考音频的 reference-to-video 调用，光凭 mode=video/audio 外加几个
-   *  输入素材是区分不出来的。 */
-  mode: 'video' | 'image' | 'audio' | 'character' | 'video2audio' | 'image_audio2video';
+  /** `video2audio`（视频生音频）、`image_audio2video`（图音生视频）与
+   *  `video2video`（视频生视频）都是后端独立模式：视频生音频串了"视频理解写
+   *  解说 → TTS 配音"两步，图音生视频是一次带参考图 + 参考音频的
+   *  reference-to-video 调用，视频生视频是拿源片当参考的重绘调用，光凭
+   *  mode=video/audio 外加几个输入素材是区分不出来的。 */
+  mode: 'video' | 'image' | 'audio' | 'character' | 'video2audio' | 'image_audio2video' | 'video2video';
   prompt: string;
   aspectRatio: string;
   resolution: string;
@@ -91,6 +92,11 @@ export interface GenerateParams {
   /** 仅 image_audio2video（图音生视频）使用：参考音频的公网 HTTPS 直链，
    *  无需先上传成素材。非空时优先于 inputAudioAssetId。 */
   inputAudioUrl?: string;
+  /** 仅 video2video（视频生视频）使用：源视频的公网 HTTPS 直链。生成接口
+   *  只接受 HTTPS 的 video_url 引用（data: URI / 本地文件一律被拒），所以
+   *  这一路不只是便利输入，也是本地片段唯一可行的替代。非空时优先于
+   *  inputVideoAssetId。 */
+  inputVideoUrl?: string;
   /** 实验室节点画布：连线的显式引用（asset_id），绕开 composer 的
    *  "@名称" 文本解析。video 模式下最多首帧+尾帧两个；image 模式下可以是
    *  "图片参考" 卡片上连的一张或多张参考图（多参考图合成）。 */
