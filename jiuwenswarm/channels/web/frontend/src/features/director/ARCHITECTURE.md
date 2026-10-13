@@ -82,6 +82,13 @@ DirectorPage
 — without it, the per-project timeline state would show the previous project's
 data after switching projects while staying on the Edit tab.
 
+Opening a project from the 我的项目 grid (`ProjectGrid`, only used by
+`CreationHomeTab`) both selects it **and** switches `activeTab` to `lab`: the create
+tab is where you pick or create a project, so staying there after opening one leaves
+you looking at the cards instead of the project. The 新建项目 card is deliberately
+*not* part of that — it opens `NewProjectDialog` and stays on `create`, so the new
+project can be named and confirmed before anything moves.
+
 ---
 
 ## 3. Frontend module map

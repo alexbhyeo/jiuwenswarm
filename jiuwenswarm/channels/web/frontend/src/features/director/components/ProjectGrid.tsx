@@ -17,6 +17,7 @@ const plusIcon = (
 export function ProjectGrid({ projects, onNewProject }: ProjectGridProps) {
   const { t } = useTranslation();
   const selectProject = useDirectorStore((s) => s.selectProject);
+  const setActiveTab = useDirectorStore((s) => s.setActiveTab);
 
   return (
     <>
@@ -31,7 +32,18 @@ export function ProjectGrid({ projects, onNewProject }: ProjectGridProps) {
           <span style={{ fontSize: 12.5, fontWeight: 600 }}>{t('director.newProject')}</span>
         </button>
         {projects.map((project) => (
-          <ProjectCard key={project.project_id} project={project} onSelect={() => selectProject(project.project_id)} />
+          <ProjectCard
+            key={project.project_id}
+            project={project}
+            onSelect={() => {
+              selectProject(project.project_id);
+              // 点开一个项目就是要开始干活了：直接进「实验室」，而不是留在
+              // 创作页继续看卡片——创作页是「挑项目／建项目」的地方，实验室
+              // 才是这个项目的工作区。项目数据（含 lab_nodes/lab_edges）已经
+              // 由 CreationHomeTab 的 loadProjects 拿在手上，切过去不会空一帧。
+              setActiveTab('lab');
+            }}
+          />
         ))}
       </div>
     </>
