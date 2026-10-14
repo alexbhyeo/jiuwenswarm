@@ -104,6 +104,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   const image2 = useConnectedImage(id, maxImages >= 2 ? 'image2' : '__none__');
   const images = useConnectedImages(id, isMultiRef ? 'image1' : '__none__');
   const video1 = useConnectedVideo(id, maxVideos >= 1 ? 'video1' : '__none__');
+  const video2 = useConnectedVideo(id, maxVideos >= 2 ? 'video2' : '__none__');
   const audio1 = useConnectedAudio(id, maxAudios >= 1 ? 'audio1' : '__none__');
 
   // 参考音频的两条来路：端口连线，或卡片上填的 HTTPS 直链。填了链接就以
@@ -125,20 +126,26 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   // 视频生音频必须先连一路视频（解说文案是从它写出来的）；文本节点可选，
   // 连了就当作用户对解说的额外要求。
   const requiresVideo = maxVideos > 0;
+  // 视频连视频需要两段源片都连上——只有片段一或只有片段二都抓不出完整的
+  // 首尾帧对，FLF2V 没法生成。
+  const isVideoBridge = data.kind === 'videoBridge';
   // 图音生视频必须拿到一路参考音频——连了音频素材、或者在卡片上填了音频
   // 链接都算，两条都没有时这张卡片就不再是"图音生视频"了。
   const requiresAudio = maxAudios > 0;
   const hasAnyImage = isMultiRef ? images.length > 0 : !!image1;
-  // 视频生视频"改成什么样"完全由提示词指定，没有提示词就没有生成目标，
-  // 所以这张卡片的提示词是必填的（其余卡片允许只靠输入素材出片）。
-  const requiresPrompt = data.kind === 'video2video';
+  // 视频生视频/视频连视频"改成什么样"完全由提示词指定，没有提示词就没有
+  // 生成目标，所以这两张卡片的提示词是必填的（其余卡片允许只靠输入素材
+  // 出片）。视频连视频落到画布时会自动带一个预填提示词节点（见
+  // LabCanvas.handleAddProcessNode），正常情况下这条校验不会被卡到。
+  const requiresPrompt = data.kind === 'video2video' || isVideoBridge;
   const canGenerate =
     data.status !== 'generating' &&
     (!requiresImage || hasAnyImage) &&
-    (!requiresVideo || !!video1 || (hasVideoUrlOption && hasVideoUrl)) &&
+    (!requiresVideo ||
+      (isVideoBridge ? !!video1 && !!video2 : !!video1 || (hasVideoUrlOption && hasVideoUrl))) &&
     (!requiresAudio || audioConnected || hasAudioUrl) &&
     (!requiresPrompt || text.trim().length > 0) &&
-    (text.trim().length > 0 || hasAnyImage || !!video1 || audioConnected || hasAudioUrl);
+    (text.trim().length > 0 || hasAnyImage || !!video1 || !!video2 || audioConnected || hasAudioUrl);
 
   const [paramsOpen, setParamsOpen] = useState(false);
   const paramsRef = useRef<HTMLDivElement>(null);
@@ -220,7 +227,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
           <div className="lab-node-input-row">
             <Handle type="target" position={Position.Left} id="video1" />
             <span className="lab-node-input-dot" />
-            {t('director.lab.inputVideo')}
+            {maxVideos >= 2 ? t('director.lab.clipOne') : t('director.lab.inputVideo')}
             {hasVideoUrl ? (
               <span className="lab-node-input-filled" title={videoUrl}>
                 {t('director.lab.videoFromUrl')}
@@ -228,6 +235,14 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
             ) : (
               video1 && <span className="lab-node-input-filled">✓</span>
             )}
+          </div>
+        )}
+        {maxVideos >= 2 && (
+          <div className="lab-node-input-row">
+            <Handle type="target" position={Position.Left} id="video2" />
+            <span className="lab-node-input-dot" />
+            {t('director.lab.clipTwo')}
+            {video2 && <span className="lab-node-input-filled">✓</span>}
           </div>
         )}
         {maxAudios >= 1 && (
@@ -444,7 +459,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
         type="button"
         className="lab-node-generate-btn"
         disabled={!canGenerate}
-        onClick={() => actions.generate(id, { prompt: text, image1, image2, images, video1, audio1 })}
+        onClick={() => actions.generate(id, { prompt: text, image1, image2, images, video1, video2, audio1 })}
       >
         {data.status === 'generating' ? (
           <span className="lab-node-spinner" />

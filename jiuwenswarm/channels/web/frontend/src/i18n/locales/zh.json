@@ -153,6 +153,8 @@
       "durationLabel": "时长",
       "voiceLabel": "音色",
       "inputVideo": "输入视频",
+      "clipOne": "片段一",
+      "clipTwo": "片段二",
       "inputAudio": "参考音频",
       "audioFromUrl": "链接",
       "videoFromUrl": "链接",
@@ -176,7 +178,8 @@
         "text2audio": "文生音频",
         "video2audio": "视频生音频",
         "imageAudio2video": "图音生视频",
-        "video2video": "视频生视频"
+        "video2video": "视频生视频",
+        "videoBridge": "视频连视频"
       },
       "audioOutputFromRefHint": "成片是否带上连进来的参考音频；关掉就只保留画面。",
       "audioOutputFromSourceHint": "成片是否带音轨：源片本身有声音就保留它，源片本身没有声音则由生成模型配一条。关掉就只保留画面。",

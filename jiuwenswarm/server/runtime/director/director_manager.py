@@ -18,6 +18,7 @@ import os
 import re
 import secrets
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,7 @@ from jiuwenswarm.server.runtime.director.director_clip_compose import (
     compose_timeline,
     parse_tracks as compose_parse_tracks,
 )
+from jiuwenswarm.server.runtime.director.director_frame_extract import extract_frame
 from jiuwenswarm.server.runtime.director.director_skills import (
     get_assistant_skill_config,
     load_assistant_skill,
@@ -87,6 +89,13 @@ _MODE_IMAGE_AUDIO2VIDEO = "image_audio2video"
 # 走 video1 端口 / 视频链接），所以走线上单独一个模式名。
 _MODE_VIDEO2VIDEO = "video2video"
 
+# 视频连视频 = 从片段一的最后一帧、片段二的第一帧各抓一张静态图，按
+# FLF2V（首帧+尾帧生视频）送给 generate_video，生成一段能直接拼接在两段
+# 素材之间的过渡桥接片。复用的是"图生视频"卡片本来就在用的首尾帧接口，
+# 区别只在首尾帧不是用户挑的图片，而是从两段视频素材自动抓出来的——所以
+# 连线语义（两路视频端口）与 image2video 不同，走线上单独一个模式名。
+_MODE_VIDEO_BRIDGE = "video_bridge"
+
 _SUPPORTED_MODES = (
     "video",
     "image",
@@ -95,6 +104,7 @@ _SUPPORTED_MODES = (
     "character",
     _MODE_IMAGE_AUDIO2VIDEO,
     _MODE_VIDEO2VIDEO,
+    _MODE_VIDEO_BRIDGE,
 )
 
 # 两种"任务还在跑"的文案都要能取回 job_id：generate_video 自己在预算内没等到
@@ -536,6 +546,16 @@ class DirectorManager:
             return asset.file_path
         return None
 
+    def _resolve_video_asset_path(self, project: DirectorProject, asset_id: str) -> str | None:
+        """按 asset_id 取一段就绪视频素材的本地路径——视频连视频抓首尾帧时用，
+        与 _resolve_asset_path 同构，只是素材类型换成 video。"""
+        if not asset_id:
+            return None
+        asset = next((a for a in project.assets if a.asset_id == asset_id), None)
+        if asset and asset.type == "video" and asset.status == "ready" and asset.file_path:
+            return asset.file_path
+        return None
+
     async def handle_director_projects_create(self, params: dict) -> dict:
         name = str(params.get("name") or "").strip()
         if not name:
@@ -559,10 +579,15 @@ class DirectorManager:
         input_video_url = str(params.get("input_video_url") or "").strip()
         input_audio_asset_id = str(params.get("input_audio_asset_id") or "").strip()
         input_audio_url = str(params.get("input_audio_url") or "").strip()
+        # 仅 video_bridge（视频连视频）使用：要桥接的两段视频素材。
+        clip1_asset_id = str(params.get("clip1_asset_id") or "").strip()
+        clip2_asset_id = str(params.get("clip2_asset_id") or "").strip()
         # 显式连线本身就是一次完整的请求——视频生音频只连了一路视频、没写
         # 任何文案时同样如此（解说文案由视频理解自己写出来），所以输入视频
         # 也要算进“有显式引用”，不能被下面的空提示词校验拦住。图音生视频
-        # 同理：连上音频（或填了音频链接）就是一次完整的请求。
+        # 同理：连上音频（或填了音频链接）就是一次完整的请求。视频连视频
+        # 连了两段素材同理，但它的提示词是过渡描述，始终必填（下面单独校验），
+        # 不靠这个开关放行空提示词。
         has_explicit_reference = bool(
             first_frame_asset_id
             or last_frame_asset_id
@@ -570,6 +595,8 @@ class DirectorManager:
             or input_video_asset_id
             or input_audio_asset_id
             or input_audio_url
+            or clip1_asset_id
+            or clip2_asset_id
         )
 
         if not project_id:
@@ -600,7 +627,11 @@ class DirectorManager:
         aspect_ratio = str(params.get("aspect_ratio") or "16:9")
         resolution = str(
             params.get("resolution")
-            or ("720p" if mode in ("video", _MODE_IMAGE_AUDIO2VIDEO, _MODE_VIDEO2VIDEO) else "512")
+            or (
+                "720p"
+                if mode in ("video", _MODE_IMAGE_AUDIO2VIDEO, _MODE_VIDEO2VIDEO, _MODE_VIDEO_BRIDGE)
+                else "512"
+            )
         )
         save_dir = str(get_project_assets_dir(project_id))
 
@@ -724,6 +755,57 @@ class DirectorManager:
                 generate_audio=generate_audio_flag,
                 save_dir=save_dir,
             )
+        elif mode == _MODE_VIDEO_BRIDGE:
+            # 视频连视频：从片段一的最后一帧、片段二的第一帧各抓一张静态图，
+            # 按 FLF2V 送给 generate_video，复用的是"图生视频"卡片本来就在用
+            # 的首尾帧接口——区别只在首尾帧是自动抓出来的，不是用户挑的图片。
+            if not (video_gen_enabled() and video_gen_configured()):
+                raise DirectorRpcError("NOT_CONFIGURED", "视频生成未配置，请先在设置中配置「视频处理」")
+            clip1_path = self._resolve_video_asset_path(project, clip1_asset_id)
+            clip2_path = self._resolve_video_asset_path(project, clip2_asset_id)
+            if not clip1_path or not clip2_path:
+                raise DirectorRpcError(
+                    "INVALID_PARAMS", "视频连视频需要先连接两段已就绪的视频素材（片段一 + 片段二）"
+                )
+            # 过渡提示词是模型唯一的方向依据——FLF2V 只给了首尾两张静态图，
+            # 没有提示词时模型无从得知该怎么从第一张动到第二张。
+            if not prompt:
+                raise DirectorRpcError(
+                    "INVALID_PARAMS", "视频连视频需要填写过渡提示词，说明两段素材之间应该如何衔接"
+                )
+            duration_seconds = int(params.get("duration_seconds") or 15)
+            generate_audio_flag = bool(params.get("generate_audio") or False)
+            with tempfile.TemporaryDirectory(prefix="video_bridge_") as tmp_dir:
+                try:
+                    last_frame_png = await extract_frame(
+                        clip1_path, Path(tmp_dir) / "clip1_last.png", position="last"
+                    )
+                    first_frame_png = await extract_frame(
+                        clip2_path, Path(tmp_dir) / "clip2_first.png", position="first"
+                    )
+                except ComposeError as exc:
+                    raise DirectorRpcError("GENERATION_FAILED", exc.message) from exc
+                # 两段源片路径记进 params：供前端 buildFlowFromChat 把它们还原成
+                # 两条依赖连线（video1/video2 端口），与 input_video_path 的
+                # 还原套路相同，只是这里是两段而不是一段。
+                gen_params = {
+                    "aspect_ratio": aspect_ratio,
+                    "resolution": resolution,
+                    "duration_seconds": duration_seconds,
+                    "generate_audio": generate_audio_flag,
+                    "bridge_clip1_path": clip1_path,
+                    "bridge_clip2_path": clip2_path,
+                }
+                result_str = await generate_video._func(
+                    prompt=prompt,
+                    aspect_ratio=aspect_ratio,
+                    resolution=resolution,
+                    duration_seconds=duration_seconds,
+                    first_frame_path=str(last_frame_png),
+                    last_frame_path=str(first_frame_png),
+                    generate_audio=generate_audio_flag,
+                    save_dir=save_dir,
+                )
         elif mode == _MODE_IMAGE_AUDIO2VIDEO:
             # 图音生视频 = 一次 reference-to-video 调用：参考图 + 参考音频
             # 一起作为多模态参考交给模型，模型按参考音频做口型同步。参考图
@@ -922,6 +1004,9 @@ class DirectorManager:
         elif mode == _MODE_VIDEO2VIDEO:
             # 视频生视频的产物当然还是视频——前端按 video/image/audio/character
             # 四类分栏展示，直接拿 mode 当 type 会漏出一类没人认识的素材。
+            asset_type = "video"
+        elif mode == _MODE_VIDEO_BRIDGE:
+            # 视频连视频的产物同样是视频——两段源片是输入，桥接片才是产物。
             asset_type = "video"
         else:
             asset_type = mode

@@ -11,7 +11,8 @@ export type ProcessKind =
   | 'text2audio'
   | 'video2audio'
   | 'imageAudio2video'
-  | 'video2video';
+  | 'video2video'
+  | 'videoBridge';
 
 /** 处理节点的产物类型。audio 走 generate_audio（文生音频）：与 image/video
  *  一样是一张处理卡片 + 一张输出节点，只是输出节点渲染成音频播放器。
@@ -29,6 +30,8 @@ export const PROCESS_KIND_MODE: Record<ProcessKind, ProcessMode> = {
   // 视频生视频的产物是视频——因此它自动获得"有声音/无声音"选项
   // （见 supportsAudioOutput），音轨默认沿用（见 defaultGenerateAudio）。
   video2video: 'video',
+  // 视频连视频（FLF2V 桥接）的产物也是视频。
+  videoBridge: 'video',
 };
 
 /** 每种处理节点渲染几个不同的图片输入端口——与后端 generate_video（首帧+
@@ -50,6 +53,9 @@ export const PROCESS_KIND_MAX_IMAGES: Record<ProcessKind, number> = {
   // 视频生视频不吃图片（源片通过视频端口/HTTPS 直链进来），重绘完全由
   // 提示词驱动，见 PROCESS_KIND_MAX_VIDEOS。
   video2video: 0,
+  // 视频连视频的首尾帧是从两段视频素材自动抓出来的，不接图片端口，见
+  // PROCESS_KIND_MAX_VIDEOS。
+  videoBridge: 0,
 };
 
 /** 每种处理节点渲染几个音频输入端口。目前只有 imageAudio2video
@@ -65,6 +71,8 @@ export const PROCESS_KIND_MAX_AUDIOS: Record<ProcessKind, number> = {
   imageAudio2video: 1,
   // 源片（视频）本身的音轨就是"音频输入"，没有第二条音频来路。
   video2video: 0,
+  // 桥接片没有参考音频——两段源片各自的音轨与过渡片无关。
+  videoBridge: 0,
 };
 
 /** "有声音/无声音"这个成片选项适用于哪些卡片。
@@ -104,6 +112,8 @@ export const PROCESS_KIND_MAX_VIDEOS: Record<ProcessKind, number> = {
   imageAudio2video: 0,
   // 视频生视频必须拿到一路源视频——端口连线，或卡片上填的 HTTPS 直链。
   video2video: 1,
+  // 视频连视频需要两路源视频：片段一（取最后一帧）+ 片段二（取第一帧）。
+  videoBridge: 2,
 };
 
 /** 哪些处理节点的 image1 端口允许同时接多条连线——imageRef（"图片参考"）
@@ -113,6 +123,26 @@ export const PROCESS_KIND_MAX_VIDEOS: Record<ProcessKind, number> = {
 export const PROCESS_KIND_MULTI_REF: Partial<Record<ProcessKind, boolean>> = {
   imageRef: true,
 };
+
+/** 视频连视频（videoBridge）卡片落到画布时自动带出的提示词节点内容。
+ *
+ *  FLF2V（首帧+尾帧生视频）只拿到两张静态图，模型需要文字才知道该怎么从
+ *  第一张"动"到第二张——这张卡片没有提示词就没有生成目标（见
+ *  director_manager.py 的 video_bridge 分支）。默认文案参考了
+ *  InfinityStory（arXiv:2603.03646）论文里 FLF2V 过渡镜头的训练设定：首帧
+ *  精确匹配、尾帧尽量匹配、运动连续自然、两段画面差异较大时改用镜头运动或
+ *  环境过渡来衔接、角色不能在画面里突然出现/消失或从画面边缘"抠"出半个身子，
+ *  以及成片要能直接拼接在两段原片之间。用户可以直接在文本节点里改写它，
+ *  这里只是一个经过验证的起点，不是写死的唯一选项。 */
+export const DEFAULT_VIDEO_BRIDGE_PROMPT =
+  'Generate a seamless cinematic transition that bridges two video clips.\n\n' +
+  'The first frame of this transition must match the provided start reference exactly (the last frame of the preceding clip). The final frame must match the provided end reference as closely as possible (the first frame of the following clip).\n\n' +
+  'Create continuous, natural motion that connects the two visual states across the full duration of the clip, with a clear beginning, middle and end rather than motion that stalls or jumps. Maintain subject identity, object geometry, camera perspective, lighting, color grading and environmental consistency wherever the two reference frames allow it.\n\n' +
+  'If the two reference frames depict clearly different scenes, locations or subjects, do not force an impossible continuity: instead use a natural camera movement (pan, push-in, pull-out, whip, or a brief environmental transition such as passing through a doorway, fog, or motion blur) to carry the viewer from one scene into the other.\n\n' +
+  'Characters already visible in a reference frame must not vanish or appear only partially; characters entering the shot must enter naturally from the frame edge or background rather than fading or morphing in. Avoid abrupt cuts, frozen motion, flickering, ghosting, duplicated subjects, distorted faces, sudden object changes and unnatural morphing.\n\n' +
+  'Do not add new characters, objects, text or visual effects that are not implied by the two reference frames.\n\n' +
+  "The transition must be suitable for direct concatenation between the original clips: match their visual style, aspect ratio, frame rate feel and motion continuity so the join is invisible.\n\n" +
+  'Output only the transition video.';
 
 export interface ImageNodeData {
   [key: string]: unknown;

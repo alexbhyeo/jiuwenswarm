@@ -14,9 +14,13 @@ export interface ResolvedGenerateInput {
    *  顺序排列，可以是一张或多张（见 PROCESS_KIND_MULTI_REF）。其它处理
    *  卡片这里始终是空数组，仍然只用上面的 image1/image2。 */
   images: { assetId: string | null; filePath: string }[];
-  /** video2audio（视频生音频）/ video2video（视频生视频）处理卡片：video1
-   *  端口上连的那路输入视频。其它处理卡片这里始终为 null。 */
+  /** video2audio（视频生音频）/ video2video（视频生视频）/ videoBridge
+   *  （视频连视频）处理卡片：video1 端口上连的那路输入视频。其它处理卡片
+   *  这里始终为 null。 */
   video1: { assetId: string | null; filePath: string } | null;
+  /** 仅 videoBridge（视频连视频）处理卡片：video2 端口上连的那路输入视频
+   *  （片段二，取其第一帧）。其它处理卡片这里始终为 null。 */
+  video2: { assetId: string | null; filePath: string } | null;
   /** imageAudio2video（图音生视频）处理卡片：audio1 端口上连的那路参考
    *  音频——模型按它做口型同步。其它处理卡片这里始终为 null。 */
   audio1: { assetId: string | null; filePath: string } | null;

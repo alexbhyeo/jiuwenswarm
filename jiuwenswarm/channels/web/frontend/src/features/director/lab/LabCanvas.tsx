@@ -27,7 +27,13 @@ import { TextNode } from './nodes/TextNode';
 import { ProcessNode } from './nodes/ProcessNode';
 import { DEFAULT_AUDIO_VOICE } from '../audioVoices';
 import type { ImageNodeData, ProcessKind, ProcessMode, ProcessNodeData } from './labTypes';
-import { PROCESS_KIND_MODE, PROCESS_KIND_MULTI_REF, defaultGenerateAudio, supportsAudioOutput } from './labTypes';
+import {
+  DEFAULT_VIDEO_BRIDGE_PROMPT,
+  PROCESS_KIND_MODE,
+  PROCESS_KIND_MULTI_REF,
+  defaultGenerateAudio,
+  supportsAudioOutput,
+} from './labTypes';
 
 const nodeTypes: NodeTypes = {
   image: ImageNode,
@@ -52,7 +58,13 @@ function timerKey(nodeId: string, slotIndex: number): string {
 }
 
 const IMAGE_PROCESS_KINDS: ProcessKind[] = ['text2image', 'imageRef'];
-const VIDEO_PROCESS_KINDS: ProcessKind[] = ['text2video', 'image2video', 'imageAudio2video', 'video2video'];
+const VIDEO_PROCESS_KINDS: ProcessKind[] = [
+  'text2video',
+  'image2video',
+  'imageAudio2video',
+  'video2video',
+  'videoBridge',
+];
 const AUDIO_PROCESS_KINDS: ProcessKind[] = ['text2audio', 'video2audio'];
 
 /** 是不是一条能被服务商直接抓取的远端地址（相对于本地文件路径、data: URI）。
@@ -184,8 +196,10 @@ function LabCanvasInner() {
       if (connection.targetHandle === 'image1' || connection.targetHandle === 'image2') {
         return sourceNode.type === 'image';
       }
-      // 视频生音频的输入视频端口：只接受视频输出节点。
-      if (connection.targetHandle === 'video1') return sourceNode.type === 'video';
+      // 视频生音频/视频生视频/视频连视频的输入视频端口：只接受视频输出节点。
+      if (connection.targetHandle === 'video1' || connection.targetHandle === 'video2') {
+        return sourceNode.type === 'video';
+      }
       // 图音生视频的参考音频端口：只接受音频输出节点。
       if (connection.targetHandle === 'audio1') return sourceNode.type === 'audio';
       return true;
@@ -295,8 +309,26 @@ function LabCanvasInner() {
         outputCount: 1,
       };
       addNode({ id, type: 'process', position, data });
+      // 视频连视频：FLF2V 只拿到两张静态图，没有提示词模型无从得知该怎么
+      // 从第一张"动"到第二张（见 requiresPrompt），所以这张卡片落到画布时
+      // 自动带一个预填好默认过渡提示词的文本节点，直接连到它的 text 端口
+      // ——用户仍然可以在文本节点里改写或清空它，这里只是给一个已经验证过
+      // 能用的起点，不是强制唯一的文案。摆在卡片左侧，与 text 端口在左边
+      // 的朝向一致（同 handleAddText 的默认摆放习惯）。
+      if (kind === 'videoBridge') {
+        const textNodeId = nextNodeId('text');
+        addNode({
+          id: textNodeId,
+          type: 'text',
+          position: { x: position.x - 280, y: position.y },
+          data: { text: DEFAULT_VIDEO_BRIDGE_PROMPT },
+        });
+        setEdges((eds) =>
+          addEdge({ id: nextNodeId('edge'), source: textNodeId, sourceHandle: 'text', target: id, targetHandle: 'text' }, eds)
+        );
+      }
     },
-    [addNode]
+    [addNode, setEdges]
   );
 
   const setProcessNodeState = useCallback(
@@ -545,7 +577,9 @@ function LabCanvasInner() {
                 ? 'image_audio2video'
                 : data.kind === 'video2video'
                   ? 'video2video'
-                  : mode,
+                  : data.kind === 'videoBridge'
+                    ? 'video_bridge'
+                    : mode,
           prompt,
           aspectRatio: data.aspectRatio,
           resolution: data.resolution,
@@ -577,6 +611,15 @@ function LabCanvasInner() {
           // 视频生视频的"声音"选项默认开声（见 defaultGenerateAudio）：源片
           // 自带的音轨不该在重绘画面时被顺手抹掉。
           params.generateAudio = data.generateAudio !== false;
+        } else if (data.kind === 'videoBridge') {
+          // 视频连视频：片段一 / 片段二都是必连的端口（没有 HTTPS 链接的
+          // 替代输入——抓帧在服务端的本地文件上做，不经过生成接口本身的
+          // 参考视频校验），两段都要带上 asset_id。
+          if (resolved.video1?.assetId) params.clip1AssetId = resolved.video1.assetId;
+          if (resolved.video2?.assetId) params.clip2AssetId = resolved.video2.assetId;
+          // 桥接片是新合成出来的过渡镜头，没有"源片音轨"可沿用，默认静音，
+          // 与文生视频/图生视频的默认一致。
+          params.generateAudio = data.generateAudio === true;
         } else if (mode === 'video') {
           if (resolved.image1?.assetId) params.firstFrameAssetId = resolved.image1.assetId;
           if (resolved.image2?.assetId) params.lastFrameAssetId = resolved.image2.assetId;
@@ -837,6 +880,9 @@ function LabCanvasInner() {
       inputVideoPath: string | null;
       /** imageAudio2video（图音生视频）用来做口型同步的那路参考音频。 */
       inputAudioPath: string | null;
+      /** videoBridge（视频连视频）要桥接的片段一 / 片段二源片路径。 */
+      bridgeClip1Path: string | null;
+      bridgeClip2Path: string | null;
       kind: ProcessKind;
       mode: ProcessMode;
       /** 这个素材实际依赖的其它素材 id（不管是这次新摆的还是已经在画布上
@@ -866,6 +912,10 @@ function LabCanvasInner() {
       // 图音生视频把参考图和参考音频的路径也存了下来——两者都要还原成
       // 依赖连线，否则重建出来的流程图会退化成一张没有输入的"文生视频"。
       const inputAudioPath = typeof params.input_audio_path === 'string' ? params.input_audio_path : null;
+      // 视频连视频把两段源片的路径都存了下来，各自还原成一条依赖连线
+      // （video1/video2 端口），与其它卡片同一套路子。
+      const bridgeClip1Path = typeof params.bridge_clip1_path === 'string' ? params.bridge_clip1_path : null;
+      const bridgeClip2Path = typeof params.bridge_clip2_path === 'string' ? params.bridge_clip2_path : null;
 
       const isAudio = asset.type === 'audio';
       const isVideo = asset.type === 'video';
@@ -874,13 +924,15 @@ function LabCanvasInner() {
           ? 'video2audio'
           : 'text2audio'
         : isVideo
-          ? inputVideoPath
-            ? 'video2video'
-            : inputAudioPath
-              ? 'imageAudio2video'
-              : firstFramePath || lastFramePath
-                ? 'image2video'
-                : 'text2video'
+          ? bridgeClip1Path && bridgeClip2Path
+            ? 'videoBridge'
+            : inputVideoPath
+              ? 'video2video'
+              : inputAudioPath
+                ? 'imageAudio2video'
+                : firstFramePath || lastFramePath
+                  ? 'image2video'
+                  : 'text2video'
           : referenceImagePaths.length > 0
             ? 'imageRef'
             : 'text2image';
@@ -888,7 +940,15 @@ function LabCanvasInner() {
 
       const depAssetIds = Array.from(
         new Set(
-          [...referenceImagePaths, firstFramePath, lastFramePath, inputVideoPath, inputAudioPath]
+          [
+            ...referenceImagePaths,
+            firstFramePath,
+            lastFramePath,
+            inputVideoPath,
+            inputAudioPath,
+            bridgeClip1Path,
+            bridgeClip2Path,
+          ]
             .filter((p): p is string => !!p)
             .map((p) => assetIdByFilePath.get(p))
             .filter((id): id is string => !!id && id !== assetId)
@@ -902,6 +962,8 @@ function LabCanvasInner() {
         lastFramePath,
         inputVideoPath,
         inputAudioPath,
+        bridgeClip1Path,
+        bridgeClip2Path,
         kind,
         mode,
         depAssetIds,
@@ -955,7 +1017,19 @@ function LabCanvasInner() {
     for (const { id: assetId, depth } of orderedForLayout) {
       const plan = plans.get(assetId);
       if (!plan) continue;
-      const { asset, referenceImagePaths, firstFramePath, lastFramePath, inputVideoPath, inputAudioPath, kind, mode, depAssetIds } = plan;
+      const {
+        asset,
+        referenceImagePaths,
+        firstFramePath,
+        lastFramePath,
+        inputVideoPath,
+        inputAudioPath,
+        bridgeClip1Path,
+        bridgeClip2Path,
+        kind,
+        mode,
+        depAssetIds,
+      } = plan;
 
       const y =
         depth === 0
@@ -1053,6 +1127,25 @@ function LabCanvasInner() {
         const refId = ensureAudioNode(inputAudioPath, refX, y + 150);
         setEdges((eds) =>
           addEdge({ id: nextNodeId('edge'), source: refId, sourceHandle: 'audio', target: processNodeId, targetHandle: 'audio1' }, eds)
+        );
+      }
+      if (bridgeClip1Path && bridgeClip2Path) {
+        // 视频连视频的两段源片：各自复用自己的视频素材卡片，分别连到
+        // video1（片段一）/ video2（片段二）端口——与 video2audio 的单路
+        // video1 同一套路子，只是这里要还原两条连线。
+        const clip1RefId = ensureVideoNode(bridgeClip1Path, refX, y - 150);
+        setEdges((eds) =>
+          addEdge(
+            { id: nextNodeId('edge'), source: clip1RefId, sourceHandle: 'video', target: processNodeId, targetHandle: 'video1' },
+            eds
+          )
+        );
+        const clip2RefId = ensureVideoNode(bridgeClip2Path, refX, y + 150);
+        setEdges((eds) =>
+          addEdge(
+            { id: nextNodeId('edge'), source: clip2RefId, sourceHandle: 'video', target: processNodeId, targetHandle: 'video2' },
+            eds
+          )
         );
       }
 

@@ -70,12 +70,21 @@ export interface ComposerParams {
 
 export interface GenerateParams {
   projectId: string;
-  /** `video2audio`（视频生音频）、`image_audio2video`（图音生视频）与
-   *  `video2video`（视频生视频）都是后端独立模式：视频生音频串了"视频理解写
-   *  解说 → TTS 配音"两步，图音生视频是一次带参考图 + 参考音频的
-   *  reference-to-video 调用，视频生视频是拿源片当参考的重绘调用，光凭
+  /** `video2audio`（视频生音频）、`image_audio2video`（图音生视频）、
+   *  `video2video`（视频生视频）与 `video_bridge`（视频连视频）都是后端
+   *  独立模式：视频生音频串了"视频理解写解说 → TTS 配音"两步，图音生视频是
+   *  一次带参考图 + 参考音频的 reference-to-video 调用，视频生视频是拿源片
+   *  当参考的重绘调用，视频连视频是从两段源片抓首尾帧做 FLF2V 桥接——光凭
    *  mode=video/audio 外加几个输入素材是区分不出来的。 */
-  mode: 'video' | 'image' | 'audio' | 'character' | 'video2audio' | 'image_audio2video' | 'video2video';
+  mode:
+    | 'video'
+    | 'image'
+    | 'audio'
+    | 'character'
+    | 'video2audio'
+    | 'image_audio2video'
+    | 'video2video'
+    | 'video_bridge';
   prompt: string;
   aspectRatio: string;
   resolution: string;
@@ -103,6 +112,12 @@ export interface GenerateParams {
   firstFrameAssetId?: string;
   lastFrameAssetId?: string;
   referenceAssetIds?: string[];
+  /** 仅 video_bridge（视频连视频）使用：要桥接的片段一 / 片段二素材 id——
+   *  分别取其最后一帧 / 第一帧做 FLF2V。两个都必须是本地已就绪的视频素材，
+   *  没有 HTTPS 直链这条替代路径（抓帧在服务端本地文件上做，不经过生成
+   *  接口的参考视频校验）。 */
+  clip1AssetId?: string;
+  clip2AssetId?: string;
 }
 
 export interface GenerateResult {
