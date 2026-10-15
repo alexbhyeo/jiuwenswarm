@@ -46,6 +46,8 @@ from jiuwenswarm.common.client.agent_http_bridge import (
 _resolve_agent_http_base = resolve_agent_http_base
 _resolve_agent_upload_base = resolve_agent_upload_base
 
+from jiuwenswarm.common.projectless_workspace import get_projectless_tasks_dir
+
 if TYPE_CHECKING:
     from jiuwenswarm.channels.web.share_image_export import (
         ShareImageExportManager,
@@ -318,6 +320,11 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
     agent_teams_root = _get_agent_teams_root(project_root)
     logs_root = _get_logs_dir()
     auto_harness_root = project_root / "auto-harness"
+    # Projectless tasks (no bound project_dir) write their generated media under
+    # <Documents>/JiuwenSwarm/<date>/chat-<n>/outputs/, outside workspace_root —
+    # without this, any @-referenced or inline-rendered media from a projectless
+    # task 403s here even though the file exists.
+    projectless_tasks_root = get_projectless_tasks_dir()
     logger = logging.getLogger(__name__)
 
     _HOP_BY_HOP_HEADERS = {
@@ -996,7 +1003,11 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
             in_logs = os.path.commonpath([str(cls.logs_root), str(target_resolved)]) == str(cls.logs_root)
             in_auto_harness = \
                 os.path.commonpath([str(cls.auto_harness_root), str(target_resolved)]) == str(cls.auto_harness_root)
-            return in_workspace or in_agent_teams or in_logs or in_auto_harness
+            in_projectless_tasks = (
+                os.path.commonpath([str(cls.projectless_tasks_root), str(target_resolved)])
+                == str(cls.projectless_tasks_root)
+            )
+            return in_workspace or in_agent_teams or in_logs or in_auto_harness or in_projectless_tasks
         except ValueError:
             return False
 

@@ -1562,9 +1562,12 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
   const releaseUnsentUploads = useCallback((drafts: AttachmentDraft[]) => {
     const removingIds = new Set(drafts.map((draft) => draft.id));
     const remaining = attachmentsRef.current.filter((draft) => !removingIds.has(draft.id));
+    const registeredPaths = new Set(sessionAssetsRef.current.map((asset) => normalizePath(asset.path)));
     const plan = planUnsentImageDiscard(
       drafts.map(toUnsentImageDraft),
       remaining.map(toUnsentImageDraft),
+      registeredPaths,
+      normalizePath,
     );
     const sessionId = activeSessionId || '';
     for (const id of plan.pendingIds) {
