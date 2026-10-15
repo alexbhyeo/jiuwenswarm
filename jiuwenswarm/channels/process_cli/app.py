@@ -16,6 +16,14 @@ from typing import TYPE_CHECKING, Any, TextIO
 
 from jiuwenswarm.channels.process_cli.client import InProcessRuntimeClient
 from jiuwenswarm.channels.process_cli.display_context import resolve_cli_work_mode
+from jiuwenswarm.channels.process_cli.live_input import (
+    LiveSessionInputController,
+    PipeLineReader,
+    TtyLineReader,
+    encode_forwarded_receipt,
+    supports_live_session_input,
+)
+from jiuwenswarm.channels.process_cli.persistence import flush_session_writes
 from jiuwenswarm.channels.process_cli.render import EventRenderer
 from jiuwenswarm.common.mode_matrix import is_team_mode
 from jiuwenswarm.common.schema.agent import AgentRequest
@@ -82,6 +90,22 @@ def _build_request(
     trusted_dirs = [str(Path(path).resolve()) for path in args.trusted_dir]
     if not trusted_dirs:
         trusted_dirs = [project_dir]
+    params = {
+        "query": args.prompt,
+        "content": args.prompt,
+        "mode": args.mode,
+        "work_mode": work_mode,
+        "cwd": cwd,
+        "project_dir": project_dir,
+        "trusted_dirs": trusted_dirs,
+        "supports_user_interaction": (
+            bool(getattr(args, "_interactive_worker", False))
+            or (args.output == "human" and sys.stdin.isatty())
+        ),
+    }
+    model_selection = str(getattr(args, "model_selection", "") or "").strip()
+    if model_selection:
+        params["model_name"] = model_selection
     return AgentRequest(
         request_id=request_id,
         channel_id=CHANNEL_ID,
@@ -89,19 +113,7 @@ def _build_request(
         req_method=ReqMethod.CHAT_SEND,
         is_stream=True,
         timestamp=time.time(),
-        params={
-            "query": args.prompt,
-            "content": args.prompt,
-            "mode": args.mode,
-            "work_mode": work_mode,
-            "cwd": cwd,
-            "project_dir": project_dir,
-            "trusted_dirs": trusted_dirs,
-            "supports_user_interaction": (
-                bool(getattr(args, "_interactive_worker", False))
-                or (args.output == "human" and sys.stdin.isatty())
-            ),
-        },
+        params=params,
     )
 
 
@@ -476,10 +488,10 @@ async def _delete_session(
     return str(args.session or "").strip()
 
 
-def _interaction_answer(
+def _render_interaction_prompt(
     payload: dict[str, Any],
     stream: TextIO,
-) -> tuple[str, list[dict[str, Any]]]:
+) -> list[dict[str, Any]]:
     prompt = str(payload.get("question") or payload.get("message") or "需要输入")
     stream.write(f"\n? {prompt}\n")
     options = [item for item in payload.get("options", []) if isinstance(item, dict)]
@@ -490,7 +502,13 @@ def _interaction_answer(
         stream.write(f"  {index}. {label}{suffix}\n")
     stream.write("请输入选项或自定义内容：")
     stream.flush()
-    answer = sys.stdin.readline().strip()
+    return options
+
+
+def _interaction_answers(
+    answer: str,
+    options: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     selected = answer
     if options and answer.isdigit():
         index = int(answer) - 1
@@ -498,7 +516,32 @@ def _interaction_answer(
             selected = str(
                 options[index].get("value") or options[index].get("label") or answer
             )
-    return answer, [{"selected_options": [selected], "custom_input": answer}]
+    return [{"selected_options": [selected], "custom_input": answer}]
+
+
+def _interaction_questions(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    questions = payload.get("questions")
+    if isinstance(questions, list):
+        prompts = [item for item in questions if isinstance(item, dict)]
+        if prompts:
+            return prompts
+    return [payload]
+
+
+def _interaction_answer(
+    payload: dict[str, Any],
+    stream: TextIO,
+) -> tuple[str, list[dict[str, Any]]]:
+    answers = []
+    answer = ""
+    for question in _interaction_questions(payload):
+        options = _render_interaction_prompt(question, stream)
+        line = sys.stdin.readline()
+        if not line:
+            raise EOFError(INTERACTIVE_INPUT_REQUIRED)
+        answer = line.strip()
+        answers.extend(_interaction_answers(answer, options))
+    return answer, answers
 
 
 def _answer_request(
@@ -577,12 +620,14 @@ async def _consume(
     renderer: EventRenderer,
     *,
     interactive: bool,
+    live_input: LiveSessionInputController | None = None,
+    owns_live_input: bool = True,
 ) -> int:
     async def handle_interaction(
         original_request: AgentRequest,
         interaction: RuntimeEvent,
     ) -> int:
-        if not interactive:
+        def input_unavailable() -> int:
             renderer.render(
                 RuntimeEvent.error(
                     request_id=interaction.request_id or original_request.request_id,
@@ -593,27 +638,59 @@ async def _consume(
             )
             return 4
 
+        if not interactive:
+            return input_unavailable()
+
+        if live_input is not None:
+            await live_input.pause()
         renderer.prepare_interaction()
-        _answer, answers = await asyncio.to_thread(
-            _interaction_answer,
-            interaction.payload or {},
-            renderer.stdout,
-        )
+        try:
+            if live_input is None:
+                _answer, answers = await asyncio.to_thread(
+                    _interaction_answer,
+                    interaction.payload or {},
+                    renderer.stdout,
+                )
+            else:
+                answers = []
+                for question in _interaction_questions(interaction.payload or {}):
+                    options = _render_interaction_prompt(question, renderer.stdout)
+                    answer = await live_input.read_interaction_line()
+                    answers.extend(_interaction_answers(answer, options))
+        except EOFError:
+            return input_unavailable()
         answer_request, resumes_stream = _answer_request(
             original_request,
             interaction,
             answers,
         )
         if resumes_stream:
+            if live_input is not None:
+                live_input.resume_after_event()
             return await _consume(
                 client,
                 answer_request,
                 renderer,
                 interactive=interactive,
+                live_input=live_input,
+                owns_live_input=False,
             )
 
+        if live_input is not None:
+            live_input.resume_after_event()
         for answer_event in await client.answer_interaction(answer_request):
-            renderer.render(answer_event)
+            if live_input is not None:
+                if (
+                    answer_event.event_type in INTERACTION_EVENTS
+                    or answer_event.is_complete
+                ):
+                    await live_input.pause()
+                live_input.observe(answer_event)
+                await live_input.render_root_event(
+                    lambda event=answer_event: renderer.render(event)
+                )
+            else:
+                renderer.render(answer_event)
             if answer_event.event_type in INTERACTION_EVENTS:
                 nested = await handle_interaction(answer_request, answer_event)
                 if nested != 0:
@@ -623,7 +700,15 @@ async def _consume(
     events = client.stream(request)
     try:
         async for event in events:
-            renderer.render(event)
+            if live_input is not None:
+                if event.event_type in INTERACTION_EVENTS or event.is_complete:
+                    await live_input.pause()
+                live_input.observe(event)
+                await live_input.render_root_event(
+                    lambda current=event: renderer.render(current)
+                )
+            else:
+                renderer.render(event)
             if event.event_type in INTERACTION_EVENTS:
                 nested = await handle_interaction(request, event)
                 if nested != 0:
@@ -632,6 +717,8 @@ async def _consume(
                 return 1 if renderer.failed else 0
         return 1 if renderer.failed else 0
     finally:
+        if live_input is not None and owns_live_input:
+            await live_input.close()
         close_stream = getattr(events, "aclose", None)
         if callable(close_stream):
             await _bounded_cleanup(close_stream())
@@ -653,6 +740,17 @@ async def _invoke_skills_list(
     return (1 if renderer.failed else 0), request, session_id
 
 
+def _emit_live_receipt(receipt, *, forwarded: bool, renderer: EventRenderer) -> None:
+    """Return a steer receipt to the parent, or show it in this process."""
+
+    if forwarded:
+        stream = sys.stderr
+        stream.write(encode_forwarded_receipt(receipt) + "\n")
+        stream.flush()
+        return
+    renderer.live_input_receipt(status=receipt.status, message=receipt.message)
+
+
 async def run(
     args: argparse.Namespace,
     *,
@@ -672,6 +770,7 @@ async def run(
         stderr=stderr,
         show_reasoning=args.show_reasoning,
         show_tools=args.show_tools,
+        concise_errors=not bool(getattr(args, "_interactive_worker", False)),
     )
     renderer.start()
 
@@ -740,11 +839,40 @@ async def run(
         interactive = bool(getattr(args, "_interactive_worker", False)) or (
             args.output == "human" and sys.stdin.isatty()
         )
+        live_input = None
+        if supports_live_session_input(
+            args,
+            stdin=sys.stdin,
+            stdout=renderer.stdout,
+        ):
+            live_input = LiveSessionInputController(
+                client=client,
+                root_request=request,
+                read_line=(
+                    PipeLineReader()
+                    if getattr(args, "_forwarded_live_input", False)
+                    else TtyLineReader()
+                ),
+                on_ready=(
+                    (lambda: None)
+                    if getattr(args, "_forwarded_live_input", False)
+                    else lambda: renderer.live_input_ready(
+                        str(request.params.get("query") or "")
+                    )
+                ),
+                on_receipt=lambda receipt: _emit_live_receipt(
+                    receipt,
+                    forwarded=bool(getattr(args, "_forwarded_live_input", False)),
+                    renderer=renderer,
+                ),
+            )
+            live_input.start()
         return await _consume(
             client,
             request,
             renderer,
             interactive=interactive,
+            live_input=live_input,
         )
 
     try:
@@ -813,7 +941,15 @@ async def run(
             # Runtime close must run even when session cleanup itself is
             # cancelled.  The original cancellation still propagates after
             # this finally block; only resource ownership is made reliable.
-            await _bounded_cleanup(client.close())
+            try:
+                await _bounded_cleanup(client.close())
+            finally:
+                # close() shares its deadline with Runtime teardown. Give the
+                # writer barriers a fresh window even after close times out or
+                # is cancelled, matching the machine entry's final flush step.
+                await _bounded_cleanup(
+                    flush_session_writes(timeout_seconds=SHUTDOWN_STEP_TIMEOUT_SECONDS)
+                )
 
 
 async def _bounded_cleanup(awaitable: Any) -> None:

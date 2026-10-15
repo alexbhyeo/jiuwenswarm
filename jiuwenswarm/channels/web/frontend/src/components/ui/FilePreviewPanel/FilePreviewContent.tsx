@@ -2,13 +2,16 @@ import { useMemo, useState } from 'react';
 import { ArrowDownToLine } from 'lucide-react';
 import { MarkdownRenderer } from '../../MarkdownRenderer';
 import { CodePreview } from '../../ArtifactsPanel/CodePreview';
+import { inlineDownloadUrl } from '../../ArtifactsPanel/filePreviewModel';
 import FileCopyIcon from '../../../assets/agent-management/file-copy.svg?react';
 import {
   downloadPreviewFile,
   formatJsonContent,
+  getPreviewCopyText,
   getPreviewFileLabel,
   isJsonFilePath,
   isMarkdownFilePath,
+  isPdfFilePath,
   isPreviewableImagePath,
   isPythonFilePath,
   splitMarkdownFrontMatter,
@@ -65,17 +68,22 @@ export function FilePreviewContent({
   const isMarkdown = file ? isMarkdownFilePath(file.path) : false;
   const isPython = file ? isPythonFilePath(file.path) : false;
   const isJson = file ? isJsonFilePath(file.path) : false;
+  const isPdf = file ? isPdfFilePath(file.path) : false;
   const isImage = file ? isPreviewableImagePath(file.path) : false;
   const markdownParts = useMemo(() => splitMarkdownFrontMatter(file?.content || ''), [file]);
   const formattedContent = useMemo(
     () => (file && isJson ? formatJsonContent(file.content || '') : file?.content || ''),
     [file, isJson],
   );
+  const binaryPreviewUrl = useMemo(
+    () => (file?.downloadUrl ? inlineDownloadUrl(file.downloadUrl, 'http://localhost') : null),
+    [file?.downloadUrl],
+  );
 
   const handleCopy = async () => {
     if (!file?.content) return;
     try {
-      await navigator.clipboard.writeText(file.content);
+      await navigator.clipboard.writeText(getPreviewCopyText(file.path, file.content));
       setCopyState('copied');
     } catch {
       setCopyState('failed');
@@ -94,6 +102,9 @@ export function FilePreviewContent({
   };
 
   const stateTestId = `${testId}-state`;
+  // loading 且调用方仍提供了可渲染内容（stale-while-revalidate）时继续展示旧内容，
+  // 避免内容区塌缩成 loading 占位引起外层滚动跳动；无内容可展示时才回退 loading 占位
+  const showStaleContentDuringLoading = status === 'loading' && file?.content != null;
   return (
     <div className="file-preview-content__main" data-testid={testId}>
       {!selected ? (
@@ -137,7 +148,7 @@ export function FilePreviewContent({
             </div>
           </header>
           <div className="file-preview-content__body" data-testid={`${testId}-body`}>
-            {status === 'loading' ? (
+            {status === 'loading' && !showStaleContentDuringLoading ? (
               <div className="file-preview-state" data-testid={stateTestId} data-variant="loading">
                 {labels.loading}
               </div>
@@ -151,7 +162,7 @@ export function FilePreviewContent({
                 {errorText || labels.readError}
               </div>
             ) : null}
-            {status === 'success' && file.content != null && isMarkdown ? (
+            {(status === 'success' || showStaleContentDuringLoading) && file.content != null && isMarkdown ? (
               <article className="file-preview-markdown" data-testid={`${testId}-markdown`}>
                 {markdownParts.frontMatter ? (
                   <pre className="file-preview-markdown__frontmatter" data-testid={`${testId}-markdown-frontmatter`}>
@@ -164,17 +175,21 @@ export function FilePreviewContent({
                 />
               </article>
             ) : null}
-            {status === 'success' && file.content != null && isPython ? (
+            {(status === 'success' || showStaleContentDuringLoading) && file.content != null && isPython ? (
               <div className="file-preview-code-frame" data-testid={`${testId}-code`}>
                 <CodePreview content={file.content} name={getPreviewFileLabel(file.path)} />
               </div>
             ) : null}
-            {status === 'success' && file.content != null && isJson ? (
+            {(status === 'success' || showStaleContentDuringLoading) && file.content != null && isJson ? (
               <pre className="file-preview-code" data-testid={`${testId}-code`}>
                 {formattedContent || ' '}
               </pre>
             ) : null}
-            {status === 'success' && file.content != null && !isMarkdown && !isPython && !isJson ? (
+            {(status === 'success' || showStaleContentDuringLoading) &&
+            file.content != null &&
+            !isMarkdown &&
+            !isPython &&
+            !isJson ? (
               <pre className="file-preview-code" data-testid={`${testId}-code`}>
                 {file.content || ' '}
               </pre>
@@ -184,7 +199,15 @@ export function FilePreviewContent({
                 <img src={file.downloadUrl} alt={getPreviewFileLabel(file.path)} />
               </div>
             ) : null}
-            {status === 'success' && file.content == null && !(isImage && file.downloadUrl) ? (
+            {status === 'success' && file.content == null && isPdf && binaryPreviewUrl ? (
+              <iframe
+                title={getPreviewFileLabel(file.path)}
+                src={binaryPreviewUrl}
+                className="file-preview-pdf"
+                data-testid={`${testId}-pdf`}
+              />
+            ) : null}
+            {status === 'success' && file.content == null && !((isImage || isPdf) && file.downloadUrl) ? (
               <div
                 className="file-preview-state"
                 data-testid={stateTestId}

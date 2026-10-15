@@ -46,8 +46,10 @@ from jiuwenswarm.common.config import (
     get_default_model_provider,
     get_evolution_auto_save_enabled,
     get_skill_evolution_enabled,
+    get_symphony_evolution_enabled,
 )
 from jiuwenswarm.common.kv_cache_affinity_config import (
+    KVCacheAffinityConfig,
     build_kv_cache_affinity_config,
     get_default_model_client_config,
 )
@@ -86,6 +88,7 @@ def _kv_cache_affinity_config(config: dict[str, Any]) -> KVCacheAffinityConfig:
 # Rails common to both roles, in mount order. Each entry is a ``swarm.*``
 # provider name re-exported from the registry (no hard-coded strings).
 _COMMON_RAIL_NAMES: tuple[str, ...] = (
+    registry.USER_HOOKS,
     registry.RUNTIME_PROMPT,
     registry.TEAM_SKILL_STORAGE_POLICY,
     # Reloads the member's Skill view after a write into the single library.
@@ -148,6 +151,7 @@ _CODE_RAIL_NAMES: tuple[str, ...] = (
     registry.HEARTBEAT,
     registry.CODE_LSP,
     registry.CODE_PROJECT_MEMORY,
+    registry.CODE_AGENT_MD,
     registry.PERMISSION_INTERRUPT,
     registry.SYS_OPERATION,
     registry.CODE_CODING_MEMORY,
@@ -193,7 +197,6 @@ _CODE_TOOL_NAMES: tuple[str, ...] = (
 )
 
 # code_agent sub-agents are always-on (explore / plan) or config-gated.
-_DEFAULT_SUBAGENT_MAX_ITERATIONS = 15
 
 
 def _is_code_mode(mode: str) -> bool:
@@ -514,10 +517,14 @@ def _code_base_rail_names(role: str) -> tuple[str, ...]:
 
 def _role_evolution_rails(config: dict[str, Any], role: str) -> list[RailSpec]:
     """Return the role-specific skill-evolution rails (shared by both profiles)."""
+    rails: list[RailSpec] = []
+    if role == "leader" and get_symphony_evolution_enabled(config):
+        rails.append(RailSpec(type=registry.SYMPHONY_GRAPH_EVOLUTION, params={}))
     if not get_skill_evolution_enabled(config):
-        return []
+        return rails
     if role == "leader":
         return [
+            *rails,
             RailSpec(
                 type=registry.TEAM_SKILL_EVOLUTION,
                 params=_team_evolution_rail_params(config),
@@ -553,6 +560,7 @@ def _build_team_capability_specs(
     ]
     if role == "leader":
         rails_specs.append(RailSpec(type=registry.STRUCTURED_ASK_USER))
+        rails_specs.append(RailSpec(type=registry.SESSION_MESSAGING_ROUTE))
         if is_team_plan_mode(mode):
             rails_specs.extend(
                 [
@@ -586,6 +594,9 @@ def _build_team_capability_specs(
         BuiltinToolSpec(type=name, params=_tool_params(name, config))
         for name in _COMMON_TOOL_NAMES
     ]
+    if role == "leader":
+        tool_specs.append(BuiltinToolSpec(type=registry.A4P_INTENT_AUTHORIZATION))
+        tool_specs.append(BuiltinToolSpec(type=registry.SESSION_MESSAGING_TOOLS))
     return rails_specs, tool_specs
 
 
@@ -616,6 +627,9 @@ def _build_code_capability_specs(
 
     if is_team_plan_leader:
         rails_specs.append(RailSpec(type=registry.TEAM_PLAN_APPROVAL))
+
+    if role == "leader":
+        rails_specs.append(RailSpec(type=registry.SESSION_MESSAGING_ROUTE))
 
     if enable_permissions and role == "teammate":
         rails_specs.append(
@@ -654,6 +668,9 @@ def _build_code_capability_specs(
         BuiltinToolSpec(type=name, params=_tool_params(name, config))
         for name in _CODE_TOOL_NAMES
     ]
+    if role == "leader":
+        tool_specs.append(BuiltinToolSpec(type=registry.A4P_INTENT_AUTHORIZATION))
+        tool_specs.append(BuiltinToolSpec(type=registry.SESSION_MESSAGING_TOOLS))
     return rails_specs, tool_specs
 
 
@@ -732,12 +749,11 @@ def _code_subagent_spec(
     elif name == "statusline-setup":
         max_iterations = registry.DEFAULT_STATUSLINE_SETUP_MAX_ITERATIONS
     else:
-        max_iterations = react_cfg.get(
-            "max_iterations",
-            _DEFAULT_SUBAGENT_MAX_ITERATIONS,
-        )
-    if isinstance(sub_cfg, dict) and sub_cfg.get("max_iterations"):
+        max_iterations = react_cfg.get("max_iterations", 100)
+    if isinstance(sub_cfg, dict) and sub_cfg.get("max_iterations") is not None:
         max_iterations = sub_cfg["max_iterations"]
+    if max_iterations is not None:
+        max_iterations = int(max_iterations)
     card_kwargs: dict[str, Any] = {"name": name}
     if name == "statusline-setup":
         card_kwargs["id"] = "jiuwenswarm.statusline-setup"
@@ -746,7 +762,7 @@ def _code_subagent_spec(
         system_prompt="",
         factory_name=factory_name,
         factory_kwargs={
-            "max_iterations": int(max_iterations),
+            "max_iterations": max_iterations,
             "language": language,
         },
     )

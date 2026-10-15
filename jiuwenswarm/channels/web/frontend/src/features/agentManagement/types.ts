@@ -11,6 +11,7 @@ export type AgentCatalogItem = {
   runtimePackageName: string;
   hubAssetId?: string;
   displayName: string;
+  searchNames?: string[];
   description: string;
   category: string;
   source: AgentSource;
@@ -21,6 +22,12 @@ export type AgentCatalogItem = {
   tags: Array<{ id: string; label: string }>;
   avatarUrl: string | null;
   version?: string;
+  teamCompatible?: {
+    leader: boolean;
+    member: boolean;
+  };
+  /** Present when manifest declares an External Harness runtime (三方专家). */
+  runtime?: { provider_name: string };
 };
 
 export type AgentCapability = {
@@ -32,13 +39,82 @@ export type AgentCapability = {
 export type AgentDetail = AgentCatalogItem & {
   prompt: string;
   details: string;
+  persona: string;
   skills: AgentCapability[];
   tools: AgentCapability[];
   rails: AgentCapability[];
   mcps: AgentCapability[];
   suggestedPrompts: string[];
   pendingConnectors: string[];
+  runtime?: { provider_name: string };
 };
+
+export type AgentGroupSource = 'builtin' | 'local' | 'hub';
+
+export type AgentGroupMember = {
+  id: string;
+  agentTemplateId: string;
+  displayName: string;
+  description: string;
+  role: 'leader' | 'member';
+  avatarUrl: string | null;
+};
+
+export type AgentGroupCapabilities = {
+  canUse: boolean;
+  canInstall: boolean;
+  canUninstall: boolean;
+  canPreviewFiles: boolean;
+  canEdit: boolean;
+  canPublish: boolean;
+};
+
+export type AgentGroupCatalogItem = {
+  id: string;
+  name: string;
+  displayName: string;
+  searchNames?: string[];
+  description: string;
+  category: string;
+  source: AgentGroupSource;
+  installed: boolean;
+  memberCount: number;
+  members: AgentGroupMember[];
+  skills: AgentCapability[];
+  tags: Array<{ id: string; label: string }>;
+  avatarUrl: string | null;
+  capabilities: AgentGroupCapabilities;
+};
+
+export type AgentGroupIdentity = Pick<AgentGroupCatalogItem, 'id' | 'displayName' | 'avatarUrl'>;
+
+export type AgentGroupDetail = AgentGroupCatalogItem & {
+  version: string;
+  updatedAt: string;
+  details: string;
+  persona: string;
+  leaderId: string;
+  quickInputs: string[];
+};
+
+export type AgentGroupDraft = {
+  id: string;
+  name: string;
+  description: string;
+  persona: string;
+  category: string;
+  tagIds: string[];
+  customTags: string[];
+  leaderId: string;
+  memberIds: string[];
+  skillRefs: string[];
+  suggestedPrompts: string[];
+};
+
+export type AgentGroupSelectionIntent =
+  | { kind: 'keep' }
+  | { kind: 'clear' }
+  | { kind: 'select'; id: string };
 
 export type DefinitionFileEntry = {
   relativePath: string;
@@ -51,13 +127,28 @@ export type DefinitionFileEntry = {
 
 export type AgentFileContent = {
   relativePath: string;
-  content: string;
+  content: string | null;
+  downloadUrl?: string | null;
 };
 
 export type SkillOption = {
   id: string;
   name: string;
   description: string;
+  source?: string;
+  installed?: boolean;
+  /** skills.list 原样透传的启用态：false = 用户已停用。手动创建插件页的技能弹窗据此
+      只列已启用技能（同 SkillPanel"我的技能"默认口径，见 utils/mySkills.ts）。 */
+  enabled?: boolean;
+  /** Raw SKILL.md frontmatter kind, including swarm-skill/team-skill. */
+  kind?: string;
+  skillType?: string;
+  /** SkillHub marketplace type, used for uninstalled market entries. */
+  pluginType?: string;
+  /** Stable TeamSkillsHub asset identity used by the marketplace install API. */
+  hubAssetId?: string;
+  marketplace?: string;
+  installSpec?: string;
 };
 
 export type McpOption = {
@@ -68,7 +159,13 @@ export type McpOption = {
   integrationType: string;
   connectionState: string;
   source: string;
+  runtimePackageName?: string;
+  hubAssetId?: string;
+  installed?: boolean;
+  icon?: string | null;
 };
+
+export type ExternalHarnessProvider = 'claudecode' | 'codex';
 
 export type AgentDraft = {
   id: string;
@@ -80,6 +177,8 @@ export type AgentDraft = {
   skillRefs: string[];
   mcpRefs: string[];
   suggestedPrompts: string[];
+  useExternalHarness: boolean;
+  externalHarnessProvider: ExternalHarnessProvider;
 };
 
 export type AgentSelectionIntent = { kind: 'keep' } | { kind: 'clear' } | { kind: 'select'; id: string };

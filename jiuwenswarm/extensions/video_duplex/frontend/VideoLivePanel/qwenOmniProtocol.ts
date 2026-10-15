@@ -1,3 +1,4 @@
+import { normalizeReplyLanguage, speakLanguageInstruction } from './replyLanguage.js';
 import {
   createQwenOmniBriefOutputEvent,
   createQwenOmniResponseEvent,
@@ -27,6 +28,7 @@ export interface QwenOmniSessionOptions {
   tools?: Array<Record<string, unknown>>;
   inputRate: number;
   outputRate: number;
+  replyLanguage?: string;
 }
 
 export interface QwenOmniMediaBatch {
@@ -45,8 +47,8 @@ export function createQwenOmniSessionUpdate(options: QwenOmniSessionOptions): Re
     type: 'session.update',
     session: {
       modalities: ['audio', 'text'],
-      voice: options.voice || 'Ethan',
-      instructions: QWEN_SESSION_INSTRUCTIONS,
+      voice: options.voice || 'Tina',
+      instructions: QWEN_SESSION_INSTRUCTIONS + "\n" + speakLanguageInstruction(normalizeReplyLanguage(options.replyLanguage)),
       audio: {
         input: { format: { type: 'pcm', sample_rate: options.inputRate } },
         output: { format: { type: 'pcm', sample_rate: options.outputRate } },
@@ -80,10 +82,11 @@ export function createQwenOmniToolResultEvents(
   callId: string,
   brief: RealtimeBrief,
   context?: QwenOmniToolResultContext,
+  replyLanguage?: string,
 ): Array<Record<string, unknown>> {
   return [
     createQwenOmniBriefOutputEvent(callId, brief, context),
-    createQwenOmniToolFollowupEvent(brief, context),
+    createQwenOmniToolFollowupEvent(brief, context, replyLanguage),
     createQwenOmniResponseEvent(),
   ];
 }

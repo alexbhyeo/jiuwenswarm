@@ -59,7 +59,9 @@ await build({
             : path.endsWith('webClient')
               ? `
           export const webClient = { on(...args) { return globalThis.__duplexHarness.on(...args); } };
-          export const webRequest = (...args) => globalThis.__duplexHarness.request(...args);`
+          export const webRequest = (...args) => globalThis.__duplexHarness.request(...args);
+          export const requestAgentDetail = async () => null;
+          export const requestPhaseAgents = async () => [];`
               : path.endsWith('featureFlag')
                 ? 'export const useTaskFullDuplexEnabled = () => true;'
                 : `export const useApplicationTaskStore = { getState: () => globalThis.__duplexHarness.tasks };
@@ -134,6 +136,7 @@ beforeEach(async () => {
     },
     async request(method, params) {
       this.requests.push({ method, params });
+      if (method === 'video.search.list') return { jobs: this.recoveryJobs || [], next_offset: null };
       if (method === 'video.search.status') return this.statuses.get(params.job_id);
       return { persisted: true };
     },
@@ -447,4 +450,17 @@ test('a missed file push is recovered from terminal status and newer tokens reta
   assert.equal(artifacts.length, 1);
   assert.equal(artifacts[0].downloadUrl, '/file-api/download?token=renewed');
   assert.equal(harness.mediaResults.length, 0);
+});
+
+
+test('recovery restores persisted tasks without replaying history or audio', async () => {
+  const scope = 'task-duplex:conversation-a';
+  harness.recoveryJobs = [job(scope, { status: 'completed', sequence: 8, display_result: 'Saved result' })];
+  await act(async () => { for (const run of timers.values()) run(); });
+  assert.equal(harness.tasks.sessions['conversation-a'][0].status, 'completed');
+  assert.equal(harness.messages.length, 0);
+  assert.equal(harness.mediaResults.length, 0);
+  await event('completed', job(scope, { status: 'completed', sequence: 8, display_result: 'Saved result' }));
+  assert.equal(harness.messages.length, 0);
+  assert.equal(harness.requests.filter(r => r.method === 'video.conversation.append').length, 0);
 });

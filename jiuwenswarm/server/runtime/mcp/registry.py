@@ -34,6 +34,36 @@ logger = logging.getLogger(__name__)
 # Fields masked out of the returned mcp_spec to avoid leaking secrets.
 _SENSITIVE_MCP_KEYS = frozenset({"headers", "env"})
 
+# Earlier built-in seeds shipped these marketplace package ids. They are kept
+# only to filter stale state.json records after the bundle dropped them.
+_LEGACY_BUILTIN_PACKAGE_IDS = frozenset({
+    "amap",
+    "baidu-map",
+    "canva",
+    "ctrip-wendao",
+    "dingtalk",
+    "feishu",
+    "gitcode",
+    "github",
+    "harmonyos-mcp",
+    "huaweiyun-mcp",
+    "netease-mail",
+    "qcc-company",
+    "ssh-mcp-server",
+    "tmeet",
+    "tyc-mcp",
+    "wecom",
+    "wind-finance",
+    "yingmi-mcp",
+})
+
+
+# Names whose in-flight connect/auth flow the user cancelled via
+# ``mcp.cancel_connect`` (e.g. a mis-clicked CLI OAuth, or giving up on the
+# 10-min hold-open wait). Cleared when a fresh connect starts; checked at step
+# boundaries in ``_connect_cli`` and by the wait_auth poller so the flow
+# unwinds promptly instead of waiting out the timeout.
+_CONNECT_CANCELLED: set[str] = set()
 
 # CLI connect error codes surfaced via mcp.connect's payload ``code`` field.
 # The frontend maps each to a friendly i18n string (connectorMarket.errors.*)
@@ -45,6 +75,14 @@ CODE_CLI_INCOMPLETE = "MCP_CLI_INCOMPLETE"     # version still unparseable/low
 # Custom MCP name conflicts with builtin marketplace package dir; 
 # builtin shadows custom on connect, so reject registration and prompt user to rename.
 CODE_NAME_CONFLICT = "MCP_NAME_CONFLICT"
+# Env-token CLI MCPs (auth: [] in cli.json, e.g. gitcode) authenticate via a
+# token-schema env var; the CLI's auth status rejected the stored token at
+# connect time. Frontend maps this to a "token invalid, re-enter" hint.
+CODE_CREDENTIALS_INVALID = "MCP_CREDENTIALS_INVALID"
+# CLI install script could not find PowerShell (npm postinstall spawn
+# powershell.exe ENOENT); frontend shows a friendly hint instead of the
+# misleading "version too low".
+CODE_INSTALL_SCRIPT_DEP = "MCP_INSTALL_SCRIPT_DEP"
 
 # Network-failure substrings matched (case-insensitively) against init command
 # stderr. Covers npm's common registry/connectivity errors; the token codes are
@@ -109,8 +147,52 @@ def _package_roots() -> tuple[Path, Path]:
     return _packages_dir(), _hub_packages_dir()
 
 
+def resolve_package(name: str) -> McpPackageManifest | None:
+    """Resolve a local MCP package for callers outside the registry."""
+    return _resolve_package(name)
+
+
 def _resolve_package(name: str) -> McpPackageManifest | None:
     return resolve_mcp_package(str(name or "").strip(), *_package_roots())
+
+
+def is_stale_marketplace_record(
+    name: str, record: dict[str, Any] | None = None
+) -> bool:
+    """True when a state record points to a marketplace package that is gone.
+
+    Read-only filter; state.json is left untouched. A record is considered
+    stale when its package no longer resolves and it matches a known legacy
+    builtin, a Hub install, or a CLI/skill-only type (custom MCPs can only be
+    stdio/remote).
+    """
+    n = str(name or "").strip()
+    if not n:
+        return False
+    try:
+        if _resolve_package(n) is not None:
+            return False
+    except Exception:  # noqa: BLE001
+        pass
+    if n in _LEGACY_BUILTIN_PACKAGE_IDS:
+        return True
+    if record is None:
+        try:
+            from jiuwenswarm.server.runtime.mcp.state_store import get_mcp_record
+            record = get_mcp_record(n)
+        except Exception:  # noqa: BLE001
+            record = None
+    if isinstance(record, dict) and str(
+        record.get("integration_type", "") or ""
+    ).strip() in {"cli", "skill-only"}:
+        return True
+    try:
+        from jiuwenswarm.server.runtime.marketplace.hub_install_state import (
+            HubInstallStateStore,
+        )
+        return HubInstallStateStore(_mcp_root()).get_by_package_id(n) is not None
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _pkg_dir(name: str) -> Path:
@@ -138,6 +220,7 @@ def _load_index_entry(name: str) -> dict[str, Any]:
     examples = raw.get("examples") if isinstance(raw.get("examples"), dict) else {}
     return {
         **raw,
+        "display_name_i18n": display_name,
         "display_name": display_name.get("zh") or package.name,
         "display_name_en": display_name.get("en") or package.name,
         "name": display_name.get("zh") or package.name,
@@ -269,6 +352,7 @@ def _build_summary(
         "name": name,
         # 中文名优先：display_name > name(中文) > name_zh > 包名
         "display_name": meta.get("display_name") or meta.get("name") or meta.get("name_zh") or name,
+        "display_name_i18n": meta.get("display_name_i18n", {}),
         # 中文描述优先（索引里 description_zh 是干净中文，description 是英文）
         "description": meta.get("description_zh") or meta.get("description", ""),
         "category": meta.get("category", ""),
@@ -415,7 +499,7 @@ def list_marketplace_mcps(mcp_filter: str = "builtin") -> list[dict[str, Any]]:
             )
             for rec in list_registered_mcps():
                 name = str(rec.get("name", "") or "").strip()
-                if not name or name in seen_names:
+                if not name or name in seen_names or is_stale_marketplace_record(name, rec):
                     continue
                 itype = str(rec.get("integration_type", "") or "remote-mcp").strip() or "remote-mcp"
                 state_val = str(rec.get("state", "") or "").strip()
@@ -467,7 +551,7 @@ def get_mcp(name: str) -> dict[str, Any] | None:
         rec = get_mcp_record(target)
     except Exception:  # noqa: BLE001
         rec = None
-    if rec is None:
+    if rec is None or is_stale_marketplace_record(target, rec):
         return None
     itype = str(rec.get("integration_type", "") or "remote-mcp").strip() or "remote-mcp"
     state_val = str(rec.get("state", "") or "").strip()
@@ -650,6 +734,49 @@ def build_config_entry(name: str) -> dict[str, Any] | None:
     return entry
 
 
+def cancel_connect(name: str) -> dict[str, Any]:
+    """User-initiated abort of an in-flight ``mcp.connect`` / ``mcp.wait_auth`` flow.
+
+    Marks the name cancelled (checked by ``_await_cli_auth`` /
+    ``_run_mcp_connect_flow``), kills any pending authWaitForExit CLI proc, and
+    rolls back a still-``connecting`` state.json record (marketplace → removed,
+    custom → registered) so the card doesn't stay stuck in "connecting".
+    Idempotent and safe when nothing is in flight.
+    """
+    n = str(name or "").strip()
+    if not n:
+        raise ValueError("mcp name is required")
+    _CONNECT_CANCELLED.add(n)
+    try:
+        from jiuwenswarm.server.runtime.mcp.cli_driver import (
+            cancel_pending_auth_proc,
+        )
+        cancel_pending_auth_proc(n)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[mcp.registry] cancel pending auth proc '%s' failed: %s", n, exc)
+    # Roll back only an in-flight connecting record. Never touch a record that
+    # already reached connected (e.g. the auth completed a split-second before
+    # the cancel landed) — that would silently unlink a working MCP.
+    try:
+        from jiuwenswarm.server.runtime.mcp.state_store import get_mcp_record
+        rec = get_mcp_record(n)
+        if isinstance(rec, dict) and rec.get("state") == "connecting":
+            rollback_failed_connect(n)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[mcp.registry] cancel rollback '%s' failed: %s", n, exc)
+    return {"type": "cancelled", "name": n}
+
+
+def was_connect_cancelled(name: str) -> bool:
+    """True when the user cancelled the in-flight connect/auth flow for name."""
+    return str(name or "").strip() in _CONNECT_CANCELLED
+
+
+def clear_connect_cancel(name: str) -> None:
+    """Forget a prior cancel marker (called when a fresh connect starts)."""
+    _CONNECT_CANCELLED.discard(str(name or "").strip())
+
+
 def connect_mcp(name: str, *, install_only: bool = False) -> dict[str, Any]:
     """Install a marketplace MCP (dispatch by integration_type).
 
@@ -671,6 +798,9 @@ def connect_mcp(name: str, *, install_only: bool = False) -> dict[str, Any]:
     n = str(name or "").strip()
     if not n:
         raise ValueError("mcp name is required")
+    # A fresh connect supersedes any previous cancel marker (the user may have
+    # cancelled once, then decided to retry).
+    clear_connect_cancel(n)
     package = _resolve_package(n)
     if package is None:
         # No marketplace package — this is a custom MCP. Its definition lives
@@ -905,10 +1035,28 @@ def _entry_missing_tokens(entry: dict[str, Any], store: Any) -> set[str]:
     return found - stored
 
 
+def _cli_cred_tokens_stored(name: str) -> bool:
+    """True when every token-schema required key is in the CredentialStore."""
+    try:
+        from jiuwenswarm.server.runtime.mcp.credential import (
+            CredentialStore,
+            required_tokens_from_schema,
+        )
+        keys = required_tokens_from_schema(name)
+        if not keys:
+            return False
+        store = CredentialStore()
+        stored = set(store.get_all(name).keys()) if name else set()
+        return all(k in stored for k in keys)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _classify_install_failure(n: str, inst: Any) -> CliConnectError:
     """Map a failed CliDriver.install() onto a CliConnectError by cause:
-    binary_not_found → MCP_RUNTIME_MISSING, network stderr → MCP_INSTALL_NETWORK,
-    else → MCP_CLI_INCOMPLETE. ``runtime``/``install_cmd`` are surfaced so the
+    binary_not_found → MCP_RUNTIME_MISSING, install_script_dep →
+    MCP_INSTALL_SCRIPT_DEP, network stderr → MCP_INSTALL_NETWORK, else →
+    MCP_CLI_INCOMPLETE. ``runtime``/``install_cmd`` are surfaced so the
     frontend hint can name the dependency / show the upgrade command.
     """
     runtime = inst.runtime or ""
@@ -917,6 +1065,13 @@ def _classify_install_failure(n: str, inst: Any) -> CliConnectError:
         return CliConnectError(
             CODE_RUNTIME_MISSING,
             f"mcp '{n}' CLI runtime '{runtime or 'unknown'}' not found on PATH; {inst.error}",
+            runtime=runtime, install_cmd=install_cmd,
+        )
+    if inst.error_kind == "install_script_dep":
+        # Structured CliDriver signal; outranks the network-text heuristic.
+        return CliConnectError(
+            CODE_INSTALL_SCRIPT_DEP,
+            f"mcp '{n}' CLI install script requires PowerShell but none was found; {inst.error}",
             runtime=runtime, install_cmd=install_cmd,
         )
     err_lower = (inst.error or "").lower()
@@ -942,8 +1097,15 @@ def _connect_cli(name: str, step_index: int, *, install_only: bool = False) -> d
     from jiuwenswarm.server.runtime.mcp.cli_driver import CliDriver
 
     n = str(name or "").strip()
+    if was_connect_cancelled(n):
+        # Cancelled while a previous step was still running — abort before
+        # doing any more work; the handler returns the cancelled payload.
+        return {"type": "cancelled", "name": n, "integration_type": "cli"}
     drv = CliDriver(n)
     inst = drv.install()
+    if was_connect_cancelled(n):
+        # Cancelled while the (possibly slow, network-bound) install ran.
+        return {"type": "cancelled", "name": n, "integration_type": "cli"}
     if not inst.version_ok:
         raise _classify_install_failure(n, inst)
     steps_total = drv.auth_steps_count()
@@ -954,8 +1116,29 @@ def _connect_cli(name: str, step_index: int, *, install_only: bool = False) -> d
     # ``dws auth login -y`` (pops a browser) even when the user is already
     # authenticated. Resume calls (idx > 0, from complete_cli_auth) already
     # checked status upstream and must not re-probe here.
-    if idx == 0 and drv.status().authenticated:
+    status = drv.status() if idx == 0 else None
+    if idx == 0 and status.authenticated:
         return _finalize_cli(n, inst, install_only=install_only)
+    # Zero-step env-token CLI MCPs (gitcode): the user provisioned the token
+    # but ``auth status`` still reports unauthenticated, so the token is
+    # invalid - wipe it and fail connect so the next attempt re-prompts.
+    # OAuth CLIs (steps_total > 0), resume calls (idx > 0) and install_only
+    # callers never reach this branch.
+    env_token_rejected = (
+        idx == 0
+        and not install_only
+        and steps_total == 0
+        and drv.manifest.status_cmd
+        and not status.authenticated
+        and _cli_cred_tokens_stored(n)
+    )
+    if env_token_rejected:
+        _wipe_stored_credentials(n)
+        raise CliConnectError(
+            CODE_CREDENTIALS_INVALID,
+            f"mcp '{n}' token rejected by CLI auth status: {status.output[:200]}",
+            runtime=inst.runtime or "",
+        )
     if idx < steps_total:
         step = drv.auth_step(idx)
         if step.needs_user_action:
@@ -1351,4 +1534,6 @@ __all__ = [
     "CODE_INSTALL_NETWORK",
     "CODE_CLI_INCOMPLETE",
     "CODE_NAME_CONFLICT",
+    "CODE_CREDENTIALS_INVALID",
+    "CODE_INSTALL_SCRIPT_DEP",
 ]

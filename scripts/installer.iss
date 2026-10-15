@@ -43,7 +43,7 @@ DisableProgramGroupPage=yes
 OutputDir=..\dist
 OutputBaseFilename={#BuildSetupBaseName}
 SetupIconFile=..\jiuwenswarm\channels\web\frontend\public\logo.ico
-UninstallDisplayIcon={app}\{#MyAppExeName}
+UninstallDisplayIcon={app}\logo-{#MyAppVersion}.ico
 Compression=lzma2/normal
 SolidCompression=yes
 WizardStyle=modern
@@ -57,6 +57,12 @@ ArchitecturesInstallIn64BitMode=x64compatible
 AppMutex=JiuwenSwarm.App,Global\JiuwenSwarm.App,{#MyAppName}.App,Global\{#MyAppName}.App
 CloseApplications=yes
 RestartApplications=no
+#ifdef BuildSignToolName
+  ; The compiler-provided Sign Tool signs Setup itself. Enabling the signed
+  ; uninstaller also signs temporary self-copies executed from {tmp}.
+  SignTool={#BuildSignToolName}
+  SignedUninstaller=yes
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -66,14 +72,20 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\dist\{#BuildDistDirName}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\jiuwenswarm\channels\web\frontend\public\logo.ico"; DestDir: "{app}"; DestName: "logo-{#MyAppVersion}.ico"; Flags: ignoreversion
+
+[InstallDelete]
+; Remove application-owned Electron leftovers when replacing an Electron build.
+Type: filesandordirs; Name: "{app}\resources"
+Type: files; Name: "{app}\logo-*.ico"
 
 [UninstallRun]
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--desktop-reset-external-cli-config"; Flags: runhidden waituntilterminated; RunOnceId: "ResetExternalCliConfig"
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\logo-{#MyAppVersion}.ico"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "{app}\logo-{#MyAppVersion}.ico"
 
 [UninstallDelete]
 ; Remove only application-owned paths that may gain runtime-generated files.

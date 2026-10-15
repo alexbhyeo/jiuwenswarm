@@ -42,6 +42,7 @@ export interface ConnectorSummary {
   runtimePackageName: string;
   hubAssetId?: string;
   displayName: string;
+  searchNames?: string[];
   // mcp.list 现在直接下发简介（backend-requests.md 需求14已解决），恒为 string，不再是可选缺省。
   description: string;
   category: string;
@@ -59,6 +60,8 @@ export interface ConnectorSummary {
 export interface ConnectorInstallResponse {
   type: 'installed';
   item: { id: string; name: string; installed: boolean };
+  /** Connect result from the combined Hub download + connect request. */
+  connect?: ConnectorConnectResponse;
 }
 
 export interface ConnectorUninstallResponse {
@@ -96,7 +99,12 @@ export interface ConnectorDetail extends ConnectorSummary {
   timeoutS?: number;
 }
 
-export type ConnectorConnectResponseType = 'connected' | 'credentials_required' | 'auth_required';
+export type ConnectorConnectResponseType =
+  | 'connected'
+  | 'credentials_required'
+  | 'auth_required'
+  // mcp.cancel_connect 收尾 hold-open 的 connect/wait_auth 时返回（用户中途放弃连接/授权）。
+  | 'cancelled';
 
 export interface ConnectorCredentialField {
   label?: string;

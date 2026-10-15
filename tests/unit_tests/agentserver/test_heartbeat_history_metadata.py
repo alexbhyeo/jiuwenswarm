@@ -20,8 +20,42 @@ from jiuwenswarm.server.runtime.agent_adapter.interface_deep import JiuWenSwarmD
 from jiuwenswarm.server.runtime.agent_adapter.interface import (
     JiuWenSwarm,
     _history_user_extra,
+    _with_cross_session_history_metadata,
     _with_heartbeat_history_metadata,
 )
+from jiuwenswarm.runtime.session.model import (
+    TEAM_EXECUTION_CONTEXT_METADATA_KEY,
+    SessionLifecycleContext,
+    SessionWorkKind,
+    TeamExecutionContext,
+    TeamExecutionDetails,
+)
+
+
+def test_team_execution_context_is_not_copied_into_user_turn_metadata(monkeypatch) -> None:
+    context = TeamExecutionContext(
+        session=SessionLifecycleContext(session_id="team-session", generation=1),
+        execution_id="execution-1",
+        request_id="request-1",
+        work_kind=SessionWorkKind.TEAM_REQUEST,
+        channel_id="web",
+        details=TeamExecutionDetails(session_message_id="sm-1"),
+    )
+    request = AgentRequest(
+        request_id="request-1",
+        channel_id="web",
+        session_id="team-session",
+        req_method=ReqMethod.CHAT_SEND,
+        params={"query": "report status", "mode": "team.work.normal"},
+        metadata={TEAM_EXECUTION_CONTEXT_METADATA_KEY: context},
+    )
+    monkeypatch.setattr(interface_module, "get_config", lambda: {"preferred_language": "zh"})
+    monkeypatch.setattr(interface_module, "get_memory_mode", lambda _cfg: "off")
+
+    _, _, turn = JiuWenSwarm()._build_inputs(request)
+
+    assert TEAM_EXECUTION_CONTEXT_METADATA_KEY in request.metadata
+    assert TEAM_EXECUTION_CONTEXT_METADATA_KEY not in turn.metadata
 
 
 def _heartbeat_params() -> dict:
@@ -93,6 +127,32 @@ def test_heartbeat_user_history_preserves_latest_develop_skills() -> None:
     }
 
 
+def test_cross_session_user_history_retains_trusted_origin_fields_only() -> None:
+    extra = _history_user_extra(
+        {
+            "_jiuwenswarm_cross_session": {
+                "message_id": "sm-1",
+                "source_session_id": "source-1",
+                "source_title": "Source",
+                "chain_id": "chain-1",
+                "hop_count": 1,
+                "forged": "discard-me",
+            }
+        }
+    )
+
+    assert extra == {
+        "message_origin": "cross_session_agent",
+        "session_message_id": "sm-1",
+        "cross_session": {
+            "message_id": "sm-1",
+            "source_session_id": "source-1",
+            "source_title": "Source",
+            "chain_id": "chain-1",
+            "hop_count": 1,
+        },
+    }
+
 def test_heartbeat_assistant_history_uses_web_compatible_marker_shape() -> None:
     params = _heartbeat_params()
 
@@ -104,6 +164,30 @@ def test_heartbeat_assistant_history_uses_web_compatible_marker_shape() -> None:
     assert extra == {
         "source": "agent-output",
         "metadata": {"automation": params["automation"]},
+    }
+
+
+def test_cross_session_assistant_history_keeps_turn_identity() -> None:
+    extra = _with_cross_session_history_metadata(
+        {"final_mode": "patch_segment"},
+        {
+            "_jiuwenswarm_cross_session": {
+                "message_id": "sm-1",
+                "source_session_id": "source-1",
+                "source_title": "Source",
+            }
+        },
+    )
+
+    assert extra == {
+        "final_mode": "patch_segment",
+        "message_origin": "cross_session_agent",
+        "session_message_id": "sm-1",
+        "cross_session": {
+            "message_id": "sm-1",
+            "source_session_id": "source-1",
+            "source_title": "Source",
+        },
     }
 
 

@@ -48,6 +48,7 @@ from jiuwenbox.server.runtime.base import (
     RuntimeExecRequest,
     RuntimeFileOpResult,
 )
+from jiuwenbox.server.runtime.errors import BackgroundJobNotFoundError
 from jiuwenbox.server.workspace import SANDBOX_WORKSPACE
 from jiuwenbox.supervisor import cgroup as cgroup_module
 from jiuwenbox.supervisor import network as network_module
@@ -67,8 +68,10 @@ from jiuwenbox.supervisor.daemon_ipc import (
     SANDBOX_CONTROL_SOCKET_NAME,
     SANDBOX_DAEMON_COMMAND,
     SANDBOX_DAEMON_SANDBOX_PATH,
+    SANDBOX_IP_ENV,
     SANDBOX_LAUNCHER_PATH,
     SANDBOX_RESERVED_DIR,
+    apply_sandbox_ip_env,
     encode_request,
     recv_frame,
     send_frame,
@@ -99,6 +102,19 @@ SERVER_PROTECT_PORTS_ENV = "JIUWENBOX_SERVER_PROTECT_PORTS"
 # explicitly accepted that the box-server has no host-level protection.
 LISTEN_URI_ENV = "JIUWENBOX_LISTEN"
 DEFAULT_SERVER_PROTECT_PORTS: tuple[int, ...] = (8321,)
+_API_TOKEN_ENV = "JIUWENBOX_API_TOKEN"
+
+
+def _sandbox_process_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Build the environment passed into the sandbox bwrap/daemon process.
+
+    Starts from the server process env (plus optional per-sandbox overrides),
+    then strips ``JIUWENBOX_API_TOKEN`` so the management Bearer credential
+    never becomes visible inside the sandbox.
+    """
+    process_env = {**os.environ, **(extra or {})}
+    process_env.pop(_API_TOKEN_ENV, None)
+    return process_env
 
 
 def _derive_protect_ports_from_listen() -> tuple[int, ...]:
@@ -456,8 +472,6 @@ class BackgroundJob:
     stderr: str = ""
 
 
-class BackgroundJobNotFoundError(Exception):
-    """Raised when a background job id is unknown for a sandbox."""
 
 
 def _resolve_zombie_reaper_interval() -> float:
@@ -674,6 +688,7 @@ class ProcessRuntime(RuntimeAdapter):
         self._network_modes: dict[str, NetworkMode] = {}
         self._netns_names: dict[str, str] = {}
         self._uplink_handles: dict[str, network_module.UplinkHandle] = {}
+        self._sandbox_ip_addresses: dict[str, str | None] = {}
         self._directory_roots: dict[str, Path] = {}
         self._file_roots: dict[str, Path] = {}
         self._launcher_dirs: dict[str, Path] = {}
@@ -979,6 +994,7 @@ class ProcessRuntime(RuntimeAdapter):
         netns_attached: bool,
         seccomp_fd: int | None,
         listener_fd: int | None = None,
+        sandbox_ip: str | None = None,
     ) -> list[str]:
         """Build a ready-to-spawn bwrap argv vector for ``command``.
 
@@ -1023,6 +1039,8 @@ class ProcessRuntime(RuntimeAdapter):
             # into the filesystem for the IPC endpoint, which means
             # Landlock can stay locked down.
             config.env[LISTENER_FD_ENV] = str(listener_fd)
+
+        apply_sandbox_ip_env(config.env, sandbox_ip)
 
         if launcher_dir is not None and landlock_enabled:
             launcher_path = launcher_dir / "landlock-launcher.py"
@@ -1929,16 +1947,8 @@ class ProcessRuntime(RuntimeAdapter):
             )
 
     async def get_sandbox_ip_address(self, sandbox_id: str) -> str | None:
-        """Return the sandbox IPv4 confirmed by the current network setup."""
-        mode = self._network_modes.get(sandbox_id)
-        if mode == NetworkMode.ISOLATED:
-            handle = self._uplink_handles.get(sandbox_id)
-            if handle is None:
-                return None
-            return handle.sandbox_ip or None
-        if mode == NetworkMode.HOST:
-            return await asyncio.to_thread(network_module.resolve_host_egress_ipv4)
-        return None
+        """Return the IPv4 snapshot injected for the current lifecycle."""
+        return self._sandbox_ip_addresses.get(sandbox_id)
 
     async def create(
         self,
@@ -1957,7 +1967,21 @@ class ProcessRuntime(RuntimeAdapter):
         self._network_modes[sandbox_id] = policy.network.mode
         self._policy_paths[sandbox_id] = Path(policy_path)
 
+        # A restart may be rebuilding a previously stopped lifecycle. Drop
+        # its snapshot before network setup so a failed rebuild cannot expose
+        # the old address through the runtime adapter.
+        self._sandbox_ip_addresses.pop(sandbox_id, None)
         netns_name = self._ensure_named_netns(sandbox_id, policy)
+        if policy.network.mode == NetworkMode.ISOLATED:
+            uplink_handle = self._uplink_handles.get(sandbox_id)
+            sandbox_ip = uplink_handle.sandbox_ip if uplink_handle is not None else None
+        elif policy.network.mode == NetworkMode.HOST:
+            sandbox_ip = await asyncio.to_thread(
+                network_module.resolve_host_egress_ipv4,
+            )
+        else:
+            sandbox_ip = None
+        self._sandbox_ip_addresses[sandbox_id] = sandbox_ip
         self._policy_binds_for_sandbox(sandbox_id, policy)
         self._install_sandbox_host_firewall_rules(sandbox_id, policy)
 
@@ -1999,10 +2023,12 @@ class ProcessRuntime(RuntimeAdapter):
             netns_attached=netns_name is not None,
             seccomp_fd=seccomp_fd,
             listener_fd=listener_fd,
+            sandbox_ip=sandbox_ip,
         )
         daemon_cmd = self._wrap_command_in_namespace(bwrap_args, netns_name)
 
-        process_env = {**os.environ, **(env or {})}
+        process_env = _sandbox_process_env(env)
+        process_env.pop(SANDBOX_IP_ENV, None)
         # ``LISTENER_FD_ENV`` is injected into the sandboxed process via
         # ``BwrapConfig.env`` -> ``bwrap --setenv``; bwrap itself never
         # consumes it, so we no longer set it on the bwrap parent env.
@@ -2252,6 +2278,7 @@ class ProcessRuntime(RuntimeAdapter):
         if netns_name and network_module.namespace_exists(netns_name):
             network_module.delete_named_namespace(netns_name)
         self._network_modes.pop(sandbox_id, None)
+        self._sandbox_ip_addresses.pop(sandbox_id, None)
         self._runtime_policies.pop(sandbox_id, None)
         self._policy_binds.pop(sandbox_id, None)
         self._seccomp_bpf.pop(sandbox_id, None)
@@ -3294,6 +3321,7 @@ class ProcessRuntime(RuntimeAdapter):
         self._processes.pop(sandbox_id, None)
         policy_path = self._policy_paths.pop(sandbox_id, None)
         network_mode = self._network_modes.pop(sandbox_id, None)
+        self._sandbox_ip_addresses.pop(sandbox_id, None)
         self._runtime_policies.pop(sandbox_id, None)
         self._policy_binds.pop(sandbox_id, None)
         self._seccomp_bpf.pop(sandbox_id, None)

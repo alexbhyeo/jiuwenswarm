@@ -1,5 +1,3 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-
 /**
  * Incremental full-text index for the trajectory ledger.
  * Adapted mechanically from `packages/client/ui-trajectory/src/client/trajectory-search-index.ts`
@@ -58,6 +56,7 @@ function recordSources(
     cell.previewMarkdown ?? '',
     cell.inputDetail ?? '',
     cell.outputDetail ?? '',
+    cell.rawOutputDetail ?? '',
     cell.thinkingDetail ?? '',
     cell.schemaDetail ?? '',
     cell.result ?? '',

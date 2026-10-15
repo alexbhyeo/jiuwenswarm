@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import base64
+import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -186,7 +187,7 @@ def patched_sessions(monkeypatch: pytest.MonkeyPatch):
 
     def _patch(sessions, total):
         monkeypatch.setattr(
-            "jiuwenswarm.server.runtime.gateway_adapter.session_adapter.get_all_sessions_metadata",
+            "jiuwenswarm.server.control.repositories.session_repository.get_all_sessions_metadata",
             lambda limit=20, offset=0: (sessions, total),
         )
         return sessions, total
@@ -288,7 +289,7 @@ class TestSessionAdapter:
             raise RuntimeError("boom")
 
         monkeypatch.setattr(
-            "jiuwenswarm.server.runtime.gateway_adapter.session_adapter.get_all_sessions_metadata",
+            "jiuwenswarm.server.control.repositories.session_repository.get_all_sessions_metadata",
             _boom,
         )
         resp = await SessionAdapter().handle(
@@ -313,7 +314,7 @@ class TestSessionAdapter:
     async def test_get_metadata(self, monkeypatch) -> None:
         """session.get_metadata：OK 返回 metadata；不存在返回 NOT_FOUND（与 Web fallback 语义一致）。"""
         monkeypatch.setattr(
-            "jiuwenswarm.server.runtime.gateway_adapter.session_adapter.get_session_metadata",
+            "jiuwenswarm.server.control.repositories.session_repository.get_session_metadata",
             lambda sid, cache_bust=False: {"session_id": sid, "mode": "agent", "model": "m1"},
         )
         resp = await SessionAdapter().handle(
@@ -324,7 +325,7 @@ class TestSessionAdapter:
         assert resp.payload["model"] == "m1"
 
         monkeypatch.setattr(
-            "jiuwenswarm.server.runtime.gateway_adapter.session_adapter.get_session_metadata",
+            "jiuwenswarm.server.control.repositories.session_repository.get_session_metadata",
             lambda sid, cache_bust=False: {},
         )
         resp = await SessionAdapter().handle(
@@ -333,9 +334,37 @@ class TestSessionAdapter:
         assert resp.ok is False
         assert resp.payload["code"] == "NOT_FOUND"
 
+    async def test_pin_keeps_event_loop_responsive(self, monkeypatch) -> None:
+        import asyncio
+        import threading
+
+        started = threading.Event()
+        release = threading.Event()
+        def slow_pin(sid, pinned):
+            started.set()
+            assert release.wait(3), "event loop could not release pin worker"
+            return True, 1
+
+        monkeypatch.setattr(
+            "jiuwenswarm.server.control.repositories.session_repository.set_session_pinned",
+            slow_pin,
+        )
+        task = asyncio.create_task(SessionAdapter().handle(
+            _request(ReqMethod.SESSION_PIN, {"session_id": "sess-1", "pinned": True})
+        ))
+        try:
+            async with asyncio.timeout(2):
+                while not started.is_set():
+                    await asyncio.sleep(0.01)
+            assert not task.done()
+        finally:
+            release.set()
+            response = await task
+        assert response.ok is True
+
     async def test_pin(self, monkeypatch) -> None:
         monkeypatch.setattr(
-            "jiuwenswarm.server.runtime.gateway_adapter.session_adapter.set_session_pinned",
+            "jiuwenswarm.server.control.repositories.session_repository.set_session_pinned",
             lambda sid, pinned: (True, 3),
         )
         resp = await SessionAdapter().handle(
@@ -347,7 +376,7 @@ class TestSessionAdapter:
     async def test_color_set(self, monkeypatch) -> None:
         """查询模式返回当前色值；非法色值拒绝（白名单与 TUI 一致）。"""
         monkeypatch.setattr(
-            "jiuwenswarm.server.runtime.gateway_adapter.session_adapter.get_session_metadata",
+            "jiuwenswarm.server.control.repositories.session_repository.get_session_metadata",
             lambda sid, cache_bust=False: {"accent_color": "blue"},
         )
         resp = await SessionAdapter().handle(
@@ -372,7 +401,7 @@ class TestSessionAdapter:
             {"role": "member", "event_type": "team.message", "content": "team msg"},
         ]
         monkeypatch.setattr(
-            "jiuwenswarm.server.runtime.gateway_adapter.session_adapter.load_history_records",
+            "jiuwenswarm.server.control.repositories.session_repository.load_history_records",
             lambda sid: history,
         )
         resp = await SessionAdapter().handle(
@@ -386,16 +415,19 @@ class TestSessionAdapter:
         assert "partial" not in contents
         assert "think" not in contents
 
-    async def test_session_delete_team_returns_agent_unavailable(self, monkeypatch) -> None:
-        """SessionAdapter.session.delete：team 会话的本地删除不可用（AGENT_UNAVAILABLE）。
+    async def test_session_delete_team_offline_requires_runtime(self, monkeypatch) -> None:
+        """Team Session 离线删除必须等待 Runtime 可用。
 
-        与原 Web/TUI handler fallback 语义一致：team 会话需由 AgentServer 处理，
-        本地共享目录 fallback 拒绝并返回 AGENT_UNAVAILABLE，不触发 evict，也不删目录。
+        本地共享目录 fallback 只返回 AGENT_UNAVAILABLE，不触发
+        KVC 清理，也不删除存储。
         """
         evict_calls: list[dict] = []
+        metadata_reads: list[bool] = []
         monkeypatch.setattr(
             "jiuwenswarm.server.runtime.session.session_metadata.get_session_metadata",
-            lambda sid, cache_bust=False: {"mode": "team"},
+            lambda sid, cache_bust=False: (
+                metadata_reads.append(cache_bust) or {"mode": "team"}
+            ),
         )
         monkeypatch.setattr(
             "openjiuwen.core.session.agent.create_agent_session",
@@ -407,11 +439,14 @@ class TestSessionAdapter:
         assert resp.ok is False
         assert resp.payload["code"] == "AGENT_UNAVAILABLE"
         assert evict_calls == []
+        assert metadata_reads == [True]
 
-    async def test_session_delete_missing_returns_not_found_without_evict(
+    async def test_session_delete_missing_offline_returns_runtime_result_without_evict(
         self, monkeypatch, tmp_path,
     ) -> None:
-        """SessionAdapter.session.delete：目标会话目录不存在时返回 NOT_FOUND 且不 evict。"""
+        """离线删除由维护型 Runtime 判定 NOT_FOUND，且不创建 KVC。"""
+        from jiuwenswarm.runtime.session_delete import SessionDeleteResult
+
         evict_calls: list[dict] = []
         missing_dir = tmp_path / "sessions" / "missing"
         monkeypatch.setattr(
@@ -426,6 +461,15 @@ class TestSessionAdapter:
             "openjiuwen.core.session.agent.create_agent_session",
             lambda **kwargs: evict_calls.append(kwargs),
         )
+        async def _delete_offline_session(**_kwargs):
+            return SessionDeleteResult.failure(
+                "missing", code="NOT_FOUND", message="session not found"
+            )
+
+        monkeypatch.setattr(
+            "jiuwenswarm.server.runtime.offline_session_cleanup.delete_offline_session",
+            _delete_offline_session,
+        )
         resp = await SessionAdapter().handle(
             _request(ReqMethod.SESSION_DELETE, {"session_id": "missing"})
         )
@@ -433,10 +477,26 @@ class TestSessionAdapter:
         assert resp.payload["code"] == "NOT_FOUND"
         assert evict_calls == []
 
-    async def test_session_delete_offline_fallback_evicts_and_removes_dir(
-        self, monkeypatch, tmp_path,
+    @pytest.mark.parametrize("affinity_enabled", [False, True])
+    @pytest.mark.parametrize("release_fails", [False, True])
+    async def test_session_delete_offline_uses_runtime_without_kvc(
+        self, monkeypatch, tmp_path, affinity_enabled, release_fails,
     ) -> None:
-        """SessionAdapter.session.delete：普通会话的本地 fallback 触发 root evict 并删除目录。"""
+        """Offline delete never activates KVC, regardless of configured affinity."""
+        from jiuwenswarm.runtime.session_delete import SessionDeleteResult
+
+        monkeypatch.setattr(
+            "jiuwenswarm.server.runtime.session.kv_cache.kv_cache_model_provider.is_kv_cache_affinity_enabled",
+            lambda: affinity_enabled,
+        )
+        runtime = object()
+        def get_runtime():
+            assert affinity_enabled, "OFF must not look up or create KVC runtime"
+            return runtime
+        monkeypatch.setattr(
+            "jiuwenswarm.server.runtime.session.kv_cache.kv_cache_application_runtime.get_kv_cache_runtime",
+            get_runtime,
+        )
         evict_calls: list[dict] = []
         session_root = tmp_path / "sessions" / "sess-del"
         session_root.mkdir(parents=True)
@@ -457,20 +517,129 @@ class TestSessionAdapter:
                         "parent_session_id": "sess-del",
                     }
                 )
+                if release_fails:
+                    raise RuntimeError("KVC unavailable")
                 return True
 
         monkeypatch.setattr(
             "openjiuwen.core.session.agent.create_agent_session",
             lambda **_kwargs: _Session(),
         )
+        calls: list[dict] = []
+
+        async def _delete_offline_session(**kwargs):
+            calls.append(kwargs)
+            return SessionDeleteResult(
+                ok=True,
+                session_id=kwargs["session_id"],
+                deleted=True,
+            )
+
+        monkeypatch.setattr(
+            "jiuwenswarm.server.runtime.offline_session_cleanup.delete_offline_session",
+            _delete_offline_session,
+        )
         resp = await SessionAdapter().handle(
             _request(ReqMethod.SESSION_DELETE, {"session_id": "sess-del"})
         )
         assert resp.ok is True
+        assert calls == [{"channel_id": "web", "session_id": "sess-del"}]
+        assert evict_calls == []
+
+    async def test_session_delete_offline_fallback_erases_mailbox_content(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        from jiuwenswarm.server.runtime.gateway_adapter import session_adapter as module
+        from jiuwenswarm.server.runtime.session.session_message_store import (
+            SessionMessageStore,
+        )
+
+        session_root = tmp_path / "sessions" / "sess-del"
+        session_root.mkdir(parents=True)
+        mailbox = SessionMessageStore(tmp_path / "session_messages.sqlite3")
+        record, _ = mailbox.enqueue(
+            owner_scope_id="user-1",
+            source_session_id="source-1",
+            source_title_snapshot="Source",
+            source_request_id="request-1",
+            source_tool_call_id="call-1",
+            idempotency_key="call-1",
+            target_session_id="sess-del",
+            content="sensitive content",
+            hop_count=1,
+        )
+        monkeypatch.setattr(module, "get_agent_root_dir", lambda: tmp_path)
+        monkeypatch.setattr(
+            "jiuwenswarm.server.runtime.session.session_metadata.get_session_metadata",
+            lambda sid, cache_bust=False: {"mode": "agent"},
+        )
+        monkeypatch.setattr(
+            "jiuwenswarm.server.runtime.session.session_history.resolve_session_dir",
+            lambda sid, sessions_root=None: (session_root, None),
+        )
+
+        class _Session:
+            async def release_kvc(self):
+                return True
+
+        monkeypatch.setattr(
+            "openjiuwen.core.session.agent.create_agent_session",
+            lambda **_kwargs: _Session(),
+        )
+
+        resp = await SessionAdapter().handle(
+            _request(ReqMethod.SESSION_DELETE, {"session_id": "sess-del"})
+        )
+
+        assert resp.ok is True
+        erased = mailbox.get(record.message_id)
+        assert erased.status == "cancelled"
+        assert erased.content == ""
+
+    async def test_session_delete_succeeds_when_mailbox_cleanup_fails(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        from jiuwenswarm.server.runtime.gateway_adapter import session_adapter as module
+        from jiuwenswarm.server.runtime.session import session_message_store
+
+        session_root = tmp_path / "sessions" / "sess-del"
+        session_root.mkdir(parents=True)
+        monkeypatch.setattr(module, "get_agent_root_dir", lambda: tmp_path)
+        monkeypatch.setattr(
+            "jiuwenswarm.server.runtime.session.session_metadata.get_session_metadata",
+            lambda sid, cache_bust=False: {"mode": "agent"},
+        )
+        monkeypatch.setattr(
+            "jiuwenswarm.server.runtime.session.session_history.resolve_session_dir",
+            lambda sid, sessions_root=None: (session_root, None),
+        )
+
+        class _Session:
+            async def release_kvc(self):
+                return True
+
+        class _Mailbox:
+            def __init__(self, _path):
+                pass
+
+            def exists(self):
+                return True
+
+            def cancel_pending_for_target(self, _target):
+                raise RuntimeError("mailbox unavailable")
+
+        monkeypatch.setattr(
+            "openjiuwen.core.session.agent.create_agent_session",
+            lambda **_kwargs: _Session(),
+        )
+        monkeypatch.setattr(session_message_store, "SessionMessageStore", _Mailbox)
+
+        resp = await SessionAdapter().handle(
+            _request(ReqMethod.SESSION_DELETE, {"session_id": "sess-del"})
+        )
+
+        assert resp.ok is True
         assert resp.payload == {"session_id": "sess-del"}
-        assert evict_calls == [
-            {"session_id": "sess-del", "parent_session_id": "sess-del"}
-        ]
         assert not session_root.exists()
 
 
@@ -504,7 +673,7 @@ class TestWorkspaceFileAdapter:
         assert resp.payload["content"] == "x"
 
     async def test_document_persist(self, monkeypatch) -> None:
-        def _fake_persist(normalized):
+        def _fake_persist(normalized, session_id):
             normalized["documents"] = [{"path": "/tmp/d.md"}]
             normalized["forbidden_formats"] = [".exe"]
 
@@ -677,6 +846,38 @@ class TestWorkspaceFileAdapter:
         }
         normalize_chat_media_attachments(params, session_id="sess-1")
         assert "media_items" not in params
+
+    async def test_media_discard_deletes_only_session_upload(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "jiuwenswarm.server.runtime.attachments.media_attachments.get_agent_sessions_dir",
+            lambda: tmp_path,
+        )
+        upload_dir = tmp_path / "current-session" / "uploads"
+        upload_dir.mkdir(parents=True)
+        image = upload_dir / "sample.png"
+        image.write_bytes(b"png")
+        original = tmp_path / "sample.png"
+        original.write_bytes(b"original")
+
+        removed = await self._adapter().handle(
+            _request(ReqMethod.MEDIA_DISCARD, {"path": str(image)})
+        )
+        assert removed.ok is True
+        assert removed.payload == {"deleted": True}
+        assert not image.exists()
+
+        rejected = await self._adapter().handle(
+            _request(ReqMethod.MEDIA_DISCARD, {"path": str(original)})
+        )
+        assert rejected.ok is False
+        assert rejected.payload["code"] == "BAD_REQUEST"
+        assert original.read_bytes() == b"original"
+
+        missing_path = await self._adapter().handle(_request(ReqMethod.MEDIA_DISCARD, {}))
+        assert missing_path.ok is False
+        assert missing_path.payload["code"] == "BAD_REQUEST"
 
 
 # ── MemoryAdapter ────────────────────────────────────────────────────────────
@@ -870,7 +1071,7 @@ class TestProjectAdapterSessions:
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Directory isolation is authoritative; old metadata owners are not."""
-        module = "jiuwenswarm.server.runtime.gateway_adapter.project_adapter"
+        module = "jiuwenswarm.server.control.store.project_queries"
         monkeypatch.setattr(f"{module}.project_store.list_projects", lambda **_kwargs: [])
         monkeypatch.setattr(
             f"{module}.collect_all_sessions_metadata",
@@ -952,9 +1153,10 @@ class TestAdapterRegistry:
 
         assert registry.contains(ReqMethod.SESSION_LIST.value)
         assert isinstance(registry.get(ReqMethod.SESSION_LIST.value), SessionAdapter)
-        # SESSION_DELETE / SESSION_RENAME 注册在 SessionAdapter：供 e2a_proxy
-        # 单用户离线 fallback 使用（在线 dispatch 由 AgentWebSocketServer 显式
-        # 跳过适配器、走既有 handler）。
+        # SESSION_DELETE / SESSION_RENAME 注册在 SessionAdapter，供 e2a_proxy
+        # 单用户离线 fallback 使用。delete 经无 KVC participant 的维护型
+        # Runtime 处理；rename 保留离线处理。AgentServer 在线 delete 由更早的 lifecycle
+        # handler 交给 Runtime，rename 由 legacy handler 处理。
         assert isinstance(registry.get(ReqMethod.SESSION_DELETE.value), SessionAdapter)
         assert isinstance(registry.get(ReqMethod.SESSION_RENAME.value), SessionAdapter)
         assert registry.get("session.unknown") is None
@@ -1002,20 +1204,15 @@ async def test_config_adapter_command_model_forces_local_execution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The AgentServer-side command must not proxy to Gateway a second time."""
-    from jiuwenswarm.gateway.channel_manager.tui import tui_connect
+    from jiuwenswarm.common.config_panel import tui_models_handlers
 
-    def fake_register(bind) -> None:
-        assert bind.force_local_config is True
+    async def fake_handler(channel, ws, req_id, params, session_id, **kwargs):
+        _ = (params, session_id, kwargs)
+        await channel.send_response(
+            ws, req_id, ok=True, payload={"type": "switched", "current": "m1"}
+        )
 
-        async def handler(ws, req_id, params, session_id):
-            _ = (params, session_id)
-            await bind.channel.send_response(
-                ws, req_id, ok=True, payload={"type": "switched", "current": "m1"}
-            )
-
-        bind.channel.register_local_handler("/tui", ReqMethod.COMMAND_MODEL.value, handler)
-
-    monkeypatch.setattr(tui_connect, "register_cli_handlers", fake_register)
+    monkeypatch.setattr(tui_models_handlers, "command_model_handler", fake_handler)
 
     response = await ConfigAdapter().handle(
         _request(ReqMethod.COMMAND_MODEL, {"model": "m1"}, channel_id="tui")
@@ -1032,6 +1229,7 @@ async def test_config_adapter_keeps_browser_config_in_agentserver_directory(monk
 
     current = {"browser": {"chrome_path": "/agent/chrome", "headless": False}}
     updates: list[dict] = []
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     monkeypatch.setattr(config_module, "get_config", lambda: current)
     monkeypatch.setattr(config_module, "update_browser_in_config", lambda payload: updates.append(payload))
     adapter = ConfigAdapter()
@@ -1041,7 +1239,7 @@ async def test_config_adapter_keeps_browser_config_in_agentserver_directory(monk
         _request(ReqMethod.PATH_SET, {"chrome_path": "/agent/new-chrome", "headless": True})
     )
 
-    assert got.payload == {"chrome_path": "/agent/chrome", "headless": False}
+    assert got.payload == {"chrome_path": "/agent/chrome", "headless": False, "decision_mode": "llm", "decision_provider": "typesafe", "jev_key_configured": False}
     assert updates == [{"chrome_path": "/agent/new-chrome", "headless": True}]
     assert changed.metadata["config_changed"] is True
     assert changed.metadata["browser_runtime_restart"] is True
@@ -1059,12 +1257,16 @@ async def test_config_adapter_resolves_platform_browser_path_for_runtime_restart
         }
     }
     monkeypatch.setattr(config_module, "get_config", lambda: current)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
 
     response = await ConfigAdapter().handle(_request(ReqMethod.PATH_GET))
 
     assert response.payload == {
         "chrome_path": "/agent/chrome",
         "headless": True,
+        "decision_mode": "llm",
+        "decision_provider": "typesafe",
+        "jev_key_configured": False,
     }
 
 
@@ -1083,6 +1285,151 @@ async def test_config_adapter_resolves_env_browser_path_for_runtime_restart(monk
     response = await ConfigAdapter().handle(_request(ReqMethod.PATH_GET))
 
     assert response.payload["chrome_path"] == "/agent/chrome"
+
+
+def _browser_writes(monkeypatch, current: dict) -> list[tuple[str, object]]:
+    from jiuwenswarm.common import config as config_module
+
+    writes: list[tuple[str, object]] = []
+    monkeypatch.setattr(config_module, "get_config", lambda: current)
+    monkeypatch.setattr(config_module, "update_browser_in_config", lambda p: writes.append(("browser", p)))
+    monkeypatch.setattr(config_module, "update_browser_decision_in_config", lambda u: writes.append(("decision", u)))
+    return writes
+
+
+def _set(**decision) -> AgentRequest:
+    return _request(ReqMethod.PATH_SET, {"chrome_path": "", "headless": True, **decision})
+
+
+_BROWSER = ("browser", {"chrome_path": "", "headless": True})
+_JEV_CONFIG = {"browser": {"decision": {"mode": "llm", "provider": "openrouter", "api_key_env": "TEST_JEV_UI_KEY"}}}
+_requires_jev = pytest.mark.skipif(
+    importlib.util.find_spec("openjiuwen.harness.tools.browser_move.decision") is None,
+    reason="installed openjiuwen has no Jev decision support",
+)
+
+
+@pytest.mark.asyncio
+async def test_config_adapter_reports_the_jev_setup_but_never_the_key(monkeypatch) -> None:
+    """The Browser settings page shows what the next browser task will use; the key stays server-side."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "synthetic-secret-value")
+    _browser_writes(monkeypatch, {"browser": {"decision": {"mode": "shadow", "provider": "openrouter"}}})
+    response = await ConfigAdapter().handle(_request(ReqMethod.PATH_GET))
+    assert response.payload["decision_mode"] == "shadow"
+    assert response.payload["decision_provider"] == "openrouter"
+    assert response.payload["jev_key_configured"] is True
+    assert "synthetic-secret-value" not in repr(response.payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "decision",
+    [{"decision_mode": "shadow"}, {"decision_mode": "hybrid"}, {"decision_mode": "turbo"}, {"decision_provider": "x"}],
+)
+async def test_config_adapter_refuses_jev_settings_that_cannot_run(monkeypatch, decision) -> None:
+    """Without a key (or with an unknown value) Jev would fail at every step: refuse and write nothing."""
+    monkeypatch.delenv("TEST_JEV_UI_KEY", raising=False)
+    writes = _browser_writes(monkeypatch, _JEV_CONFIG)
+    response = await ConfigAdapter().handle(_set(**decision))
+    assert response.ok is False and response.payload["code"] == "BAD_REQUEST"
+    assert writes == []
+
+
+@_requires_jev
+@pytest.mark.asyncio
+async def test_config_adapter_switches_to_jev_when_its_key_is_set(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_JEV_UI_KEY", "synthetic-not-used")
+    writes = _browser_writes(monkeypatch, _JEV_CONFIG)
+    response = await ConfigAdapter().handle(_set(decision_mode="hybrid", decision_provider="openrouter"))
+    assert response.ok is True
+    assert writes == [_BROWSER, ("decision", {"mode": "hybrid"})]
+    assert response.metadata["browser_runtime_restart"] is True
+
+
+@_requires_jev
+@pytest.mark.asyncio
+async def test_config_adapter_provider_switch_writes_that_providers_endpoint(monkeypatch) -> None:
+    """TypeSafe must not keep OpenRouter's model and endpoint, and needs its own key."""
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    writes = _browser_writes(monkeypatch, {"browser": {"decision": {"mode": "hybrid", "provider": "openrouter"}}})
+    refused = await ConfigAdapter().handle(_set(decision_mode="hybrid", decision_provider="typesafe"))
+    assert refused.ok is False and "TYPESAFE_API_KEY" in refused.payload["error"] and writes == []
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "synthetic-not-used")
+    response = await ConfigAdapter().handle(_set(decision_mode="hybrid", decision_provider="typesafe"))
+    assert response.ok is True
+    assert writes[-1] == (
+        "decision",
+        {
+            "provider": "typesafe",
+            "model": "jev-1.13.0",
+            "api_base": "https://api.typesafe.ai/v1",
+            "api_key_env": "TYPESAFE_API_KEY",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_config_adapter_switches_back_to_llm_without_a_key(monkeypatch) -> None:
+    """Turning Jev off must always work, even after its key was removed."""
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    writes = _browser_writes(monkeypatch, {"browser": {"decision": {"mode": "hybrid"}}})
+    response = await ConfigAdapter().handle(_set(decision_mode="llm"))
+    assert response.ok is True
+    assert writes[-1] == ("decision", {"mode": "llm"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["LLM", " llm ", "typo"])
+async def test_config_adapter_repairs_unrecognized_saved_decision_mode(monkeypatch, mode) -> None:
+    writes = _browser_writes(monkeypatch, {"browser": {"decision": {"mode": mode}}})
+    response = await ConfigAdapter().handle(_set(decision_mode="llm"))
+    assert response.ok is True
+    assert response.payload["decision_mode"] == "llm"
+    assert writes == [_BROWSER, ("decision", {"mode": "llm"})]
+
+
+@pytest.mark.asyncio
+async def test_config_adapter_unrelated_save_works_while_the_jev_key_is_missing(monkeypatch) -> None:
+    """The page resends its whole state; changing the Chrome path must not trip the Jev check."""
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    writes = _browser_writes(monkeypatch, {"browser": {"decision": {"mode": "hybrid"}}})
+    response = await ConfigAdapter().handle(_set(decision_mode="hybrid", decision_provider="typesafe"))
+    assert response.ok is True and writes == [_BROWSER]
+
+
+@pytest.mark.asyncio
+async def test_config_adapter_leaves_the_decision_alone_for_older_clients(monkeypatch) -> None:
+    writes = _browser_writes(monkeypatch, {"browser": {"decision": {"mode": "hybrid"}}})
+    response = await ConfigAdapter().handle(_set())
+    assert response.ok is True and response.payload["decision_mode"] == "hybrid"
+    assert writes == [_BROWSER]
+
+
+def test_saving_decision_fields_keeps_the_rest_of_the_jev_settings(tmp_path, monkeypatch) -> None:
+    from jiuwenswarm.common import config as config_module
+
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "browser:\n  headless: false\n  decision:\n    mode: llm # keep me\n"
+        "    provider: openrouter\n    min_confidence: 0.55\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_module, "CONFIG_YAML_PATH", path)
+    config_module.update_browser_decision_in_config({"mode": "hybrid"})
+    saved = path.read_text(encoding="utf-8")
+    assert "mode: hybrid" in saved and "provider: openrouter" in saved
+    assert "min_confidence: 0.55" in saved and "headless: false" in saved
+
+
+def test_jev_provider_defaults_match_openjiuwen() -> None:
+    """jiuwenswarm writes these on a provider switch; they must equal what openjiuwen would pick."""
+    decision = pytest.importorskip("openjiuwen.harness.tools.browser_move.decision")
+    from jiuwenswarm.agents.harness.common.browser_config import JEV_PROVIDER_DEFAULTS
+
+    for provider, defaults in JEV_PROVIDER_DEFAULTS.items():
+        resolved = decision.BrowserDecisionConfig(provider=provider)
+        assert {k: getattr(resolved, k) for k in defaults} == defaults
 
 
 class TestBuildErrorResponse:

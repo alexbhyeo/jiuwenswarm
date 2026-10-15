@@ -9,7 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from jiuwenswarm.agents.swarm.agent_group import load_agent_group_package
+from jiuwenswarm.agents.swarm.agent_group import (
+    load_agent_group_package,
+    load_agent_group_package_bundle,
+)
+from openjiuwen.agent_teams.external import external_cli_agent_spec_from_template
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -60,6 +64,27 @@ def test_load_agent_group_uses_directory_as_id_and_name_as_display_name(
     assert templates["member1"].agent_card.name == "member1 display name"
 
 
+def test_load_agent_group_bundle_reuses_manifest_and_templates(tmp_path: Path) -> None:
+    group = _minimal_group(tmp_path)
+    manifest_path = group / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.update(
+        {
+            "instruction": "  analyze carefully  ",
+            "capabilities": ["analysis", "risk", "analysis", ""],
+        }
+    )
+    _write_json(manifest_path, manifest)
+
+    package = load_agent_group_package_bundle(group)
+
+    assert package.package_dir == group.resolve()
+    assert package.manifest["name"] == "group"
+    assert set(package.templates) == {"leader", "member1"}
+    assert package.instruction == "analyze carefully"
+    assert package.capabilities == ("analysis", "risk")
+
+
 def test_load_agent_group_rejects_member_agent_md(tmp_path: Path) -> None:
     group = _minimal_group(tmp_path)
     (group / "agents" / "member1" / "AGENT.md").write_text(
@@ -69,6 +94,28 @@ def test_load_agent_group_rejects_member_agent_md(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="must not contain AGENT.md"):
         load_agent_group_package(group)
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({"tags": [{"id": "legal", "zh": "法律", "en": "Legal"}]}, ("legal",)),
+        ({"tags": [{"zh": "法律", "en": "Legal"}, {"en": "Risk"}, "finance"]},
+         ("法律", "Risk", "finance")),
+        ({"tags": [{"id": "legal"}, {"id": "legal"}, {}, " "]}, ("legal",)),
+        ({"capabilities": ["finance"], "tags": [{"id": "legal"}]}, ("finance",)),
+        ({"capabilities": [], "tags": [{"id": "legal"}]}, ()),
+        ({}, ()),
+    ],
+)
+def test_group_capabilities_use_stable_tags_unless_explicit(tmp_path, fields, expected):
+    group = _minimal_group(tmp_path)
+    manifest_path = group / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.update(fields)
+    _write_json(manifest_path, manifest)
+
+    assert load_agent_group_package_bundle(group).capabilities == expected
 
 
 def test_load_agent_group_discovers_unlisted_skills(tmp_path: Path) -> None:
@@ -109,6 +156,63 @@ def test_load_agent_group_merges_declared_and_discovered_skills(
             "declared_skill",
             "another_skill",
         ]
+
+
+@pytest.mark.parametrize(
+    ("provider_name", "cli_agent"),
+    [("codex", "codex"), ("claudecode", "claude")],
+)
+def test_load_external_runtime_reuses_cli_config_and_manifest_skill_paths(
+    tmp_path: Path,
+    provider_name: str,
+    cli_agent: str,
+) -> None:
+    group = _minimal_group(tmp_path)
+    shared = group / "skills" / "shared"
+    shared.mkdir(parents=True)
+    (shared / "SKILL.md").write_text("# shared\n", encoding="utf-8")
+    manifest_path = group / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["skills"] = [{"dir": "./skills/shared", "mode": "all"}]
+    _write_json(manifest_path, manifest)
+
+    member_skill = group / "agents" / "member1" / "skills" / "review"
+    member_skill.mkdir(parents=True)
+    (member_skill / "SKILL.md").write_text("# review\n", encoding="utf-8")
+    member_manifest_path = group / "agents" / "member1" / "manifest.json"
+    member_manifest = json.loads(member_manifest_path.read_text(encoding="utf-8"))
+    member_manifest["skills"] = [{"dir": "./skills/review", "mode": "all"}]
+    member_manifest["runtime"] = {
+        "provider_name": provider_name,
+        "provider_version": "0.1.0",
+        "config": {"skill_conflict": "replace"},
+    }
+    _write_json(member_manifest_path, member_manifest)
+
+    templates = load_agent_group_package(group)
+    template = templates["member1"]
+    assert template.runtime is not None
+    assert template.runtime.provider_name == provider_name
+    config = external_cli_agent_spec_from_template(template)
+    assert config is not None
+    assert config.cli_agent == cli_agent
+    assert config.skill_conflict == "replace"
+    assert [Path(skill["dir"]).name for skill in config.skills] == ["review", "shared"]
+
+
+def test_load_external_runtime_rejects_leader(tmp_path: Path) -> None:
+    group = _minimal_group(tmp_path)
+    leader_path = group / "agents" / "leader" / "manifest.json"
+    leader = json.loads(leader_path.read_text(encoding="utf-8"))
+    leader["runtime"] = {
+        "provider_name": "codex",
+        "provider_version": "0.1.0",
+        "config": {},
+    }
+    _write_json(leader_path, leader)
+
+    with pytest.raises(ValueError, match="leader does not support"):
+        load_agent_group_package(group)
 
 
 @pytest.mark.parametrize(

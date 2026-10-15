@@ -11,12 +11,13 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from typing import Any, Callable, NamedTuple, TYPE_CHECKING
 from weakref import WeakValueDictionary
 
 from jiuwenswarm.common.e2a.acp.protocol import build_acp_initialize_result
 from jiuwenswarm.agents.harness.team import get_team_manager
-from jiuwenswarm.common.config import get_config, get_default_models
+from jiuwenswarm.common.config import get_available_models, get_config
 from jiuwenswarm.common.mode_matrix import (
     NEW_AGENT_WORK_NORMAL,
     NEW_AGENT_WORK_PLAN,
@@ -36,6 +37,8 @@ from jiuwenswarm.agents.harness.common.rails.interrupt.interrupt_helpers import 
 from jiuwenswarm.agents.harness.common.rails.permissions.root_permission_queue import (
     RootPermissionQueueError,
 )
+from jiuwenswarm.agents.harness.common.rsi.errors import RsiHarnessInstallConflict
+
 if TYPE_CHECKING:
     from jiuwenswarm.server.runtime.agent_adapter.interface import JiuWenSwarm
 
@@ -139,6 +142,21 @@ def _make_agent_cache_key(mode: str | None, sub_mode: str | None, project_dir: s
     sub_mode_key = collapse_plan_sub_mode(mode_key, sub_mode)
     project_key = _normalize_project_dir(project_dir)
     return f"{mode_key}:{sub_mode_key}:{project_key}"
+
+
+def _make_defined_agent_cache_key(
+    mode: str | None,
+    sub_mode: str | None,
+    project_dir: str | None,
+    definition_fingerprint: str,
+) -> str:
+    """Isolate a declared root Agent without changing default cache keys."""
+    fingerprint = str(definition_fingerprint or "").strip().lower()
+    if len(fingerprint) != 64 or any(
+        character not in "0123456789abcdef" for character in fingerprint
+    ):
+        raise ValueError("invalid Agent definition fingerprint")
+    return f"{_make_agent_cache_key(mode, sub_mode, project_dir)}:agent:{fingerprint}"
 
 
 def _build_acp_agent_config(extra_config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -609,6 +627,9 @@ class AgentManager:
         config: dict[str, Any] | None = None,
         sub_mode: str = None,
         cache_key: str | None = None,
+        *,
+        agent_definition: dict[str, Any] | None = None,
+        agent_definition_fingerprint: str | None = None,
     ) -> "JiuWenSwarm":
         """创建 Agent 实例.
 
@@ -652,19 +673,60 @@ class AgentManager:
         agent.set_permissions_external_input_context_builder(
             self.build_permissions_external_input_context
         )
-        await agent.create_instance(config, mode=mode_key, sub_mode=sub_mode_key or None)
+        definition_snapshot = (
+            deepcopy(agent_definition) if agent_definition is not None else None
+        )
+        create_kwargs: dict[str, Any] = {
+            "mode": mode_key,
+            "sub_mode": sub_mode_key or None,
+        }
+        if definition_snapshot is not None:
+            create_kwargs["agent_definition"] = deepcopy(definition_snapshot)
+        try:
+            await agent.create_instance(config, **create_kwargs)
+        except BaseException as create_error:
+            # A declared Agent can fail after allocating Adapter resources but
+            # before it is inserted into the manager cache.  Runtime.close()
+            # cannot discover that partial instance, so unwind it here while
+            # preserving the original construction failure.
+            if definition_snapshot is not None:
+                cleanup = getattr(agent, "cleanup", None)
+                if callable(cleanup):
+                    try:
+                        await cleanup()
+                    except BaseException as cleanup_error:
+                        logger.warning(
+                            "[AgentManager] declared Agent rollback failed "
+                            "while preserving %s: %s",
+                            type(create_error).__name__,
+                            cleanup_error,
+                            exc_info=(
+                                type(cleanup_error),
+                                cleanup_error,
+                                cleanup_error.__traceback__,
+                            ),
+                        )
+            raise
         setattr(agent, "_jiuwenswarm_agent_cache_key", agent_cache_key)
         setattr(agent, "_jiuwenswarm_agent_mode", mode_key)
         setattr(agent, "_jiuwenswarm_agent_sub_mode", sub_mode_key)
         setattr(agent, "_jiuwenswarm_agent_project_dir", project_dir)
         self.agents.setdefault(channel_key, {})[agent_cache_key] = agent
         # 记录创建参数, recreate_agent() 时可原样复用
-        self._agent_create_params.setdefault(channel_key, {})[agent_cache_key] = {
+        create_params: dict[str, Any] = {
             "mode": mode_key,
             "sub_mode": sub_mode_key or None,
             "config": dict(config or {}),
             "cache_key": agent_cache_key,
         }
+        if definition_snapshot is not None:
+            create_params["agent_definition"] = deepcopy(definition_snapshot)
+            create_params["agent_definition_fingerprint"] = (
+                agent_definition_fingerprint
+            )
+        self._agent_create_params.setdefault(channel_key, {})[
+            agent_cache_key
+        ] = create_params
         logger.info("[AgentManager] %s agent created cache_key=%s", channel_key, agent_cache_key)
         return agent
 
@@ -853,6 +915,73 @@ class AgentManager:
             )
         return cleaned
 
+    async def cancel_session_tasks(
+        self, *, channel_id: str = "", session_id: str
+    ) -> None:
+        """Cancel and join session request tasks before lifecycle cleanup."""
+        sid = str(session_id or "").strip()
+        if not sid:
+            return
+        channel_key = _normalize_channel_id(channel_id)
+        for agent in list(self.agents.get(channel_key, {}).values()):
+            cancel = getattr(agent, "cancel_session_tasks", None)
+            if callable(cancel):
+                await cancel(sid)
+
+    def session_has_live_subagents(
+        self,
+        *,
+        channel_id: str | None,
+        session_id: str,
+    ) -> bool:
+        """Whether the session-scoped adapter still holds live subagents.
+
+        Reads the registry the adapter already keeps, without creating either
+        the Agent or a subagent control, so asking never hydrates work.  Pairs
+        with :meth:`release_subagent_runtime_for_session`: a Session that is
+        busy only because subagents are still tearing down must not be
+        reported as one the user has to stop.
+        """
+        agent = self._resolve_session_agent(channel_id, session_id)
+        adapter = self._resolve_runtime_adapter(agent)
+        probe = getattr(adapter, "_session_has_live_subagents", None)
+        if not callable(probe):
+            return False
+        try:
+            return bool(probe(session_id))
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "[AgentManager] live subagent probe failed: session_id=%s",
+                session_id,
+                exc_info=True,
+            )
+            return False
+
+    def _resolve_session_agent(
+        self,
+        channel_id: str | None,
+        session_id: str,
+    ) -> "JiuWenSwarm | None":
+        """Return the cached channel Agent that actually owns ``session_id``.
+
+        Subagent controls and session adapters are held per Agent, so both the
+        release and the live probe have to land on the owning Agent: a channel
+        caches one Agent per project and mode, and the first match is another
+        project's or mode's Agent whenever the channel holds more than one.
+        Releasing against that Agent cancels nothing and leaves the resident
+        subagents running, which is what made the Session look busy.
+
+        Falls back to the channel's Agent when no Agent claims the Session's
+        runtime — already torn down, or never bound — so a release that used to
+        run still gets a chance to run.
+        """
+        owner = self.get_agent_for_session_nowait(
+            channel_id=channel_id or "", session_id=session_id
+        )
+        if owner is not None:
+            return owner
+        return self.get_agent_nowait(channel_id=channel_id or "")
+
     async def release_subagent_runtime_for_session(
         self,
         *,
@@ -860,14 +989,14 @@ class AgentManager:
         session_id: str,
         reason: str = "session_deleted",
     ) -> bool:
-        """Release subagent control owned by the channel's existing Agent.
+        """Release subagent control owned by the Agent running ``session_id``.
 
-        Product Session deletion historically performed this lookup in
-        AgentServer.  Keeping it here preserves the same first-Agent lookup and
-        adapter selection while hiding Agent/Adapter internals behind the
-        Runtime-owned manager boundary.
+        Product Session deletion historically performed a first-Agent lookup in
+        AgentServer.  Resolving the owning Agent here instead keeps the adapter
+        selection while hiding Agent/Adapter internals behind the Runtime-owned
+        manager boundary.
         """
-        agent = self.get_agent_nowait(channel_id=channel_id or "")
+        agent = self._resolve_session_agent(channel_id, session_id)
         adapter = self._resolve_runtime_adapter(agent)
         release_runtime = getattr(
             adapter,
@@ -1160,7 +1289,11 @@ class AgentManager:
             channel_id: str = "",
             mode: str = "agent",
             project_dir: str = None,
-            sub_mode: str = None
+            sub_mode: str = None,
+            *,
+            agent_definition: dict[str, Any] | None = None,
+            agent_definition_fingerprint: str | None = None,
+            run_permissions_enabled: bool = False,
     ) -> "JiuWenSwarm | None":
         """获取 Agent 实例（自动创建）.
 
@@ -1179,7 +1312,24 @@ class AgentManager:
         mode_key = _normalize_mode(mode)
         sub_mode_key = collapse_plan_sub_mode(mode_key, sub_mode)
         project_key = _normalize_project_dir(project_dir)
-        cache_key = _make_agent_cache_key(mode_key, sub_mode_key, project_key)
+        if (agent_definition is None) is not (
+            agent_definition_fingerprint is None
+        ):
+            raise ValueError(
+                "Agent definition and fingerprint must be provided together"
+            )
+        cache_key = (
+            _make_defined_agent_cache_key(
+                mode_key,
+                sub_mode_key,
+                project_key,
+                agent_definition_fingerprint or "",
+            )
+            if agent_definition is not None
+            else _make_agent_cache_key(mode_key, sub_mode_key, project_key)
+        )
+        if run_permissions_enabled:
+            cache_key += ":run-permissions"
         channel_agents = self.agents.get(channel_key, {})
         if cache_key in channel_agents:
             return self._borrow_agent(channel_agents[cache_key])
@@ -1198,19 +1348,36 @@ class AgentManager:
             # state.json enabled; web = session-level via chat.send's mcp field,
             # init loads nothing).
             config["channel_id"] = channel_key
+            if run_permissions_enabled:
+                config["run_permissions_enabled"] = True
             if channel_key == "acp":
                 config = {
                     **config,
                     **_build_acp_agent_config()
                 }
+            create_kwargs: dict[str, Any] = {"cache_key": cache_key}
+            if agent_definition is not None:
+                create_kwargs["agent_definition"] = agent_definition
+                create_kwargs["agent_definition_fingerprint"] = (
+                    agent_definition_fingerprint
+                )
             agent = await self._create_agent(
                 channel_key,
                 mode_key,
                 config,
                 sub_mode_key or None,
-                cache_key=cache_key,
+                **create_kwargs,
             )
             return self._borrow_agent(agent)
+
+    def has_active_goal(self, channel_id: str, session_id: str) -> bool:
+        """Inspect cached Goal owners without borrowing or creating an Agent."""
+        channel_agents = self.agents.get(_normalize_channel_id(channel_id), {})
+        for agent in channel_agents.values():
+            checker = getattr(agent, "has_active_goal", None)
+            if callable(checker) and checker(session_id):
+                return True
+        return False
 
     def get_agent_for_session_nowait(
         self,
@@ -1417,6 +1584,104 @@ class AgentManager:
                         exc,
                     )
 
+    async def broadcast_rsi_harness_change(
+        self,
+        *,
+        old_installation: dict[str, Any] | None,
+        new_installation: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Hot-load an RSI Harness on agent/code facades only.
+
+        This path intentionally calls the dedicated facade API, which owns
+        ``DeepAgent.load_plugin`` LoadRecords and session fan-out.  It never
+        touches the legacy ``harness-packages.json`` broadcast.
+        """
+
+        # ``new_installation=None`` is used only by the installer while
+        # restoring the pre-install state after an active-pointer write
+        # failure.  In that case the ``old_installation`` argument is the
+        # version currently loaded in live agents and must be deactivated.
+        operation = "activate"
+        target_installation = new_installation
+        if target_installation is None:
+            if old_installation is None:
+                return {"attempted": 0, "succeeded": 0, "failed": []}
+            operation = "deactivate"
+            target_installation = old_installation
+        installation_id = str(target_installation.get("installation_id") or "").strip()
+        runtime_path = str(target_installation.get("runtime_path") or "").strip()
+        if not installation_id or not runtime_path:
+            raise ValueError("RSI Harness installation record is incomplete")
+        target_modes = {"agent", "code"}
+        attempted = 0
+        succeeded = 0
+        failed: list[dict[str, str]] = []
+        applied: list[Any] = []
+
+        for channel_key, channel_agents in list(self.agents.items()):
+            if not isinstance(channel_agents, dict):
+                continue
+            for cache_key, agent in list(channel_agents.items()):
+                mode = str(cache_key).split(":", 1)[0]
+                if mode not in target_modes:
+                    continue
+                attempted += 1
+                try:
+                    ensure = getattr(agent, "ensure_instance", None)
+                    if callable(ensure):
+                        await ensure()
+                    apply = getattr(agent, "apply_rsi_harness_install", None)
+                    if not callable(apply):
+                        raise RuntimeError("agent facade does not support RSI Harness installation")
+                    await apply(
+                        operation,
+                        config_path=runtime_path,
+                        installation_id=installation_id,
+                    )
+                    succeeded += 1
+                    applied.append(agent)
+                except Exception as exc:  # noqa: BLE001 - rollback below
+                    failed.append(
+                        {
+                            "channel": str(channel_key),
+                            "agent": str(cache_key),
+                            "error": str(exc),
+                        }
+                    )
+                    break
+            if failed:
+                break
+
+        if failed:
+            rollback_failures: list[str] = []
+            for agent in reversed(applied):
+                try:
+                    apply = getattr(agent, "apply_rsi_harness_install", None)
+                    if not callable(apply):
+                        continue
+                    if old_installation:
+                        await apply(
+                            "activate",
+                            config_path=str(old_installation.get("runtime_path") or ""),
+                            installation_id=str(old_installation.get("installation_id") or ""),
+                        )
+                    else:
+                        await apply(
+                            "deactivate",
+                            config_path=runtime_path,
+                            installation_id=installation_id,
+                        )
+                except Exception as exc:  # noqa: BLE001 - expose rollback conflict
+                    rollback_failures.append(str(exc))
+            if rollback_failures:
+                raise RsiHarnessInstallConflict(
+                    "RSI Harness 广播失败且回滚失败: " + "; ".join(rollback_failures)
+                )
+            raise RsiHarnessInstallConflict(
+                "RSI Harness 广播失败: " + "; ".join(item["error"] for item in failed)
+            )
+        return {"attempted": attempted, "succeeded": succeeded, "failed": failed}
+
     async def reload_agents_config(
         self,
         config,
@@ -1601,7 +1866,7 @@ class AgentManager:
 
         new_configs: dict[tuple, Any] = {}
         try:
-            entries = get_default_models(effective_config if isinstance(effective_config, dict) else None)
+            entries = get_available_models(effective_config if isinstance(effective_config, dict) else None)
         except Exception as exc:  # noqa: BLE001
             logger.warning("[AgentManager] build live model configs failed: %s", exc)
             return
@@ -1690,12 +1955,21 @@ class AgentManager:
         # 3. 立即按原参数重建
         for mode_key, params in backup_params.items():
             try:
+                create_kwargs: dict[str, Any] = {
+                    "cache_key": params.get("cache_key") or mode_key
+                }
+                agent_definition = params.get("agent_definition")
+                if agent_definition is not None:
+                    create_kwargs["agent_definition"] = agent_definition
+                    create_kwargs["agent_definition_fingerprint"] = params.get(
+                        "agent_definition_fingerprint"
+                    )
                 await self._create_agent(
                     channel_key,
                     mode=params.get("mode") or mode_key,
                     config=params.get("config"),
                     sub_mode=params.get("sub_mode"),
-                    cache_key=params.get("cache_key") or mode_key,
+                    **create_kwargs,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.error(
@@ -1717,6 +1991,8 @@ class AgentManager:
         sub_mode: str | None = None,
         project_dir: str | None = None,
         admit_request: Callable[[], str | None] | None = None,
+        agent_definition: dict[str, Any] | None = None,
+        agent_definition_fingerprint: str | None = None,
     ) -> "JiuWenSwarm | None":
         """Admit one request and pin Auto sessions to their first owner/root."""
 
@@ -1836,11 +2112,19 @@ class AgentManager:
                 if has_auto_owner or permission_resume:
                     return owner
                 if auto_workspace is not None:
+                    get_kwargs: dict[str, Any] = {
+                        "channel_id": channel_id,
+                        "mode": selected_mode,
+                        "project_dir": auto_workspace,
+                        "sub_mode": selected_sub_mode,
+                    }
+                    if agent_definition is not None:
+                        get_kwargs["agent_definition"] = agent_definition
+                        get_kwargs["agent_definition_fingerprint"] = (
+                            agent_definition_fingerprint
+                        )
                     agent = await self.get_agent(
-                        channel_id=channel_id,
-                        mode=selected_mode,
-                        project_dir=auto_workspace,
-                        sub_mode=selected_sub_mode,
+                        **get_kwargs,
                     )
                     prepare = getattr(agent, "prepare_session", None)
                     if not callable(prepare):
@@ -1855,12 +2139,20 @@ class AgentManager:
         else:
             if admit_request is not None:
                 project_dir = admit_request()
-        return await self.get_agent(
-            channel_id=channel_id,
-            mode=selected_mode,
-            project_dir=project_dir,
-            sub_mode=selected_sub_mode,
-        )
+        get_kwargs = {
+            "channel_id": channel_id,
+            "mode": selected_mode,
+            "project_dir": project_dir,
+            "sub_mode": selected_sub_mode,
+        }
+        if channel_id == "process_cli" and isinstance(params.get("run_permissions"), dict):
+            get_kwargs["run_permissions_enabled"] = True
+        if agent_definition is not None:
+            get_kwargs["agent_definition"] = agent_definition
+            get_kwargs["agent_definition_fingerprint"] = (
+                agent_definition_fingerprint
+            )
+        return await self.get_agent(**get_kwargs)
 
     async def process_message(self, request: Any) -> Any:
         """处理非流式请求.

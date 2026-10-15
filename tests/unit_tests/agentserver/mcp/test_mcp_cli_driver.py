@@ -10,20 +10,25 @@ copying + enable flipping is exercised for real.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from jiuwenswarm.server.runtime.mcp import cli_driver
 from jiuwenswarm.server.runtime.mcp.cli_driver import (
     CliDriver,
     CliManifest,
     CommandResult,
     ERR_BINARY_NOT_FOUND,
+    ERR_INSTALL_SCRIPT_DEP,
     _extract_url,
     _is_binary_not_found,
+    _is_powershell_script_dep,
     _parse_version,
     _pin_init_command,
+    _safe_split_command,
     _version_eq,
 )
 from tests.unit_tests.agentserver.mcp.manifest_helpers import write_manifest
@@ -95,6 +100,86 @@ class TestVersionUtils:
         assert _pin_init_command("py -m pip install gitcode-cli=={version}", "0.9.0") == "py -m pip install gitcode-cli==0.9.0"
         assert _pin_init_command("npm install -g @wecom/cli", "0.1.9") == "npm install -g @wecom/cli"
         assert _pin_init_command("", "0.1.9") == ""
+
+
+class TestCommandResolution:
+    def test_harmony_resolves_bare_executable_to_absolute_path(self, monkeypatch) -> None:
+        monkeypatch.setenv("JIUWEN_HARMONY_RUNTIME", "1")
+        monkeypatch.setattr(cli_driver.sys, "platform", "linux")
+        monkeypatch.setattr(
+            shutil,
+            "which",
+            lambda name: f"/data/app/hnp/bin/{name}",
+        )
+
+        assert _safe_split_command("npm install -g @larksuite/cli") == [
+            "/data/app/hnp/bin/npm",
+            "install",
+            "-g",
+            "@larksuite/cli",
+        ]
+
+    def test_harmony_hnp_path_enables_resolution_without_marker(self, monkeypatch) -> None:
+        monkeypatch.delenv("JIUWEN_HARMONY_RUNTIME", raising=False)
+        monkeypatch.setattr(cli_driver.sys, "platform", "linux")
+        monkeypatch.setenv(
+            "PATH",
+            "/data/app/el1/bundle/100/hnp/com.example/bin:/system/bin",
+        )
+        monkeypatch.setattr(shutil, "which", lambda _: "/data/app/hnp/bin/node")
+
+        assert _safe_split_command("node --version") == [
+            "/data/app/hnp/bin/node",
+            "--version",
+        ]
+
+    def test_harmony_keeps_explicit_executable_path(self, monkeypatch) -> None:
+        monkeypatch.setenv("JIUWEN_HARMONY_RUNTIME", "1")
+        monkeypatch.setattr(cli_driver.sys, "platform", "linux")
+
+        def fail_which(_: str) -> None:
+            raise AssertionError("explicit paths must not be resolved")
+
+        monkeypatch.setattr(shutil, "which", fail_which)
+        command = "/data/app/hnp/bin/node --version"
+
+        assert _safe_split_command(command) == [
+            "/data/app/hnp/bin/node",
+            "--version",
+        ]
+
+    def test_non_harmony_posix_keeps_existing_bare_command_behavior(self, monkeypatch) -> None:
+        monkeypatch.delenv("JIUWEN_HARMONY_RUNTIME", raising=False)
+        monkeypatch.setattr(cli_driver.sys, "platform", "linux")
+
+        def fail_which(_: str) -> None:
+            raise AssertionError("non-Harmony POSIX must keep existing behavior")
+
+        monkeypatch.setattr(shutil, "which", fail_which)
+
+        assert _safe_split_command("node --version") == ["node", "--version"]
+
+    def test_default_runner_passes_harmony_absolute_path_to_subprocess(self, monkeypatch) -> None:
+        monkeypatch.setenv("JIUWEN_HARMONY_RUNTIME", "1")
+        monkeypatch.setattr(cli_driver.sys, "platform", "linux")
+        monkeypatch.setattr(shutil, "which", lambda _: "/data/app/hnp/bin/node")
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return cli_driver.subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout="v24.13.0\n",
+                stderr="",
+            )
+
+        monkeypatch.setattr(cli_driver.subprocess, "run", fake_run)
+
+        result = cli_driver.default_runner("node --version")
+
+        assert result.succeeded is True
+        assert calls[0][0] == ["/data/app/hnp/bin/node", "--version"]
 
 
 class TestExtractUrl:
@@ -235,6 +320,28 @@ class TestCliDriverInstall:
         assert res.version_ok is False
         assert res.error_kind == ""
         assert "ETIMEDOUT" in res.error
+
+    def test_install_powershell_script_dep_classified(self) -> None:
+        """npm postinstall could not spawn powershell → error_kind=
+        install_script_dep, surfacing the real cause (missing PowerShell)
+        instead of a misleading MCP_CLI_INCOMPLETE / MCP_RUNTIME_MISSING."""
+        runner = _FakeRunner({
+            "lark-cli.cmd --version": CommandResult(
+                "lark-cli.cmd --version", -1, stderr="not found",
+                error_kind=ERR_BINARY_NOT_FOUND,
+            ),
+            "npm install -g @larksuite/cli": CommandResult(
+                "npm install -g @larksuite/cli", 1,
+                stderr="npm ERR! command failed\nnpm ERR! spawn powershell.exe ENOENT",
+            ),
+        })
+        drv = CliDriver("feishu", _mkmanifest(), runner)
+        res = drv.install()
+        assert res.version_ok is False
+        assert res.error_kind == ERR_INSTALL_SCRIPT_DEP
+        # The post-init version probe (binary missing) must NOT override the
+        # install script's own diagnosis.
+        assert "powershell" in res.error
 
 class TestCliDriverAuth:
     def test_auth_step_skipif_skips(self) -> None:
@@ -633,6 +740,17 @@ class TestBinaryNotFoundDetection:
     def test_generic_oserror_not_binary_missing(self) -> None:
         assert _is_binary_not_found(OSError("broken pipe")) is False
 
+    def test_powershell_script_dep_patterns(self) -> None:
+        assert _is_powershell_script_dep("npm ERR! spawn powershell.exe ENOENT")
+        assert _is_powershell_script_dep(
+            "'powershell' is not recognized as an internal or external command"
+        )
+        # Generic ENOENT / network errors must NOT be classified as a
+        # PowerShell dependency.
+        assert not _is_powershell_script_dep("npm ERR! spawn dws.cmd ENOENT")
+        assert not _is_powershell_script_dep("npm ERR! code ETIMEDOUT registry timeout")
+        assert not _is_powershell_script_dep("")
+
 
 class TestClassifyInstallFailure:
     """_classify_install_failure maps an InstallResult onto a CliConnectError
@@ -681,6 +799,16 @@ class TestClassifyInstallFailure:
             "dingtalk", self._mk(error="request failed: ECONNREFUSED 127.0.0.1:443"),
         )
         assert exc.code == CODE_INSTALL_NETWORK
+
+    def test_script_dep_maps_to_install_script_dep(self) -> None:
+        from jiuwenswarm.server.runtime.mcp.registry import CODE_INSTALL_SCRIPT_DEP, _classify_install_failure
+        exc = _classify_install_failure(
+            "dingtalk",
+            self._mk(error="npm ERR! spawn powershell.exe ENOENT",
+                     error_kind="install_script_dep"),
+        )
+        assert exc.code == CODE_INSTALL_SCRIPT_DEP
+        assert exc.install_cmd == "npm install -g dingtalk-workspace-cli"
 
     def test_other_failure_maps_to_cli_incomplete(self) -> None:
         from jiuwenswarm.server.runtime.mcp.registry import (

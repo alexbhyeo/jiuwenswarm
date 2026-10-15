@@ -15,11 +15,21 @@ from jiuwenswarm.common.utils import get_user_workspace_dir
 
 DEFAULT_QUEUE_SIZE = 4096
 DEFAULT_BATCH_SIZE = 64
-DEFAULT_FLUSH_INTERVAL_MS = 200
+# Debounce window for coalescing a running span's snapshots. Each snapshot that
+# survives it rewrites that span's whole payload, so a wider window is close to
+# a linear cut in write volume. Final records preempt the wait, so this only
+# sets how often a live span's progress is refreshed, never how fast a finished
+# one lands.
+DEFAULT_FLUSH_INTERVAL_MS = 500
 DEFAULT_RETENTION_DAYS = 7
-DEFAULT_POLL_INTERVAL_MS = 2000
 DEFAULT_DETAIL_MAX_BYTES = 4 * 1024 * 1024
 DEFAULT_SESSION_DATABASE_DIRECTORY = "sessions"
+# Stream frames stand in for a span's output only while that span is still
+# writing it. Once its record lands the record is authoritative and the frames
+# are read by nothing, so they are dropped as the record is committed. Turning
+# this off keeps every frame for the lifetime of its turn page, which is what a
+# reader replaying a finished answer frame by frame would need.
+DEFAULT_DISCARD_FINAL_SPAN_FRAMES = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,8 +42,8 @@ class TrajectoryStoreSettings:
     queue_size: int
     batch_size: int
     flush_interval_ms: int
-    poll_interval_ms: int
     detail_max_bytes: int = DEFAULT_DETAIL_MAX_BYTES
+    discard_final_span_frames: bool = DEFAULT_DISCARD_FINAL_SPAN_FRAMES
 
 
 def _as_bool(value: Any, default: bool) -> bool:
@@ -89,6 +99,16 @@ def session_database_path(database_root: Path, session_id: str) -> Path:
     return Path(database_root) / digest[:2] / f"{digest}.sqlite3"
 
 
+def database_files(database_path: Path) -> tuple[Path, Path, Path]:
+    """Return a SQLite database file and the WAL sidecars that belong to it.
+
+    Deleting a database means deleting all three: a WAL left behind would be
+    replayed into whatever database is later created at the same path.
+    """
+    path = Path(database_path)
+    return path, path.with_name(f"{path.name}-wal"), path.with_name(f"{path.name}-shm")
+
+
 def load_trajectory_store_settings(
     config: Mapping[str, Any] | None = None,
     *,
@@ -122,22 +142,24 @@ def load_trajectory_store_settings(
             section.get("flush_interval_ms"),
             DEFAULT_FLUSH_INTERVAL_MS,
         ),
-        poll_interval_ms=_positive_int(
-            section.get("poll_interval_ms"),
-            DEFAULT_POLL_INTERVAL_MS,
-        ),
         detail_max_bytes=_positive_int(
             section.get("detail_max_bytes"),
             DEFAULT_DETAIL_MAX_BYTES,
             minimum=64 * 1024,
+        ),
+        discard_final_span_frames=_as_bool(
+            section.get("discard_final_span_frames"),
+            DEFAULT_DISCARD_FINAL_SPAN_FRAMES,
         ),
     )
 
 
 __all__ = [
     "DEFAULT_DETAIL_MAX_BYTES",
+    "DEFAULT_DISCARD_FINAL_SPAN_FRAMES",
     "DEFAULT_SESSION_DATABASE_DIRECTORY",
     "TrajectoryStoreSettings",
+    "database_files",
     "load_trajectory_store_settings",
     "session_database_path",
 ]

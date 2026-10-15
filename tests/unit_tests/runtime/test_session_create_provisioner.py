@@ -99,7 +99,6 @@ def _install_product_hooks(
 ) -> None:
     from jiuwenswarm.common import utils
     from jiuwenswarm.server.runtime.session import session_metadata
-    from jiuwenswarm.server.runtime.session.kv_cache import kv_cache_product_hooks
 
     monkeypatch.setattr(utils, "get_agent_sessions_dir", lambda: tmp_path)
     monkeypatch.setattr(
@@ -111,31 +110,6 @@ def _install_product_hooks(
         RuntimeSessionProvisioner,
         "_is_prewarm_model_eligible",
         staticmethod(lambda _model: True),
-    )
-
-    context = SimpleNamespace(
-        target_is_team=target_is_team,
-        previous_is_team=False,
-    )
-
-    def resolve_context(**_kwargs: Any) -> Any:
-        state.events.append("kvc.context")
-        return context
-
-    async def dispatch(**_kwargs: Any) -> None:
-        state.events.append("kvc.dispatch")
-        if dispatch_error is not None:
-            raise dispatch_error
-
-    monkeypatch.setattr(
-        kv_cache_product_hooks,
-        "resolve_session_switch_context",
-        resolve_context,
-    )
-    monkeypatch.setattr(
-        kv_cache_product_hooks,
-        "dispatch_session_switch_signals",
-        dispatch,
     )
 
 
@@ -158,7 +132,6 @@ async def test_create_prepares_metadata_and_commits_kvc_after_delivery(
     assert state.events == [
         "claim",
         "activate:created-session",
-        "kvc.context",
     ]
 
     await provisioner.commit_session_provision(
@@ -169,7 +142,8 @@ async def test_create_prepares_metadata_and_commits_kvc_after_delivery(
     await asyncio.sleep(0)
 
     assert prepared.state is SessionProvisionState.COMMITTED
-    assert state.events[-1] == "kvc.dispatch"
+    await asyncio.sleep(0)
+    assert provisioner._participant_registry.target("created-session") is not None
     assert state.released == []
 
 
@@ -200,8 +174,40 @@ async def test_team_prepare_finishes_before_create_result(
         _input(mode="team", team_hint=True)
     )
 
-    assert state.events[-2:] == ["kvc.context", "team.prepare"]
+    assert state.events[-1:] == ["team.prepare"]
     assert prepared.state is SessionProvisionState.PREPARED
+
+
+@pytest.mark.asyncio
+async def test_create_code_team_keeps_canonical_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """创建链路保留 canonical 元数据，不全局回显请求中的旧 mode。"""
+    from jiuwenswarm.agents.harness import team as team_package
+    from jiuwenswarm.server.runtime.session.session_metadata import (
+        get_session_metadata,
+    )
+
+    state = _State()
+    _install_product_hooks(monkeypatch, tmp_path, state, target_is_team=True)
+
+    class TeamManager:
+        async def prepare_session_switch(self, *_args: Any, **_kwargs: Any) -> None:
+            state.events.append("team.prepare")
+
+    monkeypatch.setattr(
+        team_package, "get_team_manager", lambda _channel: TeamManager()
+    )
+
+    prepared = await _provisioner(state).prepare_session_create(
+        _input(mode="team", work_mode="code")
+    )
+
+    assert prepared.state is SessionProvisionState.PREPARED
+    meta = get_session_metadata("created-session")
+    assert meta["mode"] == "team.code.normal"
+    assert "wire_mode" not in meta
 
 
 @pytest.mark.asyncio
@@ -210,7 +216,6 @@ async def test_team_hint_triggers_prepare_when_mode_is_agent(
     tmp_path: Any,
 ) -> None:
     from jiuwenswarm.agents.harness import team as team_package
-    from jiuwenswarm.server.runtime.session.kv_cache import kv_cache_product_hooks
 
     state = _State()
     _install_product_hooks(monkeypatch, tmp_path, state)
@@ -221,11 +226,6 @@ async def test_team_hint_triggers_prepare_when_mode_is_agent(
 
     monkeypatch.setattr(
         team_package, "get_team_manager", lambda _channel: TeamManager()
-    )
-    monkeypatch.setattr(
-        kv_cache_product_hooks,
-        "resolve_session_switch_context",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("no context")),
     )
 
     prepared = await _provisioner(state).prepare_session_create(
@@ -245,12 +245,13 @@ async def test_successful_context_team_flag_overrides_request_fallback(
 
     state = _State()
     _install_product_hooks(monkeypatch, tmp_path, state)
+
+    class TeamManager:
+        async def prepare_session_switch(self, *_args: Any, **_kwargs: Any) -> None:
+            state.events.append("team.prepare")
+
     monkeypatch.setattr(
-        team_package,
-        "get_team_manager",
-        lambda _channel: (_ for _ in ()).throw(
-            AssertionError("authoritative non-Team context must skip Team prepare")
-        ),
+        team_package, "get_team_manager", lambda _channel: TeamManager()
     )
 
     prepared = await _provisioner(state).prepare_session_create(
@@ -258,7 +259,7 @@ async def test_successful_context_team_flag_overrides_request_fallback(
     )
 
     assert prepared.state is SessionProvisionState.PREPARED
-    assert "team.prepare" not in state.events
+    assert "team.prepare" in state.events
 
 
 @pytest.mark.asyncio
@@ -267,15 +268,9 @@ async def test_unavailable_context_does_not_infer_previous_team_from_hint(
     tmp_path: Any,
 ) -> None:
     from jiuwenswarm.agents.harness import team as team_package
-    from jiuwenswarm.server.runtime.session.kv_cache import kv_cache_product_hooks
 
     state = _State()
     _install_product_hooks(monkeypatch, tmp_path, state)
-    monkeypatch.setattr(
-        kv_cache_product_hooks,
-        "resolve_session_switch_context",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("no context")),
-    )
     monkeypatch.setattr(
         team_package,
         "get_team_manager",
@@ -352,7 +347,10 @@ async def test_non_explicit_tui_with_project_id_skips_project_creation(
     monkeypatch.setattr(
         project_store,
         "get_project_by_id",
-        lambda _project_id, cache_bust=True: SimpleNamespace(work_mode="code"),
+        # lifecycle.guard 在会话创建准入时读取 hidden（项目归档屏障）。
+        lambda _project_id, cache_bust=True: SimpleNamespace(
+            work_mode="code", hidden=False
+        ),
     )
 
     prepared = await _provisioner(state).prepare_session_create(
@@ -406,8 +404,6 @@ async def test_after_delivery_commit_does_not_wait_for_slow_kvc(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
 ) -> None:
-    from jiuwenswarm.server.runtime.session.kv_cache import kv_cache_product_hooks
-
     state = _State()
     _install_product_hooks(monkeypatch, tmp_path, state)
     entered = asyncio.Event()
@@ -418,11 +414,6 @@ async def test_after_delivery_commit_does_not_wait_for_slow_kvc(
         entered.set()
         await release.wait()
 
-    monkeypatch.setattr(
-        kv_cache_product_hooks,
-        "dispatch_session_switch_signals",
-        slow_dispatch,
-    )
     provisioner = _provisioner(state)
     prepared = await provisioner.prepare_session_create(_input())
 
@@ -435,7 +426,8 @@ async def test_after_delivery_commit_does_not_wait_for_slow_kvc(
     )
 
     assert prepared.state is SessionProvisionState.COMMITTED
-    await asyncio.wait_for(entered.wait(), timeout=0.2)
+    await asyncio.sleep(0)
+    assert provisioner._participant_registry.target("created-session") is not None
     await asyncio.wait_for(provisioner.close_background_tasks(), timeout=0.2)
     assert not provisioner._background_create_kvc_tasks
 
@@ -473,12 +465,8 @@ async def test_after_delivery_kvc_failure_is_logged_and_drained(
 
     assert prepared.state is SessionProvisionState.COMMITTED
     assert not provisioner._background_create_kvc_tasks
-    assert len(warnings) == 1
-    assert warnings[0][0][:2] == (
-        "Session create KVC dispatch failed after result delivery: %s",
-        failure,
-    )
-    assert warnings[0][1]["exc_info"][1] is failure
+    assert warnings == []
+    assert provisioner._participant_registry.target("created-session") is not None
     await provisioner.close_background_tasks()
 
 
@@ -724,7 +712,5 @@ async def test_project_work_mode_mismatch_keeps_exact_legacy_error(
 
     assert captured.value.code == "BAD_REQUEST"
     assert str(captured.value) == (
-        "work_mode mismatch: project is 'code'"
-        f"{' ' * 37}"
-        "but request specified 'work'"
+        f"work_mode mismatch: project is 'code'{' ' * 37}but request specified 'work'"
     )

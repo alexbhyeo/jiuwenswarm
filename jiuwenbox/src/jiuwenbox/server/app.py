@@ -12,7 +12,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import ValidationError
 
 from jiuwenbox.logging_config import configure_logging
@@ -40,6 +40,23 @@ from jiuwenbox.server.runtime.process import enable_child_subreaper
 # stdout/stderr. The launcher (``jiuwenbox-server --save-logs DIR``)
 # normalizes the value to an absolute path and writes it back here.
 ENV_SAVE_LOGS_DIR = "JIUWENBOX_SAVE_LOGS_DIR"
+
+# Operator-facing env: when set to a non-empty string, the ``/health``
+# endpoint returns that exact body as ``text/plain`` (HTTP 200) instead of
+# the default JSON document. Some PaaS liveness probes require a fixed
+# payload and cannot parse the JSON health report; this lets operators
+# configure the expected literal body per deployment. The value is emitted
+# verbatim - no JSON quoting, no appended newline, no charset suffix on the
+# Content-Type. The health determination itself is unchanged; an empty
+# string is treated as unset. Read per-request (same pattern as
+# ``get_configured_token``) so tests and container env wiring stay simple.
+ENV_HEALTH_RESPONSE_BODY = "JIUWENBOX_HEALTH_RESPONSE_BODY"
+
+
+def get_configured_health_body() -> str | None:
+    """Return the custom ``/health`` success body, or ``None`` when unset/empty."""
+    raw = os.environ.get(ENV_HEALTH_RESPONSE_BODY)
+    return raw or None
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -302,6 +319,12 @@ async def lifespan(_application: FastAPI):
     if get_configured_token() is not None:
         logger.info("API authentication enabled")
     await _proxy_manager.start()
+    policy_sync = None
+    if _sandbox_manager is not None and os.getenv("JIUWENBOX_RUNTIME_PROFILE", "").strip().lower() == "agentos":
+        from jiuwenbox.server.etcd_sync.service import PolicySyncService
+
+        policy_sync = PolicySyncService.from_env(_sandbox_manager)
+        await policy_sync.start()
     # 在 proxy 起来之后、yield (接受请求) 之前给 UDS 打权限: 此刻 uvicorn 已
     # 经 bind 并 listen 完成, socket inode 必然存在; 改 mode 不会和首个请求
     # 抢时序。
@@ -315,6 +338,8 @@ async def lifespan(_application: FastAPI):
     try:
         yield
     finally:
+        if policy_sync is not None:
+            await policy_sync.stop()
         # Stop accepting MCP requests before tearing down managed resources.
         try:
             await _mcp_session_cm.__aexit__(None, None, None)
@@ -486,6 +511,18 @@ def create_app() -> FastAPI:
         else:
             sandboxes = await _sandbox_manager.list_sandboxes()
             active = sum(1 for s in sandboxes if s.phase.value == "ready")
+
+        # Fixed-payload probe mode (e.g. PaaS liveness expecting a literal
+        # body): same health determination as below, only the success wire
+        # format changes. Auth (BearerTokenAuthMiddleware) and every other
+        # route are untouched.
+        custom_body = get_configured_health_body()
+        if custom_body is not None:
+            return Response(
+                content=custom_body,
+                status_code=200,
+                headers={"Content-Type": "text/plain"},
+            )
 
         return HealthResponse(
             version=__version__,

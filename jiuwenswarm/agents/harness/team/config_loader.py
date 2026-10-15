@@ -13,9 +13,19 @@ from typing import Any
 
 from openjiuwen.agent_teams.paths import get_agent_teams_home
 
+from jiuwenswarm.common.agentos_runtime import is_agentos_runtime
+from jiuwenswarm.common.auth.login_credentials import bare_model_name
 from jiuwenswarm.common.config import get_config, get_default_models
 from jiuwenswarm.common.reasoning_injector import build_reasoning_model_request_kwargs
 from jiuwenswarm.server.runtime.opencode_zen import get_zen_free_model_entries
+
+from jiuwenswarm.common.team_template_config import (
+    TeamTemplateNotFoundError,  # noqa: F401
+    _resolve_legacy_team_template,
+    _select_modes_team,
+    get_team_template_snapshot,  # noqa: F401
+    list_team_template_summaries,  # noqa: F401
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,140 +34,6 @@ _DEFAULT_COMPLETION_TIMEOUT = 600.0
 _DEFAULT_AGENT_WORKSPACE = {"stable_base": True}
 _DEFAULT_TEAM_WORKSPACE = {"enabled": True}
 _DEFAULT_TRANSPORT = {"type": "inprocess"}
-
-
-class TeamTemplateNotFoundError(ValueError):
-    """Raised when a bound team references a template that no longer exists."""
-
-
-def _get_modes_team(config_base: dict[str, Any]) -> dict[str, Any]:
-    modes_raw = config_base.get("modes", {})
-    if not isinstance(modes_raw, dict):
-        return {}
-
-    teams_raw = modes_raw.get("team", {})
-    if not isinstance(teams_raw, dict):
-        return {}
-    return teams_raw
-
-
-def _resolve_legacy_team_template(config_base: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    legacy_team = config_base.get("team", {})
-    if isinstance(legacy_team, dict) and legacy_team:
-        template_id = (
-            str(legacy_team.get("team_name") or "").strip()
-            or str(legacy_team.get("name") or "").strip()
-            or "default"
-        )
-        return template_id, legacy_team
-
-    if any(key in config_base for key in ("team_name", "leader", "agents", "storage", "predefined_members")):
-        template_id = (
-            str(config_base.get("team_name") or "").strip()
-            or str(config_base.get("name") or "").strip()
-            or "default"
-        )
-        return template_id, config_base
-
-    return "", {}
-
-
-def list_team_template_summaries(config_base: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """Return configured team templates from ``modes.team``."""
-    if config_base is None:
-        config_base = get_config()
-    templates: list[dict[str, Any]] = []
-    for template_id, team_raw in _get_modes_team(config_base).items():
-        if not isinstance(team_raw, dict):
-            continue
-        display_name = (
-            str(team_raw.get("display_name") or "").strip()
-            or str(team_raw.get("name") or "").strip()
-            or str(team_raw.get("team_name") or "").strip()
-            or str(template_id)
-        )
-        templates.append(
-            {
-                "template_id": str(template_id),
-                "display_name": display_name,
-                "available": True,
-                "source": f"modes.team.{template_id}",
-                "team_name": str(team_raw.get("team_name") or "").strip(),
-            }
-        )
-    if templates:
-        return templates
-
-    template_id, legacy_team = _resolve_legacy_team_template(config_base)
-    if legacy_team:
-        display_name = (
-            str(legacy_team.get("display_name") or "").strip()
-            or str(legacy_team.get("name") or "").strip()
-            or str(legacy_team.get("team_name") or "").strip()
-            or template_id
-        )
-        templates.append(
-            {
-                "template_id": template_id,
-                "display_name": display_name,
-                "available": True,
-                "source": "team",
-                "team_name": str(legacy_team.get("team_name") or "").strip(),
-            }
-        )
-    return templates
-
-
-def get_team_template_snapshot(
-    config_base: dict[str, Any] | None = None,
-    *,
-    template_id: str,
-) -> dict[str, Any]:
-    """Return a copy of the selected raw team template for team entity persistence."""
-    if config_base is None:
-        config_base = get_config()
-    resolved_template_id, team_raw = _select_modes_team(
-        config_base,
-        template_id=template_id,
-        strict_template=True,
-    )
-    snapshot = deepcopy(team_raw)
-    if resolved_template_id and not str(snapshot.get("team_name") or "").strip():
-        snapshot["team_name"] = resolved_template_id
-    return snapshot
-
-
-def _select_modes_team(
-    config_base: dict[str, Any],
-    template_id: str | None = None,
-    *,
-    strict_template: bool = False,
-) -> tuple[str, dict[str, Any]]:
-    teams_raw = _get_modes_team(config_base)
-    legacy_template_id, legacy_team = _resolve_legacy_team_template(config_base)
-    requested_template_id = str(template_id or "").strip()
-    if requested_template_id:
-        candidate = teams_raw.get(requested_template_id)
-        if isinstance(candidate, dict):
-            logger.debug("[TeamConfigLoader] selected team template: %s", requested_template_id)
-            return requested_template_id, candidate
-        if legacy_team and requested_template_id == legacy_template_id:
-            logger.debug("[TeamConfigLoader] selected legacy team template: %s", requested_template_id)
-            return legacy_template_id, legacy_team
-        if strict_template:
-            raise TeamTemplateNotFoundError(f"team template not found: {requested_template_id}")
-        logger.warning("[TeamConfigLoader] requested team template not found: %s", requested_template_id)
-
-    for team_name, team_raw in teams_raw.items():
-        if isinstance(team_raw, dict):
-            logger.debug("[TeamConfigLoader] selected team from modes.team: %s", team_name)
-            return str(team_name), team_raw
-
-    if legacy_team:
-        logger.debug("[TeamConfigLoader] selected legacy team template: %s", legacy_template_id)
-        return legacy_template_id, legacy_team
-
-    return "", {}
 
 
 def _select_first_modes_team(config_base: dict[str, Any]) -> dict[str, Any]:
@@ -209,31 +85,66 @@ def resolve_team_sqlite_db_path(config_base: dict[str, Any] | None = None) -> Pa
     return get_agent_teams_home() / conn_str
 
 
+def _entry_model_name(entry: dict[str, Any] | None) -> str:
+    if not isinstance(entry, dict):
+        return ""
+    mcc = entry.get("model_client_config") or {}
+    if not isinstance(mcc, dict):
+        return ""
+    return str(mcc.get("model_name") or "").strip()
+
+
 def _select_default_model_config(
     configured_entries: list[dict[str, Any]],
     *,
     requested_model_name: str | None = None,
+    login_model_entry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     requested = (requested_model_name or "").strip()
+    agentos = is_agentos_runtime()
     if requested:
+        # Port agent_os b8273f093's selector over develop's normalized entries.
+        # Keep their positions: models.list and the single-agent cache use the
+        # same defaults+agentos global origin_index, including placeholders.
+        if agentos and "#" in requested:
+            bare_name, _, index_part = requested.rpartition("#")
+            if bare_name and index_part.isdigit():
+                origin_index = int(index_part)
+                if 0 <= origin_index < len(configured_entries):
+                    entry = configured_entries[origin_index]
+                    if _entry_model_name(entry) == bare_name:
+                        return entry
         # When the caller (chat page) provides a requested model name, prefer
         # the entry whose ``model_client_config.model_name`` matches it so
         # team members without an explicit ``modes.team.agents.*.model`` fall
         # back to the page-selected model instead of the first list item.
         for item in configured_entries:
-            mcc = item.get("model_client_config") or {}
-            if isinstance(mcc, dict) and mcc.get("model_name") == requested:
+            if _entry_model_name(item) == requested or (agentos and item.get("alias") == requested):
                 return item
+
+        # Login-granted models are request-scoped and never written into
+        # ``models.defaults``. Match the forwarded entry by name so a
+        # page-selected login model still drives the team's fallback, without
+        # overriding a same-named user-configured model above.
+        # The login entry is built from the bare name (``#<index>`` stripped), so compare bare names.
+        if login_model_entry is not None and _entry_model_name(login_model_entry) == bare_model_name(requested):
+            return login_model_entry
 
         # The selected model may be a Zen free model that is appended to
         # ``models.list`` at runtime but never written into ``models.defaults``
         # (see ``opencode_zen``). Match it from the in-memory Zen cache so a
         # page-selected free model still drives the whole team's fallback model.
         for item in get_zen_free_model_entries():
-            mcc = item.get("model_client_config") or {}
-            if isinstance(mcc, dict) and mcc.get("model_name") == requested:
+            if _entry_model_name(item) == requested:
                 return item
 
+        if agentos:
+            logger.warning("[TeamConfigLoader] requested model %r not found; using configured fallback", requested)
+
+    if agentos:
+        # agent_os 5cc86e59b: an unresolved placeholder must not shadow a usable
+        # backup. Skip it only for fallback, without shifting origin_index.
+        return next((entry for entry in configured_entries if _entry_model_name(entry)), {})
     if configured_entries:
         return configured_entries[0]
 
@@ -244,11 +155,13 @@ def _resolve_default_model_config(
     config_base: dict[str, Any],
     *,
     requested_model_name: str | None = None,
+    login_model_entry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Resolve the selected model from normalized executable entries."""
     return _select_default_model_config(
         get_default_models(config_base),
         requested_model_name=requested_model_name,
+        login_model_entry=login_model_entry,
     )
 
 
@@ -327,12 +240,14 @@ def get_effective_team_model_entries(
     config_base: dict[str, Any],
     *,
     requested_model_name: str | None = None,
+    login_model_entry: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Return configured models plus the effective page-selected model."""
     configured_entries = get_default_models(config_base)
     selected_entry = _select_default_model_config(
         configured_entries,
         requested_model_name=requested_model_name,
+        login_model_entry=login_model_entry,
     )
     return _merge_effective_model_entries(
         configured_entries,
@@ -344,10 +259,12 @@ def _build_default_model_dict(
     config_base: dict[str, Any],
     *,
     requested_model_name: str | None = None,
+    login_model_entry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     model_config = _resolve_default_model_config(
         config_base,
         requested_model_name=requested_model_name,
+        login_model_entry=login_model_entry,
     )
     model_client_config = dict(model_config.get("model_client_config", {}))
     model_name = model_client_config.get("model_name", "")
@@ -417,10 +334,12 @@ def _build_agents_config(
     config_base: dict[str, Any],
     *,
     requested_model_name: str | None = None,
+    login_model_entry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     default_model = _build_default_model_dict(
         config_base,
         requested_model_name=requested_model_name,
+        login_model_entry=login_model_entry,
     )
     default_workspace, max_iterations, completion_timeout = _build_agent_defaults()
 
@@ -600,6 +519,7 @@ def load_team_spec_dict(
     config_base: dict[str, Any] | None = None,
     *,
     requested_model_name: str | None = None,
+    login_model_entry: dict[str, Any] | None = None,
     template_id: str | None = None,
     template_snapshot: dict[str, Any] | None = None,
     strict_template: bool = False,
@@ -609,7 +529,8 @@ def load_team_spec_dict(
     When ``requested_model_name`` is provided (e.g. from the chat page model
     selector), team members without an explicit ``modes.team.agents.*.model``
     fall back to the matching entry in ``models.defaults`` instead of the
-    first list item.
+    first list item. ``login_model_entry`` fills that gap when the selected
+    name is a request-scoped login model (not in ``models.defaults``).
     """
     if config_base is None:
         config_base = get_config()
@@ -636,6 +557,7 @@ def load_team_spec_dict(
         team_raw,
         config_base,
         requested_model_name=requested_model_name,
+        login_model_entry=login_model_entry,
     )
     spec_dict = deepcopy(team_raw)
     spec_dict.pop("enable_team_plan", None)
@@ -648,7 +570,14 @@ def load_team_spec_dict(
     spec_dict["enable_task_verification"] = team_raw.get("enable_task_verification", False)
     spec_dict["enable_hitt"] = team_raw.get("enable_hitt", True)
     spec_dict["enable_permissions"] = _resolve_enable_permissions(config_base)
+    # Experimental switch drives both frontend UI and backend org tools.
+    spec_dict["enable_organization"] = bool(
+        (config_base.get("experimental") or {}).get("team_organization_ui_enabled", False)
+    )
     _apply_swarmflow_budget(spec_dict, team_raw.get("swarmflow_budget"))
+    # Team-level key, independent of the single-agent progressive_tool_enabled
+    # switch; the spec field is named progressive_tool on the engine side.
+    spec_dict["progressive_tool"] = bool(spec_dict.pop("swarmflow_progressive_tool", False))
     spec_dict["leader"] = _build_leader_spec(team_raw)
     spec_dict["agents"] = agents
     spec_dict["language"] = str(config_base.get("preferred_language", "zh")).strip().lower()

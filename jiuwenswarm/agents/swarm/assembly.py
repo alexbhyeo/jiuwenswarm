@@ -28,15 +28,23 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from jiuwenswarm.agents.swarm.agent_group import LoadedAgentGroupPackage
 
 from openjiuwen.agent_teams.paths import (
     SKILL_VISIBILITY_FILENAME,
     configure_global_skills_dir,
     team_home,
 )
+from openjiuwen.agent_teams.external import external_cli_agent_spec_from_template
 from openjiuwen.agent_teams.schema.blueprint import TransportSpec
-from openjiuwen.agent_teams.schema.team import TeamMemberSpec, TeamRole
+from openjiuwen.agent_teams.schema.team import (
+    ExternalCliMemberSpec,
+    TeamMemberSpec,
+    TeamRole,
+)
 from openjiuwen.core.foundation.tool import McpServerConfig
 from openjiuwen.extensions.observability.demand import get_trajectory_span_processor
 from openjiuwen.harness.schema.extension_spec import AgentTemplateSpec
@@ -201,15 +209,33 @@ def _with_agent_template(member_spec: Any, template: AgentTemplateSpec) -> Any:
     )
 
 
-def _apply_agent_group(spec: Any, agent_group_name: str) -> None:
+def _apply_agent_group(
+    spec: Any,
+    agent_group_name: str,
+    package: LoadedAgentGroupPackage | None = None,
+) -> None:
     """Seed a hybrid roster from one resolved AgentGroup package."""
-    from jiuwenswarm.agents.swarm.agent_group import load_agent_group_package
     from jiuwenswarm.server.runtime.extension_package_manager import (
-        resolve_agent_group_dir,
+        resolve_agent_group_member_display_name,
     )
+    if package is None:
+        from jiuwenswarm.agents.swarm.agent_group import (
+            load_agent_group_package_bundle,
+        )
+        from jiuwenswarm.server.runtime.extension_package_manager import (
+            resolve_agent_group_dir,
+        )
 
-    package_dir = resolve_agent_group_dir(agent_group_name)
-    templates = load_agent_group_package(package_dir)
+        package = load_agent_group_package_bundle(
+            resolve_agent_group_dir(agent_group_name)
+        )
+    templates = package.templates
+    package_dir = package.package_dir
+    spec.metadata = {
+        **(spec.metadata or {}),
+        "agent_group_name": agent_group_name,
+        "capabilities": list(package.capabilities),
+    }
 
     leader_base = spec.agents.get("leader")
     teammate_base = spec.agents.get("teammate")
@@ -234,19 +260,37 @@ def _apply_agent_group(spec: Any, agent_group_name: str) -> None:
         if agent_name == "leader":
             continue
         member_prompt = _template_team_prompt(template, teammate_base)
-        spec.agents[agent_name] = _with_agent_template(
-            teammate_base.model_copy(deep=True),
-            template,
-        )
-        predefined_members.append(
-            TeamMemberSpec(
+        external_config = external_cli_agent_spec_from_template(template)
+        if external_config is None:
+            spec.agents[agent_name] = _with_agent_template(
+                teammate_base.model_copy(deep=True),
+                template,
+            )
+            member = TeamMemberSpec(
                 member_name=agent_name,
-                display_name=template.agent_card.name or agent_name,
+                display_name=resolve_agent_group_member_display_name(
+                    package_dir,
+                    agent_name,
+                    fallback=template.agent_card.name or agent_name,
+                ),
                 desc=template.agent_card.description or "",
                 prompt=member_prompt,
                 role_type=TeamRole.TEAMMATE,
             )
-        )
+        else:
+            spec.agents[agent_name] = teammate_base.model_copy(deep=True)
+            member = ExternalCliMemberSpec(
+                member_name=agent_name,
+                display_name=resolve_agent_group_member_display_name(
+                    package_dir,
+                    agent_name,
+                    fallback=template.agent_card.name or agent_name,
+                ),
+                desc=template.agent_card.description or "",
+                prompt=member_prompt,
+                external_cli=external_config,
+            )
+        predefined_members.append(member)
 
     spec.predefined_members = predefined_members
     spec.team_mode = "hybrid"
@@ -264,6 +308,7 @@ def enrich_team_spec_for_swarm(
     channel_id: str | None = None,
     request_metadata: dict[str, Any] | None = None,
     agent_group_name: str | None = None,
+    agent_group_package: LoadedAgentGroupPackage | None = None,
 ) -> None:
     """Enrich *spec* in place for provider-based swarm assembly.
 
@@ -282,6 +327,7 @@ def enrich_team_spec_for_swarm(
         channel_id: Raw channel id from the request, if any.
         request_metadata: Request metadata mapping (carries ``mode`` etc.).
         agent_group_name: Optional AgentGroup package selected for this Team.
+        agent_group_package: Optional preloaded package for this AgentGroup.
     """
     register_swarm_providers()
     _ensure_external_team_transport(spec, channel_id)
@@ -388,7 +434,7 @@ def enrich_team_spec_for_swarm(
             spec.agents[role] = member_spec
 
     if agent_group_name:
-        _apply_agent_group(spec, agent_group_name)
+        _apply_agent_group(spec, agent_group_name, agent_group_package)
 
     spec.build_context = base
     # Carry a serializable seed alongside the live context so members rebuilt

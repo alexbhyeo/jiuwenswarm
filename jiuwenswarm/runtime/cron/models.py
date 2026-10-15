@@ -205,48 +205,141 @@ def normalize_cron_job_timeout_seconds(raw: Any) -> int | None:
     return value
 
 
-def validate_cron_model(raw: Any) -> str | None:
-    """Validate model name/alias against configured models. Returns canonical model_name or raises.
+def normalize_cron_job_mcp(raw: Any) -> list[str] | None:
+    """Normalize a cron job's MCP selection (list of MCP server names).
 
-    If the input is an alias, resolves to the underlying ``model_client_config.model_name``
-    so the stored value is always a key AgentServer ``_model_cache`` can look up.
-
-    Opencode Zen free models are in-memory only, so a configured-model miss
-    also checks the live free-model cache.  A cache failure never blocks the
-    normal configured-model validation path.
+    只做类型规范化（strip/去空/去重），不校验 MCP 是否存在/连接：
+    MCP 连接状态是动态的，断连后旧 job 应降级运行而非起不来；
+    AgentServer 侧 reconcile 对缺失名称是 no-op + warning。
+    ``None`` / 非列表 / 空列表统一归一为 ``None``（与"未选择"同语义）。
     """
     if raw is None:
         return None
+    if not isinstance(raw, (list, tuple)):
+        return None
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        name = item.strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out or None
+
+
+# resolve_cron_model 返回的模型来源标记：config.yaml 自配 / Zen 免费缓存 / 登录模型目录。
+CRON_MODEL_SOURCE_CONFIG = "config"
+CRON_MODEL_SOURCE_ZEN = "zen"
+CRON_MODEL_SOURCE_LOGIN = "login"
+
+
+def _match_supplied_zen_entry(value: str, zen_entries: list[dict[str, Any]] | None) -> str | None:
+    """Match a caller-supplied Zen row (public list row or raw cache entry)."""
+    for row in zen_entries or []:
+        if not isinstance(row, dict):
+            continue
+        model_config = row.get("model_client_config") or {}
+        model_name = str(row.get("model_name") or model_config.get("model_name") or "").strip()
+        alias = str(row.get("alias") or "").strip()
+        if model_name and value in {model_name, alias}:
+            return model_name
+    return None
+
+
+def resolve_cron_model(
+    raw: Any,
+    zen_entries: list[dict[str, Any]] | None = None,
+) -> tuple[str | None, str]:
+    """Resolve a cron model name/alias to ``(canonical_model_name, source)``.
+
+    source ∈ ``{"", "config", "zen", "login"}``；``""`` 表示未指定模型（None/空）。
+    命中顺序 config → zen → login，同名时自配优先（与 ``get_available_models``
+    的去重规则一致）。未知模型抛 ``ValueError``，语义与
+    :func:`validate_cron_model`（本函数去掉来源信息的封装）完全一致。
+
+    ``login`` 来源对调用方另有含义：controller 需在此情况下从创建连接的
+    登录会话捕获凭据绑定（``CronJob.credential_ref``）；执行侧凭据注入只认
+    该绑定，不再按模型名猜测来源。
+
+    If the input is an alias, resolves to the underlying ``model_client_config.model_name``
+    (including environment placeholders) so the stored value is always a key
+    AgentServer ``_model_cache`` can look up. An explicitly configured name that
+    resolves to empty is rejected instead of being persisted.
+
+    Opencode Zen free models live in the AgentServer process. This function
+    does not import that module. Callers that already hold the public rows
+    (Gateway fetches ``models.zen_entries``) pass them as ``zen_entries``.
+    AgentServer cron tools match the in-process cache after a miss here.
+
+    登录送的免费模型（华为账号登录，``common/auth/model_catalog``）同样只在缓存里、
+    永不写入 config.yaml（未登录/活动未生效时目录为空，与前端"未登录不展示
+    免费模型"一致）。两个进程里的调用方（controller / cron_tools）对登录模型行为一致。
+    """
+    if raw is None:
+        return None, ""
     value = str(raw).strip()
     if not value:
-        return None
-    from jiuwenswarm.common.config import get_model_config, get_model_names
+        return None, ""
+    from jiuwenswarm.common.config import (
+        get_model_config,
+        get_model_names,
+        resolve_env_vars,
+    )
 
     entry = get_model_config(value)
     if entry is not None:
         mcc = entry.get("model_client_config") or {}
-        canonical = (mcc.get("model_name") or "").strip()
-        return canonical if canonical else value
+        configured_name = mcc.get("model_name")
+        if not configured_name:
+            return value, CRON_MODEL_SOURCE_CONFIG
+        canonical = str(resolve_env_vars(configured_name) or "").strip()
+        if not canonical:
+            raise ValueError(
+                f"Configured model {value!r} has a model_client_config.model_name "
+                f"that resolves to an empty value ({configured_name!r}). Set the "
+                "referenced environment variable or configure a concrete model_name."
+            )
+        return canonical, CRON_MODEL_SOURCE_CONFIG
 
+    matched_zen = _match_supplied_zen_entry(value, zen_entries)
+    if matched_zen:
+        return matched_zen, CRON_MODEL_SOURCE_ZEN
+
+    # 登录送的免费模型：名字可能带 "#index"
+    # 通道侧全局序号后缀，取前半段再匹配（与 passthrough._build_model_auth 一致）。
     try:
-        from jiuwenswarm.server.runtime.opencode_zen import (
-            get_zen_free_model_entries,
-        )
+        from jiuwenswarm.common.auth.login_credentials import bare_model_name
+        from jiuwenswarm.common.auth.model_catalog import get_models
 
-        for zen_entry in get_zen_free_model_entries():
-            model_config = zen_entry.get("model_client_config") or {}
-            model_name = str(model_config.get("model_name") or "").strip()
-            alias = str(zen_entry.get("alias") or "").strip()
-            if model_name and value in {model_name, alias}:
-                return model_name
-    except Exception as exc:  # noqa: BLE001 - optional cache must not break cron
-        logger.debug("[cron] zen free-model lookup failed for %r: %s", value, exc)
+        bare = bare_model_name(value)
+        for login_model in get_models(allow_refresh=False):
+            if value == login_model.model_name or bare == login_model.model_name:
+                return login_model.model_name, CRON_MODEL_SOURCE_LOGIN
+    except Exception as exc:  # noqa: BLE001 - optional catalog must not break cron
+        logger.debug("[cron] login model lookup failed for %r: %s", value, exc)
 
     available = get_model_names()
     hint = ", ".join(available[:20]) if available else "(no models configured)"
     if len(available) > 20:
         hint += f" ... and {len(available) - 20} more"
     raise ValueError(f"Unknown model {value!r}. Available models: {hint}")
+
+
+def validate_cron_model(
+    raw: Any,
+    zen_entries: list[dict[str, Any]] | None = None,
+) -> str | None:
+    """Validate model name/alias against configured models. Returns canonical model_name or raises.
+
+    :func:`resolve_cron_model` 的封装：只返回规范名，不暴露来源。需要区分模型
+    来源（如登录模型的凭据绑定捕获）的调用方请直接用 ``resolve_cron_model``。
+    ``zen_entries`` 是调用方已经从 AgentServer 取到的公开行；不传则不匹配 Zen。
+    """
+    canonical, _source = resolve_cron_model(raw, zen_entries=zen_entries)
+    return canonical
 
 
 def resolve_cron_job_timeout_seconds(job: "CronJob") -> float:
@@ -323,12 +416,22 @@ class CronJob:
     last_session_id: str | None = None
     # 执行时使用的模型；None 表示使用 AgentServer 默认模型
     model_name: str | None = None
+    model_selection: dict[str, str] | None = None
+    # 执行时会话级启用的 MCP 名称列表（来自创建时 chat-session 的快照，
+    # 或显式传入）；None 表示不注入（沿用既有全局默认集行为）。
+    mcp: list[str] | None = None
     # 飞书多应用场景：创建该定时任务的 app_id，用于推送时定位到正确的 app 配置
     app_id: str = ""
     # 创建者标识（web 端 user_id）。执行时透传给 faas 的 X-Session-Context，
     # 否则 CreateSandbox 拉不起导致 60s 超时（见 plan-cron-user-id）。
     # 默认空串兼容旧数据；语义=创建者，创建后不可变。
     user_id: str = ""
+    # 登录免费模型的凭据句柄绑定：创建/改选登录模型时，由创建连接上的华为账号
+    # 登录会话派生（credential_ref_for_user）。路由 user_id 与华为账号是两套
+    # 独立用户体系，互不可推导，绑定只能来自服务端登录会话。空串=未绑定
+    # （自配模型/未选模型）；执行侧凭据注入只认该绑定——它同时就是"所选模型
+    # 是登录模型"的标记，自配模型即使与登录模型同名也不会被误注入登录凭据。
+    credential_ref: str = ""
     # 工作模式派生快照：由 project_id 归属推导（"code" / "work"）。
     # 不作为独立隔离维度，任务归属仍以 project_id 为准。
     # from_dict 仅做 normalize + 兜底 "work"，不做跨层 Project 反查；
@@ -368,10 +471,16 @@ class CronJob:
             d["last_session_id"] = self.last_session_id
         if self.model_name:
             d["model_name"] = self.model_name
+        if self.model_selection:
+            d["model_selection"] = dict(self.model_selection)
+        if self.mcp:
+            d["mcp"] = list(self.mcp)
         if self.app_id:
             d["app_id"] = self.app_id
         if self.user_id:
             d["user_id"] = self.user_id
+        if self.credential_ref:
+            d["credential_ref"] = self.credential_ref
         return d
 
     @staticmethod
@@ -479,9 +588,16 @@ class CronJob:
         model_raw = data.get("model_name", None)
         job_model_name = (
             str(model_raw).strip()
-            if isinstance(model_raw, str) and str(model_raw).strip()
+            if isinstance(model_raw, str) and model_raw.strip()
             else None
         )
+        selection_raw = data.get("model_selection")
+        job_model_selection = None
+        if isinstance(selection_raw, dict):
+            from jiuwenswarm.common.model_selection import ModelSelection
+            job_model_selection = ModelSelection.model_validate(selection_raw).model_dump()
+        # mcp：老数据兜底（无 mcp 字段 → None，行为与改造前一致）
+        job_mcp = normalize_cron_job_mcp(data.get("mcp", None))
         app_id_raw = data.get("app_id", "")
         job_app_id = str(app_id_raw).strip() if isinstance(app_id_raw, str) else ""
 
@@ -489,6 +605,14 @@ class CronJob:
         job_user_id_raw = data.get("user_id", "")
         job_user_id = (
             str(job_user_id_raw).strip() if isinstance(job_user_id_raw, str) else ""
+        )
+
+        # credential_ref：老数据兜底（无字段 → ""，即未绑定登录账号）
+        job_credential_ref_raw = data.get("credential_ref", "")
+        job_credential_ref = (
+            str(job_credential_ref_raw).strip()
+            if isinstance(job_credential_ref_raw, str)
+            else ""
         )
 
         # work_mode：仅做 normalize + 兜底 "work"，不做跨层 Project 反查
@@ -518,8 +642,11 @@ class CronJob:
             project_id=project_id,
             last_session_id=last_session_id,
             model_name=job_model_name,
+            model_selection=job_model_selection,
+            mcp=job_mcp,
             app_id=job_app_id,
             user_id=job_user_id,
+            credential_ref=job_credential_ref,
             work_mode=job_work_mode,
         )
 
@@ -562,3 +689,5 @@ class CronRunState:
     # ``run_now`` allocates the single-agent session before the wake event so
     # Web can open the real session immediately; wake must reuse it.
     execution_session_allocated: bool = False
+    # Manual proactive checks report their outcome through a UI notification.
+    manually_triggered: bool = False

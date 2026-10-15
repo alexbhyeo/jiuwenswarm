@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -16,6 +17,21 @@ from jiuwenswarm.runtime.session import SessionWorkKind
 from jiuwenswarm.runtime.session.model import SessionExecutionState
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def isolated_agent_dirs(tmp_path, monkeypatch):
+    """会话/lifecycle 持久状态落在 tmp，而不是真实用户主目录。
+
+    create_or_resume_session 会通过 describe_session 校验持久化通道，
+    claim_runtime 会写 runtime owner 文件；不隔离时真实主目录里其他
+    测试/应用留下的同名会话会导致 NOT_FOUND，并行 worker 也会互抢。
+    """
+    sessions = tmp_path / "agent" / "sessions"
+    sessions.mkdir(parents=True)
+    monkeypatch.setattr(
+        "jiuwenswarm.common.utils.get_agent_sessions_dir", lambda: sessions
+    )
 
 
 class _Manager:
@@ -51,6 +67,24 @@ def _runtime():
         initializer=_initialize,
         plan_controller=_Plan(),
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_sessions_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Keep resume validation away from the machine's real session store.
+
+    create_or_resume_session validates an explicit session_id against
+    persisted metadata under get_agent_sessions_dir(); without isolation a
+    real or suite-mate session named "session" on another channel makes the
+    channel-consistency check fail these tests.
+    """
+    from jiuwenswarm.common import utils
+    from jiuwenswarm.server.runtime.session import session_metadata
+
+    monkeypatch.setattr(utils, "get_agent_sessions_dir", lambda: tmp_path)
+    monkeypatch.setattr(session_metadata, "get_agent_sessions_dir", lambda: tmp_path)
 
 
 @pytest.mark.asyncio
@@ -101,7 +135,13 @@ async def test_work_and_code_normal_stream_use_session_registry(
     )
 
     async def stream_started(request: AgentRequest, **_kwargs: Any):
-        yield request.request_id
+        yield RuntimeEvent(
+            request_id=request.request_id,
+            channel_id=request.channel_id,
+            session_id=request.session_id,
+            payload={"event_type": "chat.final", "content": "done"},
+            is_complete=True,
+        )
 
     runtime._stream_started = stream_started  # type: ignore[method-assign]
     request = AgentRequest(
@@ -112,11 +152,17 @@ async def test_work_and_code_normal_stream_use_session_registry(
         params={"mode": mode, "work_mode": work_mode},
         is_stream=True,
     )
-    assert [item async for item in runtime.stream(request)] == [request.request_id]
+    events = [item async for item in runtime.stream(request)]
+    assert [item.request_id for item in events] == [request.request_id]
     snapshot = runtime._session_coordinator.snapshot_session(session_id)
     assert snapshot is not None
     assert snapshot.executions[-1].state is SessionExecutionState.SUCCEEDED
     assert snapshot.executions[-1].work_kind is SessionWorkKind.CHAT_STREAM
+    assert events[0].payload == {
+        "event_type": "chat.final",
+        "content": "done",
+        "execution_id": snapshot.executions[-1].execution_id,
+    }
     await runtime.close()
 
 
@@ -150,8 +196,8 @@ def test_goal_commands_are_native_session_runtime_work(
     ("params", "expected"),
     [
         ({"attach_goal": True}, SessionWorkKind.GOAL_ATTACH),
-        ({"input_mode": "steer"}, SessionWorkKind.CONTROL_INPUT),
-        ({"runtime_mode": "follow_up"}, SessionWorkKind.CONTROL_INPUT),
+        ({"input_mode": "steer"}, SessionWorkKind.SESSION_INPUT),
+        ({"runtime_mode": "follow_up"}, SessionWorkKind.SESSION_INPUT),
     ],
 )
 def test_goal_delivery_is_runtime_control_work(
@@ -170,8 +216,17 @@ def test_goal_delivery_is_runtime_control_work(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["agent.work.plan", "team.work.normal"])
-async def test_unadapted_modes_keep_their_existing_executor(mode: str) -> None:
+@pytest.mark.parametrize(
+    ("mode", "expected_work_kind"),
+    [
+        ("agent.work.plan", None),
+        ("team.work.normal", SessionWorkKind.TEAM_REQUEST),
+    ],
+)
+async def test_runtime_only_tracks_adapted_execution_modes(
+    mode: str,
+    expected_work_kind: SessionWorkKind | None,
+) -> None:
     runtime = _runtime()
     await runtime.start()
     await runtime.create_or_resume_session(channel_id="process", session_id="session")
@@ -190,7 +245,11 @@ async def test_unadapted_modes_keep_their_existing_executor(mode: str) -> None:
     assert await runtime.invoke(request) == [request.request_id]
     snapshot = runtime._session_coordinator.snapshot_session("session")
     assert snapshot is not None
-    assert snapshot.executions == ()
+    if expected_work_kind is None:
+        assert snapshot.executions == ()
+    else:
+        assert snapshot.executions[-1].work_kind is expected_work_kind
+        assert snapshot.executions[-1].state is SessionExecutionState.SUCCEEDED
     await runtime.close()
 
 
@@ -315,9 +374,13 @@ async def test_single_agent_runtime_owns_every_user_channel(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["agent.work.plan", "team.work.normal"])
-async def test_plan_and_team_work_keep_their_existing_owner(
+@pytest.mark.parametrize(
+    ("mode", "runtime_owned"),
+    [("agent.work.plan", False), ("team.work.normal", True)],
+)
+async def test_team_work_moves_to_runtime_while_plan_keeps_existing_owner(
     mode: str,
+    runtime_owned: bool,
 ) -> None:
     runtime = _runtime()
     await runtime.start()
@@ -335,7 +398,8 @@ async def test_plan_and_team_work_keep_their_existing_owner(
     )
 
     assert await runtime.invoke(request) == [request.request_id]
-    assert runtime._session_coordinator.snapshot_session(request.session_id) is None
+    snapshot = runtime._session_coordinator.snapshot_session(request.session_id)
+    assert (snapshot is not None) is runtime_owned
     await runtime.close()
 
 

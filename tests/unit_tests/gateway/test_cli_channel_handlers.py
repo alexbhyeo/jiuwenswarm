@@ -6,6 +6,7 @@ import pytest
 
 from jiuwenswarm.common.schema.agent import AgentResponse
 from jiuwenswarm.common.schema.message import ReqMethod
+from jiuwenswarm.common.config_panel import tui_models_handlers
 from jiuwenswarm.gateway.channel_manager.tui import tui_connect as tui_connect_module
 from jiuwenswarm.gateway.channel_manager.tui.tui_connect import (
     CliHandlersBindParams,
@@ -104,7 +105,7 @@ class FakeMessageHandler:
         return True
 
     async def schedule_cancel_agent_sessions_on_disconnect(
-        self, session_keys, *, stale_request_keys=None, delay_seconds=60.0, user_id=None
+        self, session_keys, *, stale_request_keys=None, delay_seconds=60.0, user_id=None, mode=None
     ):
         self.scheduled.append((session_keys, stale_request_keys or []))
         self.scheduled_delays.append(delay_seconds)
@@ -121,7 +122,7 @@ class BlockingScheduledDisconnectMessageHandler(FakeMessageHandler):
         self.release_schedule = asyncio.Event()
 
     async def schedule_cancel_agent_sessions_on_disconnect(
-        self, session_keys, *, stale_request_keys=None, delay_seconds=60.0, user_id=None
+        self, session_keys, *, stale_request_keys=None, delay_seconds=60.0, user_id=None, mode=None
     ):
         self.schedule_started.set()
         await self.release_schedule.wait()
@@ -130,6 +131,7 @@ class BlockingScheduledDisconnectMessageHandler(FakeMessageHandler):
             stale_request_keys=stale_request_keys,
             delay_seconds=delay_seconds,
             user_id=user_id,
+            mode=mode,
         )
 
 
@@ -139,7 +141,7 @@ class FailedOnceScheduledDisconnectMessageHandler(FakeMessageHandler):
         self.schedule_attempts = 0
 
     async def schedule_cancel_agent_sessions_on_disconnect(
-        self, session_keys, *, stale_request_keys=None, delay_seconds=60.0, user_id=None
+        self, session_keys, *, stale_request_keys=None, delay_seconds=60.0, user_id=None, mode=None
     ):
         self.schedule_attempts += 1
         if self.schedule_attempts == 1:
@@ -149,6 +151,7 @@ class FailedOnceScheduledDisconnectMessageHandler(FakeMessageHandler):
             stale_request_keys=stale_request_keys,
             delay_seconds=delay_seconds,
             user_id=user_id,
+            mode=mode,
         )
 
 
@@ -451,7 +454,7 @@ async def test_harmonyos_dev_init_legacy_client_falls_back_to_local(monkeypatch)
         return {"ok": True, "source": "local-fallback"}
 
     monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.harmonyos.harmonyos_dev.run_harmonyos_dev_init",
+        "jiuwenswarm.gateway.embedded.runtime.harmonyos.harmonyos_dev.run_harmonyos_dev_init",
         fake_local_init,
     )
 
@@ -501,7 +504,7 @@ async def test_harmonyos_dev_init_remote_client_error_without_fallback(monkeypat
         return {"ok": True}
 
     monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.harmonyos.harmonyos_dev.run_harmonyos_dev_init",
+        "jiuwenswarm.gateway.embedded.runtime.harmonyos.harmonyos_dev.run_harmonyos_dev_init",
         fake_local_init,
     )
 
@@ -561,7 +564,7 @@ async def test_harmonyos_dev_init_business_failure_does_not_rerun_locally(monkey
         return {"ok": True}
 
     monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.harmonyos.harmonyos_dev.run_harmonyos_dev_init",
+        "jiuwenswarm.gateway.embedded.runtime.harmonyos.harmonyos_dev.run_harmonyos_dev_init",
         fake_local_init,
     )
 
@@ -849,7 +852,7 @@ async def test_config_validate_model_handler_uses_local_probe(monkeypatch):
         async def invoke(self, *args, **kwargs):
             return {"content": "hello"}
 
-    monkeypatch.setattr("jiuwenswarm.gateway.channel_manager.tui.tui_connect.Model", FakeModel)
+    monkeypatch.setattr("jiuwenswarm.common.config_panel.tui_models_handlers.Model", FakeModel)
 
     await cli_handlers["config.validate_model"](
         object(),
@@ -874,6 +877,54 @@ async def test_config_validate_model_handler_uses_local_probe(monkeypatch):
         "error": None,
         "code": None,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_failure", ["exception", "empty"])
+async def test_config_validate_model_retries_failed_probe_with_more_tokens(
+    monkeypatch, first_failure
+):
+    server = FakeGatewayServer()
+    register_cli_handlers(
+        CliHandlersBindParams(
+            channel=server,
+            agent_client=None,
+            message_handler=None,
+            on_config_saved=None,
+            path="/tui",
+        )
+    )
+    max_tokens_calls = []
+
+    class FakeModel:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def invoke(self, *args, **kwargs):
+            max_tokens_calls.append(kwargs["max_tokens"])
+            if len(max_tokens_calls) == 1:
+                if first_failure == "exception":
+                    raise RuntimeError("token budget too small")
+                return {"content": "", "reasoning_content": ""}
+            return {"content": "hello"}
+
+    monkeypatch.setattr(tui_models_handlers, "Model", FakeModel)
+
+    await server.local_handlers["/tui"]["config.validate_model"](
+        object(),
+        "req-validate-retry",
+        {
+            "model_provider": "openai",
+            "model": "gpt-4.1",
+            "api_base": "https://api.openai.com/v1",
+            "api_key": "secret",
+        },
+        "sess-1",
+    )
+
+    assert max_tokens_calls == [3, 16]
+    assert server.responses[-1]["ok"] is True
+    assert server.responses[-1]["payload"]["response"] == "hello"
 
 
 @pytest.mark.asyncio
@@ -911,13 +962,13 @@ async def test_command_model_switch_sends_scoped_agent_reload(monkeypatch):
         return mutator(data)
 
     monkeypatch.setattr(tui_connect_module, "_send_tui_agent_request", fake_send_tui_agent_request)
-    monkeypatch.setattr(tui_connect_module, "update_config", fake_update_config)
+    monkeypatch.setattr(tui_models_handlers, "update_config", fake_update_config)
     monkeypatch.setattr(
-        tui_connect_module,
+        tui_models_handlers,
         "get_config_raw",
         lambda: {"models": {"defaults": defaults}},
     )
-    monkeypatch.setattr(tui_connect_module, "get_config", lambda: {"models": {"defaults": defaults}})
+    monkeypatch.setattr(tui_models_handlers, "get_config", lambda: {"models": {"defaults": defaults}})
 
     register_cli_handlers(
         CliHandlersBindParams(
@@ -1002,14 +1053,14 @@ async def test_command_model_delete_matches_by_name_when_index_drifted(monkeypat
         return mutator(data)
 
     monkeypatch.setattr(tui_connect_module, "_send_tui_agent_request", fake_send_tui_agent_request)
-    monkeypatch.setattr(tui_connect_module, "update_config", fake_update_config)
+    monkeypatch.setattr(tui_models_handlers, "update_config", fake_update_config)
     monkeypatch.setattr(
-        tui_connect_module,
+        tui_models_handlers,
         "get_config_raw",
         lambda: {"models": {"defaults": current_defaults}},
     )
     monkeypatch.setattr(
-        tui_connect_module, "get_config", lambda: {"models": {"defaults": current_defaults}}
+        tui_models_handlers, "get_config", lambda: {"models": {"defaults": current_defaults}}
     )
 
     register_cli_handlers(
@@ -1087,14 +1138,14 @@ async def test_command_model_delete_rejects_when_index_and_name_mismatch(monkeyp
         return mutator(data)
 
     monkeypatch.setattr(tui_connect_module, "_send_tui_agent_request", fake_send_tui_agent_request)
-    monkeypatch.setattr(tui_connect_module, "update_config", fake_update_config)
+    monkeypatch.setattr(tui_models_handlers, "update_config", fake_update_config)
     monkeypatch.setattr(
-        tui_connect_module,
+        tui_models_handlers,
         "get_config_raw",
         lambda: {"models": {"defaults": current_defaults}},
     )
     monkeypatch.setattr(
-        tui_connect_module, "get_config", lambda: {"models": {"defaults": current_defaults}}
+        tui_models_handlers, "get_config", lambda: {"models": {"defaults": current_defaults}}
     )
 
     register_cli_handlers(
@@ -1139,9 +1190,9 @@ async def test_command_model_lists_agentos_models_without_defaults(monkeypatch):
             "model_config_obj": {},
         }
     ]
-    monkeypatch.setattr(tui_connect_module, "get_model_names", lambda: [])
+    monkeypatch.setattr(tui_models_handlers, "get_model_names", lambda: [])
     monkeypatch.setattr(
-        tui_connect_module,
+        tui_models_handlers,
         "get_config_raw",
         lambda: {"models": {"defaults": [], "agentos": agentos_models}},
     )
@@ -1350,17 +1401,24 @@ def test_model_meta_index_field_matches_raw_defaults_position():
 
 
 # ── 单用户 AgentServer 不可达时的本地回落（P2 遗留修复回归） ──────────────────
+# Front 控制面 RPC（session.list/color_set/preview）离线时不得由 Gateway 顶替。
 
 def _offline_local_client() -> WebSocketAgentServerClient:
     """server_ready=False 的本地 WebSocketAgentServerClient（共享目录单用户）。"""
     return WebSocketAgentServerClient()  # server_ready defaults to False
 
 
+def _assert_control_method_unavailable(server: FakeGatewayServer) -> None:
+    resp = server.responses[-1]
+    assert resp["ok"] is False
+    assert resp["code"] == "SERVICE_UNAVAILABLE"
+
+
 @pytest.mark.asyncio
-async def test_session_color_set_falls_back_to_local_adapter_when_agent_offline(
+async def test_session_color_set_unavailable_when_agent_offline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AgentServer 不可达时，TUI session.color_set 经薄代理回落到本地适配器查询。"""
+    """session.color_set is Front Control; Gateway must not run a local adapter."""
     server = FakeGatewayServer()
     register_cli_handlers(
         CliHandlersBindParams(
@@ -1380,15 +1438,14 @@ async def test_session_color_set_falls_back_to_local_adapter_when_agent_offline(
         object(), "req-color", {"session_id": "sess-1"}, "sess-1"
     )
 
-    assert server.responses[-1]["ok"] is True
-    assert server.responses[-1]["payload"]["accent_color"] == "blue"
+    _assert_control_method_unavailable(server)
 
 
 @pytest.mark.asyncio
-async def test_session_list_falls_back_to_local_adapter_when_agent_offline(
+async def test_session_list_unavailable_when_agent_offline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """TUI resume list must not become empty during a local AgentServer restart."""
+    """session.list is Front Control; Gateway must not run a local adapter."""
     server = FakeGatewayServer()
     register_cli_handlers(
         CliHandlersBindParams(
@@ -1411,15 +1468,14 @@ async def test_session_list_falls_back_to_local_adapter_when_agent_offline(
         object(), "req-list", {"all_projects": True}, "current"
     )
 
-    assert server.responses[-1]["ok"] is True
-    assert server.responses[-1]["payload"]["sessions"][0]["session_id"] == "legacy"
+    _assert_control_method_unavailable(server)
 
 
 @pytest.mark.asyncio
-async def test_session_preview_falls_back_to_local_adapter_when_agent_offline(
+async def test_session_preview_unavailable_when_agent_offline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AgentServer 不可达时，TUI session.preview 经薄代理回落到本地适配器。"""
+    """session.preview is Front Control; Gateway must not run a local adapter."""
     server = FakeGatewayServer()
     register_cli_handlers(
         CliHandlersBindParams(
@@ -1442,16 +1498,12 @@ async def test_session_preview_falls_back_to_local_adapter_when_agent_offline(
         object(), "req-preview", {"session_id": "sess-1"}, "sess-1"
     )
 
-    assert server.responses[-1]["ok"] is True
-    messages = server.responses[-1]["payload"]["preview_messages"]
-    assert [m["role"] for m in messages] == ["user", "assistant"]
+    _assert_control_method_unavailable(server)
 
 
 @pytest.mark.asyncio
-async def test_session_delete_falls_back_to_shared_dir_when_agent_offline(
-    monkeypatch: pytest.MonkeyPatch, tmp_path,
-) -> None:
-    """AgentServer 不可达时，TUI session.delete 恢复迁移前本地删除路径。"""
+async def test_session_delete_unavailable_when_agent_offline() -> None:
+    """session.delete is execution-plane; Gateway must not run a local adapter."""
     server = FakeGatewayServer()
     register_cli_handlers(
         CliHandlersBindParams(
@@ -1462,33 +1514,12 @@ async def test_session_delete_falls_back_to_shared_dir_when_agent_offline(
             path="/tui",
         )
     )
-    session_dir = tmp_path / "sessions" / "sess-del"
-    session_dir.mkdir(parents=True)
-    monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.session.session_metadata.get_session_metadata",
-        lambda *args, **kwargs: {"mode": "agent"},
-    )
-    monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.session.session_history.resolve_session_dir",
-        lambda *args, **kwargs: (session_dir, None),
-    )
-
-    class _Session:
-        async def release_kvc(self):
-            return True
-
-    monkeypatch.setattr(
-        "openjiuwen.core.session.agent.create_agent_session",
-        lambda **_kwargs: _Session(),
-    )
 
     await server.local_handlers["/tui"]["session.delete"](
         object(), "req-del", {"session_id": "sess-del"}, "sess-del"
     )
 
-    assert server.responses[-1]["ok"] is True
-    assert server.responses[-1]["payload"] == {"session_id": "sess-del"}
-    assert not session_dir.exists()
+    _assert_control_method_unavailable(server)
 
 
 @pytest.mark.asyncio
@@ -1518,15 +1549,15 @@ async def test_session_rebind_project_falls_back_to_shared_dir_when_agent_offlin
         },
     )
     monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.session.session_metadata.get_session_metadata",
+        "jiuwenswarm.gateway.embedded.runtime.session.session_metadata.get_session_metadata",
         lambda *args, **kwargs: {"session_id": "sess-1"},
     )
     monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.session.project_store.find_or_create_code_project_for_tui_params",
+        "jiuwenswarm.gateway.embedded.runtime.session.project_store.find_or_create_code_project_for_tui_params",
         lambda *args, **kwargs: project,
     )
     monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.session.session_metadata.rebind_session_project",
+        "jiuwenswarm.gateway.embedded.runtime.session.session_metadata.rebind_session_project",
         lambda *args, **kwargs: True,
     )
 
@@ -1555,7 +1586,7 @@ async def test_session_rebind_project_does_not_read_gateway_state_for_remote_cli
         CliHandlersBindParams(channel=server, agent_client=RemoteAgentClient(), path="/tui")
     )
     monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.session.session_metadata.get_session_metadata",
+        "jiuwenswarm.gateway.embedded.runtime.session.session_metadata.get_session_metadata",
         lambda *args, **kwargs: pytest.fail("remote fallback must not read Gateway session state"),
     )
 
@@ -1719,3 +1750,34 @@ async def test_agentos_cron_update_project_fields_with_dict_job(monkeypatch) -> 
     assert patch["project_id"] == "user-proj-1"
     assert patch["work_mode"] == "code"
     assert patch["_agentos_project_binding_verified"] is True
+
+
+@pytest.mark.asyncio
+async def test_models_list_builds_the_list_off_the_event_loop(monkeypatch):
+    server = FakeGatewayServer()
+    register_cli_handlers(
+        CliHandlersBindParams(
+            channel=server,
+            agent_client=None,
+            message_handler=None,
+            on_config_saved=None,
+            path="/tui",
+        )
+    )
+    seen = {}
+
+    def fake_available(_config=None):
+        try:
+            asyncio.get_running_loop()
+            seen["on_event_loop"] = True
+        except RuntimeError:
+            seen["on_event_loop"] = False
+        return [{"model_client_config": {"model_name": "m", "api_key": "k"}}]
+
+    monkeypatch.setattr(tui_models_handlers, "get_config", lambda: {})
+    monkeypatch.setattr(tui_models_handlers, "get_available_models", fake_available)
+
+    await server.local_handlers["/tui"]["models.list"](object(), "req-models", {}, "sess-1")
+
+    assert server.responses[-1]["ok"] is True
+    assert seen["on_event_loop"] is False, "get_available_models 不能在事件循环线程上执行"

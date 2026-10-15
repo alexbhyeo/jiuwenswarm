@@ -6,7 +6,7 @@ import i18next from 'i18next';
 import { I18nextProvider } from 'react-i18next';
 import { JSDOM } from 'jsdom';
 
-import { MarkdownRenderer } from '../node_modules/.cache/markdown-renderer/MarkdownRenderer.js';
+import { MarkdownIncludeMathMLContext, MarkdownRenderer } from '../node_modules/.cache/markdown-renderer/MarkdownRenderer.js';
 import { convertSvgToPng, downloadBlob, saveBlob } from '../node_modules/.cache/markdown-renderer/diagrams/diagramExport.js';
 import { MermaidDiagram } from '../node_modules/.cache/markdown-renderer/diagrams/MermaidDiagram.js';
 import { SvgDiagram } from '../node_modules/.cache/markdown-renderer/diagrams/SvgDiagram.js';
@@ -529,6 +529,50 @@ test('keeps Markdown behavior compatible while dispatching supported fenced bloc
   }
 });
 
+test('preserves internal link handling with either MathML export setting', async () => {
+  const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>');
+  const restore = installGlobals({
+    HTMLElement: dom.window.HTMLElement,
+    IS_REACT_ACT_ENVIRONMENT: true,
+    Node: dom.window.Node,
+    document: dom.window.document,
+    navigator: dom.window.navigator,
+    window: dom.window,
+  });
+  const container = dom.window.document.querySelector('#root');
+  const handledLinks = [];
+  const root = createRoot(container);
+  try {
+    for (const includeMathML of [true, false]) {
+      await act(async () => {
+        root.render(createElement(MarkdownIncludeMathMLContext.Provider, { value: includeMathML },
+          createElement(MarkdownRenderer, {
+            content: '$x^2$ [internal](./guide.md) [external](https://example.com) [anchor](#section)',
+            onLinkClick: (href) => {
+              handledLinks.push(href);
+              return true;
+            },
+          }),
+        ));
+      });
+      assert.ok(container.querySelector('.katex-html'));
+      assert.equal(container.querySelector('.katex-mathml') !== null, includeMathML);
+      const internalLink = container.querySelector('a[href="./guide.md"]');
+      assert.equal(internalLink.hasAttribute('target'), false);
+      const event = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true });
+      await act(async () => { internalLink.dispatchEvent(event); });
+      assert.equal(event.defaultPrevented, true);
+      assert.equal(container.querySelector('a[href="https://example.com"]').target, '_blank');
+      assert.equal(container.querySelector('a[href="#section"]').hasAttribute('target'), false);
+    }
+    assert.deepEqual(handledLinks, ['./guide.md', './guide.md']);
+  } finally {
+    await act(async () => root.unmount());
+    restore();
+    dom.window.close();
+  }
+});
+
 test('renders dollar and native LaTeX delimiters through KaTeX', async () => {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>');
   const restore = installGlobals({
@@ -616,9 +660,10 @@ test('isolates LaTeX parsing from code and incomplete streaming delimiters', asy
   }
 });
 
-test('downloads a blob through a temporary anchor and always revokes its object URL', () => {
+test('downloads a blob through a temporary anchor and revokes its object URL after the timer', () => {
   const dom = new JSDOM('<!doctype html><html><body></body></html>');
   const calls = [];
+  const timers = [];
   const objectUrl = 'blob:test-download';
   const originalClick = dom.window.HTMLAnchorElement.prototype.click;
   dom.window.HTMLAnchorElement.prototype.click = function click() {
@@ -633,14 +678,25 @@ test('downloads a blob through a temporary anchor and always revokes its object 
       revokeObjectURL: url => calls.push({ revoked: url }),
     },
     document: dom.window.document,
+    window: {
+      setTimeout: (callback, delay) => {
+        timers.push({ callback, delay });
+        return 1;
+      },
+    },
   });
   const blob = new Blob(['source'], { type: 'image/svg+xml' });
   try {
     downloadBlob(blob, 'diagram.svg');
     assert.strictEqual(calls[0].created, blob);
     assert.deepEqual(calls[1], { connected: true, download: 'diagram.svg', href: objectUrl });
-    assert.deepEqual(calls[2], { revoked: objectUrl });
+    assert.equal(calls.length, 2);
     assert.equal(dom.window.document.body.children.length, 0);
+    assert.equal(timers.length, 1);
+    assert.equal(timers[0].delay, 1000);
+    timers[0].callback();
+    assert.deepEqual(calls[2], { revoked: objectUrl });
+    assert.equal(calls.length, 3);
   } finally {
     restore();
     dom.window.HTMLAnchorElement.prototype.click = originalClick;

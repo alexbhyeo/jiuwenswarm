@@ -20,12 +20,8 @@ import {
 } from '../node_modules/.cache/settings-refactor/modules/models/modelAdapters.js';
 import { validateModelDraft } from '../node_modules/.cache/settings-refactor/modules/models/modelValidation.js';
 import {
-  addEditableModel,
   getEditableModels,
   getModelDisplayGroups,
-  promotePrimaryModel,
-  removeEditableModel,
-  setGroupDefaultModel,
 } from '../node_modules/.cache/settings-refactor/modules/models/modelListOperations.js';
 
 const root = new URL('../', import.meta.url);
@@ -90,7 +86,7 @@ test('preset protocol mapping uses only the exact server fields', () => {
     vendorSelectionKey('token_plan', 'alibaba'),
     catalog,
   );
-  assert.equal(draft.model_name, 'qwen-default');
+  assert.equal(draft.model_name, '');
   assert.equal(createModelDraft(undefined, catalog).protocol, 'openai');
   const openAi = modelDraftToEntry({ ...draft, alias: 'qwen-main', api_key: 'secret' }, undefined, catalog, true);
   assert.equal(openAi.model_provider, 'OpenAI');
@@ -110,6 +106,51 @@ test('preset protocol mapping uses only the exact server fields', () => {
   assert.equal(anthropic.model_provider, 'Anthropic');
   assert.equal(anthropic.api_base, 'https://anthropic.example');
   assert.equal('endpoint_profile' in anthropic, false);
+});
+
+test('model context windows stay editable and expose common presets', () => {
+  const freshDraft = createModelDraft(undefined, catalog);
+  assert.equal(freshDraft.context_window_tokens, '256K');
+  assert.equal('context_window_1m_enabled' in freshDraft, false);
+
+  const saved = modelDraftToEntry(
+    {
+      ...freshDraft,
+      vendor_selection: CUSTOM_VENDOR_SELECTION,
+      model_name: 'custom-model',
+      context_window_tokens: '200k',
+      api_key: 'secret',
+      api_base: 'https://custom.example/v1',
+    },
+    undefined,
+    catalog,
+    true,
+  );
+  assert.equal(saved.context_window_tokens, 200 * 1024);
+
+  const edited = modelDraftToEntry(
+    {
+      ...freshDraft,
+      vendor_selection: CUSTOM_VENDOR_SELECTION,
+      model_name: 'custom-model',
+      context_window_tokens: '200k',
+      api_key: 'secret',
+      api_base: 'https://custom.example/v1',
+    },
+    undefined,
+    catalog,
+    true,
+  );
+  assert.equal(edited.context_window_tokens, 200 * 1024);
+
+  const modelDialog = source('src/features/settings/modules/models/ModelDialog.tsx');
+  assert.match(modelDialog, /name: 'context_window_tokens'/);
+  assert.match(modelDialog, /<ContextWindowField/);
+  assert.doesNotMatch(modelDialog, /CONTEXT_WINDOW_1M_FIELD/);
+  assert.match(modelDialog, /settingsPanel\.models\.contextWindowHint/);
+
+  const contextWindow = source('src/features/settings/modules/models/contextWindow.ts');
+  assert.match(contextWindow, /CONTEXT_WINDOW_PRESETS = \['128K', '256K', '512K', '1M'\]/);
 });
 
 test('switching providers clears credentials before applying the next connection preset', () => {
@@ -280,6 +321,7 @@ test('alias validation is optional, global, exact, and excludes the edited row o
     api_key: 'secret',
     api_base: 'https://custom.example/v1',
     reasoning_level: '',
+    context_window_tokens: '262144',
     is_default: false,
   };
   assert.equal(validateModelDraft(baseDraft, models, undefined, catalog, t).alias, undefined);
@@ -309,6 +351,7 @@ test('model API keys accept 2048 characters and reject longer values', () => {
     model_input_mode: 'manual',
     api_base: 'https://custom.example/v1',
     reasoning_level: '',
+    context_window_tokens: '262144',
     is_default: false,
   };
   assert.equal(
@@ -343,6 +386,7 @@ test('reasoning validation uses the selected model capability rather than a fron
     api_key: 'secret',
     api_base: 'https://custom.example/v1',
     reasoning_level: 'extreme',
+    context_window_tokens: '262144',
     is_default: false,
   };
   for (const level of ['extreme', 'low', 'medium', 'high']) {
@@ -408,6 +452,7 @@ test('custom vendor uses server reasoning data even when there are no built-in p
     api_key: 'secret',
     api_base: 'https://custom.example/v1',
     reasoning_level: '',
+    context_window_tokens: '262144',
     is_default: false,
   };
   assert.deepEqual(validateModelDraft(draft, [], undefined, emptyCatalog, t), {});
@@ -422,14 +467,25 @@ test('custom vendor uses server reasoning data even when there are no built-in p
   );
 });
 
-test('default and deletion operations preserve identity, group semantics, and read-only filtering', () => {
+test('model listing preserves identity and read-only filtering', () => {
   const primary = { model_name: 'same', alias: 'first', is_default: true };
   const target = { model_name: 'same', alias: 'second', is_default: false };
   const other = { model_name: 'other', alias: 'third', is_default: true };
   const agentOs = { model_name: 'backup', alias: 'backup', is_agentos: true };
-  const models = [primary, target, other, agentOs];
+  const loginFree = {
+    model_name: 'GLM-5.3',
+    alias: 'GLM-5.3',
+    is_free: true,
+    source: 'huawei-maas-login',
+    is_default: true,
+  };
+  const models = [loginFree, primary, target, other, agentOs];
 
   assert.deepEqual(getEditableModels(models), [primary, target, other]);
+  assert.equal(
+    getModelDisplayGroups(models).some((group) => group.items.some(({ model }) => model === loginFree)),
+    false,
+  );
   const displayGroups = getModelDisplayGroups([primary, other, target, agentOs]);
   assert.equal(displayGroups.length, 3);
   assert.deepEqual(
@@ -443,77 +499,67 @@ test('default and deletion operations preserve identity, group semantics, and re
     displayGroups.slice(1).map((group) => group.items[0].model.alias),
     ['third', 'backup'],
   );
-  const promoted = promotePrimaryModel(models, target);
-  assert.equal(promoted.length, models.length);
-  assert.equal(promoted[0].alias, 'second');
-  assert.equal(promoted[0].is_default, true);
-  assert.equal(promoted.filter((model) => model.model_name === 'same' && model.is_default).length, 1);
-  const groupDefault = setGroupDefaultModel(models, target);
-  assert.equal(groupDefault.length, models.length);
-  assert.equal(groupDefault[0].alias, 'second');
-  assert.equal(groupDefault.filter((model) => model.model_name === 'same' && model.is_default).length, 1);
-  assert.throws(() => removeEditableModel([primary, agentOs], primary), /LAST_EDITABLE_MODEL/);
-});
-
-test('adding a model replaces only the placeholder primary model', () => {
-  const placeholder = { model_name: 'your-model-name', alias: 'placeholder', is_default: true };
-  const existing = { model_name: 'existing', alias: 'existing', is_default: true };
-  const added = { model_name: 'new-model', alias: 'new', is_default: false };
-  const agentOs = { model_name: 'backup', alias: 'backup', is_agentos: true };
-
-  const replaced = addEditableModel([placeholder, existing, agentOs], added);
-  assert.deepEqual(replaced.map((model) => model.alias), ['new', 'existing', 'backup']);
-  assert.equal(replaced[0].is_default, true);
-  assert.equal(replaced.includes(placeholder), false);
-
-  const appended = addEditableModel([existing, agentOs], added);
-  assert.deepEqual(appended, [existing, agentOs, added]);
-  assert.equal(appended[0], existing);
 });
 
 test('model Settings sources use the required RPCs without hardcoded vendor options or unsupported tiers', () => {
   const page = source('src/features/settings/modules/models/ModelsSettings.tsx');
+  const definition = source('src/features/settings/modules/models/definition.ts');
+  const tabLayout = source('src/features/settings/components/SettingsTabLayout.tsx');
   const dialog = source('src/features/settings/modules/models/ModelDialog.tsx');
   const provider = source('src/features/settings/modules/models/ModelProviderSelect.tsx');
   const account = source('src/features/settings/modules/models/OpenAIAccountField.tsx');
   const accountCss = source('src/features/settings/modules/models/OpenAIAccountField.css');
   const operations = source('src/features/settings/modules/models/modelListOperations.ts');
-  assert.match(page, /request<ReplaceModelsResult>\(\s*'models\.replace_all'/);
+  assert.match(page, /request<ModelResourceResult>\(\s*'models\.upsert'/);
+  assert.match(page, /request\('models\.get', \{ model_id: nextDialog\.model\.model_id \}\)/);
+  assert.match(page, /request\('models\.references', \{ type: 'model', id: model\.model_id \}\)/);
+  assert.match(page, /request\('models\.delete', \{ model_id: confirmation\.model\.model_id \}/);
+  assert.doesNotMatch(page, /models\.replace_all/);
   assert.match(page, /const refreshedPayload = await request\('models\.list'\)/);
   assert.match(page, /setAvailableModels\(parsed\.models, parsed\.activeModel\)/);
   assert.match(page, /const reloadModels = useCallback[\s\S]*await loadModels\(\)/);
-  assert.match(
-    page,
-    /<SettingsSection\s+title=\{t\('settingsPanel\.models\.primaryModels'\)\}\s+separatedRows\s+action=\{\s*<Button variant="primary"[\s\S]{0,180}settingsPanel\.models\.addModel[\s\S]{0,40}<\/Button>\s*\}/,
-  );
-  assert.match(page, /setDialog\(nextDialog\);\s*void loadCatalog\(\)/);
+  assert.match(page, /title=\{t\('settingsPanel\.models\.customModels'\)\}/);
+  assert.match(page, /<FreeModelsSettings\s*\/>/);
+  assert.match(page, /data-testid="settings-models-add-btn"/);
+  assert.match(page, /<SettingsTabLayout/);
+  assert.match(page, /testIdPrefix="settings-models"/);
+  assert.match(page, /activeTab === 'models'/);
+  assert.match(definition, /id: 'models', labelKey: 'settingsPanel\.models\.modelsTab'/);
+  assert.match(definition, /id: 'groups', labelKey: 'settingsPanel\.models\.modelGroups'/);
+  assert.match(definition, /defaultModelSettingsTab: ModelSettingsTabId = 'models'/);
+  assert.match(tabLayout, /const \[activeTab, setActiveTab\] = useState<TabId>\(defaultTab\)/);
+  assert.match(tabLayout, /items=\{tabs\.map\(\(tab\) => \(\{ value: tab\.id, label: t\(tab\.labelKey\) \}\)\)\}/);
+  assert.match(page, /void loadCatalog\(\);[\s\S]{0,180}setDialog\(nextDialog\)/);
   assert.match(page, /type SaveModelsOptions = \{ errorScope\?: SettingsSaveErrorScope \};/);
   assert.match(page, /saveQueue\.enqueue\([\s\S]{0,320}\{ errorScope \},/);
   assert.match(page, /if \(errorScope === 'page'\) setSaveError\(message\)/);
   assert.match(
     page,
-    /await saveModels\(nextModels, dialog\.model \? 'model\.edit' : 'model\.add', \{ errorScope: 'caller' \}\)/,
+    /await saveModel\(next, dialog\.model \? 'model\.edit' : 'model\.add', \{ errorScope: 'caller' \}\)/,
   );
-  assert.match(page, /const baseName = model\.alias\?\.trim\(\) \|\| model\.model_name/);
-  assert.match(page, /`\$\{baseName\} #\$\{groupOrdinal\}`/);
-  assert.match(page, /modelDisplayGroups\.map\(\(group, displayGroupIndex\)/);
-  assert.match(page, /className="settings-model-group"/);
-  assert.match(page, /renderModelCard\(item\.model, item\.index, group\.items\.indexOf\(item\) \+ 1\)/);
+  assert.match(page, /const customName = model\.alias\?\.trim\(\) \|\| model\.model_name/);
+  assert.match(page, /models\.map\(\(model, index\) => renderModelCard\(model, index\)\)/);
+  assert.doesNotMatch(page, /getModelDisplayGroups|setGroupDefaultModel|settings-model-group"/);
   assert.match(page, /const protocol = displayModelProtocol\(model\)/);
   assert.match(page, /vendorKey \? getVendorLabel\(vendorKey, t\) : t\('settingsPanel\.models\.customVendor'\)/);
   assert.match(page, /\[providerLabel, protocolLabel, model\.model_name\]\.join\(' · '\)/);
   assert.match(
     page,
-    /<h3 title=\{presentation\.customName\} data-testid="settings-models-card-title" data-variant=\{model\.origin_index \?\? 'new'\}>\{presentation\.customName\}<\/h3>/,
+    /<h3[\s\S]{0,240}title=\{presentation\.customName\}[\s\S]{0,240}data-testid="settings-models-card-title"[\s\S]{0,240}>\s*\{presentation\.customName\}\s*<\/h3>/,
   );
   assert.match(
     page,
-    /<p title=\{presentation\.metadata\} data-testid="settings-models-card-metadata" data-variant=\{model\.origin_index \?\? 'new'\}>\{presentation\.metadata\}<\/p>/,
+    /<p[\s\S]{0,240}title=\{presentation\.metadata\}[\s\S]{0,240}data-testid="settings-models-card-metadata"[\s\S]{0,240}>\s*\{presentation\.metadata\}\s*<\/p>/,
   );
+  assert.match(page, /'model_groups\.upsert'/);
+  assert.match(page, /'model_groups\.delete'/);
+  assert.match(page, /'models\.references'/);
+  assert.match(page, /setAvailableModelGroups\(parsed\.modelGroups\)/);
   assert.doesNotMatch(page, /accountMode|connectOpenAIAccount/);
   assert.doesNotMatch(dialog, /accountMode/);
   assert.doesNotMatch(page, /Promise\.all\(\[loadModels\(\), loadCatalog\(\)\]\)/);
   assert.doesNotMatch(page, /resolveModelPreset|flattenVendorCatalog/);
+  assert.match(operations, /isRuntimeGrantedModel/);
   assert.match(operations, /model\.is_agentos !== true/);
   assert.doesNotMatch(page, /config\.save_all/);
   assert.match(dialog, /'vendors\.fetch_models'/);
@@ -558,7 +604,7 @@ test('provider search is isolated from unrelated session-store updates', () => {
 
   assert.match(
     app,
-    /const \{\s*setCurrentSession,\s*setAvailableModels,\s*setMode,\s*setTeamLeaderMemberIds,?\s*\} = useSessionStore\.getState\(\)/,
+    /const \{\s*setCurrentSession,\s*setAvailableModels,\s*setAvailableModelGroups,\s*setMode,\s*setTeamLeaderMemberIds,?\s*\} = useSessionStore\.getState\(\)/,
   );
   assert.match(
     form,
@@ -568,44 +614,39 @@ test('provider search is isolated from unrelated session-store updates', () => {
   assert.doesNotMatch(sessionStore, /connectionStats|setConnectionStats/);
 });
 
-test('grouped models use an accessible accordion and keep only the group default visible when collapsed', () => {
+test('models are listed flat without same-name auto grouping', () => {
   const page = source('src/features/settings/modules/models/ModelsSettings.tsx');
+  const groupsPage = source('src/features/settings/modules/models/ModelGroupsSettings.tsx');
   const settingsCss = source('src/features/settings/SettingsPage.css');
+  const settingsAssets = source('src/assets/settings/index.ts');
   const zh = JSON.parse(source('src/i18n/locales/zh.json'));
   const en = JSON.parse(source('src/i18n/locales/en.json'));
 
-  assert.match(page, /import \{ Check, ChevronRight \} from 'lucide-react'/);
-  assert.match(
-    page,
-    /const \[expandedModelGroups, setExpandedModelGroups\] = useState<Record<string, boolean>>\(\{\}\)/,
-  );
-  assert.match(page, /const defaultItem = group\.items\.find\(\(\{ model \}\) => model\.is_default === true\)!/);
-  assert.match(page, /const alternativeItems = group\.items\.filter\(\(item\) => item !== defaultItem\)/);
-  assert.match(
-    page,
-    /const canSetPrimary = !readOnly && !isPrimary && \(!isDuplicate \|\| model\.is_default === true\)/,
-  );
-  assert.match(page, /\{canSetPrimary \? \(\s*<Button[\s\S]{0,480}settingsPanel\.models\.setPrimary/);
-  assert.match(
-    page,
-    /<button[\s\S]{0,240}className="settings-model-group__header"[\s\S]{0,240}aria-expanded=\{isExpanded\}[\s\S]{0,160}aria-controls=\{groupContentId\}/,
-  );
-  assert.match(page, /renderModelCard\(defaultItem\.model, defaultItem\.index, defaultOrdinal\)/);
-  assert.match(page, /className="settings-model-group__alternatives"[\s\S]{0,80}hidden=\{!isExpanded\}/);
-  assert.match(page, /settings-model-group__toggle-icon--expanded/);
-  assert.match(
-    page,
-    /<strong title=\{group\.modelName\}>\{group\.modelName\}<\/strong>\s*<\/div>\s*<span className="settings-model-group__meta" data-testid="settings-models-group-meta" data-variant=\{group\.modelName\}>[\s\S]{0,120}settingsPanel\.models\.groupMeta/,
-  );
-  assert.doesNotMatch(page, /settings-model-group__count/);
-  assert.match(settingsCss, /\.settings-model-group__header\s*\{[^}]*justify-content: space-between/s);
-  assert.match(settingsCss, /\.settings-model-group__header:hover\s*\{[^}]*var\(--color-surface-hover\)/s);
-  assert.match(settingsCss, /\.settings-model-group__toggle-icon--expanded\s*\{[^}]*rotate\(90deg\)/s);
-  assert.match(settingsCss, /\.settings-model-group > \.settings-model-card--grouped,/);
-  assert.match(settingsCss, /\.settings-model-group__alternatives\s*\{[^}]*var\(--color-surface-card\)/s);
-  assert.equal(zh.settingsPanel.models.groupMeta, '模型组 · {{count}} 个配置');
-  assert.equal(en.settingsPanel.models.groupMeta, 'Model group · {{count}} configurations');
-  assert.doesNotMatch(page, /settings-model-group__alternatives-heading/);
+  assert.match(page, /import \{ ModelGroupsSettings \} from '\.\/ModelGroupsSettings'/);
+  assert.match(groupsPage, /import \{ CheckCircle2, ChevronDown \} from 'lucide-react'/);
+  assert.doesNotMatch(groupsPage, /copyModelName|settings-models-group-route-copy-btn/);
+  assert.match(groupsPage, /settings-models-group-route-test-btn/);
+  assert.match(groupsPage, /if \(model\) onTestModel\(model, modelIndex\)/);
+  assert.match(settingsAssets, /ConnectivityIcon from '\.\/actions\/connectivity\.svg\?react'/);
+  assert.match(settingsAssets, /test: ConnectivityIcon/);
+  assert.doesNotMatch(groupsPage, /ChevronRight|expandedModelGroups|getModelDisplayGroups|setGroupDefaultModel/);
+  assert.match(page, /models\.map\(\(model, index\) => renderModelCard\(model, index\)\)/);
+  assert.doesNotMatch(page, /setPrimary|isPrimary|canSetPrimary|settings-models-card-primary-tag/);
+  assert.doesNotMatch(page, /settings-model-group__header|groupOrdinal|isDuplicate/);
+  assert.doesNotMatch(settingsCss, /\.settings-model-group\s*\{/);
+  assert.match(settingsCss, /\.settings-models-group-card\s*\{/);
+  assert.match(settingsCss, /\.settings-models-group-route\s*\{/);
+  assert.match(groupsPage, /settings-models-group-card__toggle/);
+  assert.match(page, /promoteGroupRouteDefault/);
+  assert.match(groupsPage, /settingsPanel\.models\.modelGroupsManagement/);
+  assert.equal(zh.settingsPanel.models.modelGroups, '模型组');
+  assert.equal(en.settingsPanel.models.modelGroups, 'Model groups');
+  assert.equal(zh.settingsPanel.models.modelGroupsManagement, '模型组管理');
+  assert.equal(en.settingsPanel.models.modelGroupsManagement, 'Model group management');
+  assert.equal(zh.settingsPanel.models.modelGroupRouteDefault, '组内默认');
+  assert.equal(en.settingsPanel.models.modelGroupRouteDefault, 'Group default');
+  assert.equal(zh.settingsPanel.models.groupMeta, undefined);
+  assert.equal(en.settingsPanel.models.groupMeta, undefined);
 });
 
 test('model dialog uses provider terminology and validates as part of confirmation', () => {
@@ -650,7 +691,7 @@ test('model dialog uses provider terminology and validates as part of confirmati
   assert.match(dialog, /fetchedModelLists\.current\.has\(fetchKey\)/);
   assert.match(dialog, /fetchedModelLists\.current\.clear\(\)/);
   assert.match(dialog, /setFetchStatus\(t\('settingsPanel\.models\.fetchModelsLoading'\)\)/);
-  assert.match(dialog, /result\.source === 'preset'[\s\S]{0,180}updateModelOptions\(nextOptions\)/);
+  assert.match(dialog, /result\.source === 'preset'[\s\S]{0,180}updateModelOptions\(\[\]\)/);
   assert.match(dialog, /const updateModelOptions = \(options: readonly string\[\]\)[\s\S]{0,160}setModelOptions/);
   assert.doesNotMatch(dialog, /const updateModelOptions[\s\S]{0,220}form\.setFieldValue\('model_name'/);
   assert.doesNotMatch(dialog, /aliasManuallyEdited|syncAliasWithModel|form\.validate\('alias'\)/);

@@ -46,7 +46,9 @@ function applyRuntimeSettings(
 ): void {
   ensureSessionRuntimes(sessionId);
   useSessionStore.getState().setMode(sessionId, mode);
-  if (selectedModelName) {
+  // 新会话的模型由 sessionStore 按“上次稳定选择 -> 自定义 -> 免费 -> 空”初始化；
+  // 这里的旧名称只用于恢复已创建会话，避免再次覆盖稳定 ID 选择。
+  if (selectedModelName && sessionId !== NEW_CONVERSATION_ID) {
     useSessionStore.getState().setSelectedModelName(sessionId, selectedModelName);
   }
   if (projectDir) {
@@ -57,6 +59,14 @@ function applyRuntimeSettings(
 
 export function resetNewConversationRuntime(settings: ConversationRuntimeSettings): void {
   const preservedDraft = useChatStore.getState().getRuntime(NEW_CONVERSATION_ID)?.inputValue ?? '';
+  // 草稿会话（'new'）的专家/专家团选择与输入草稿一样只存在于内存 runtime
+  // （sessionStore 对 'new' 刻意不落 localStorage），removeRuntime 重建会丢，
+  // 表现为输入框下方专家 tag"过一会儿自动消失"而输入文字还在。重建后原样恢复。
+  const previousRuntime = useSessionStore.getState().getRuntime(NEW_CONVERSATION_ID);
+  const preservedAgentSelection =
+    previousRuntime?.agentSelectionIntent.kind === 'select' ? previousRuntime.agentSelectionIntent : null;
+  const preservedAgentGroupSelection =
+    previousRuntime?.agentGroupSelectionIntent.kind === 'select' ? previousRuntime.agentGroupSelectionIntent : null;
   useChatStore.getState().removeRuntime(NEW_CONVERSATION_ID);
   useSessionStore.getState().removeRuntime(NEW_CONVERSATION_ID);
   useTodoStore.getState().removeRuntime(NEW_CONVERSATION_ID);
@@ -64,6 +74,12 @@ export function resetNewConversationRuntime(settings: ConversationRuntimeSetting
   useGoalStore.getState().removeRuntime(NEW_CONVERSATION_ID);
   usePlanStore.getState().removeRuntime(NEW_CONVERSATION_ID);
   applyRuntimeSettings(NEW_CONVERSATION_ID, settings);
+  if (preservedAgentSelection) {
+    useSessionStore.getState().setAgentSelectionIntent(NEW_CONVERSATION_ID, preservedAgentSelection);
+  }
+  if (preservedAgentGroupSelection) {
+    useSessionStore.getState().setAgentGroupSelectionIntent(NEW_CONVERSATION_ID, preservedAgentGroupSelection);
+  }
   if (preservedDraft) {
     useChatStore.getState().setInputValue(NEW_CONVERSATION_ID, preservedDraft);
   }

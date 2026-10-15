@@ -2,7 +2,7 @@ import type { ComponentType, ElementType } from 'react';
 
 export type I18nKey = string;
 export type SettingsModuleId =
-  'general' | 'models' | 'agent' | 'browser' | 'channels' | 'security' | 'experimental' | (string & {});
+  'general' | 'models' | 'agent' | 'browser' | 'channels' | 'personalContext' | 'archivedTasks' | 'security' | 'experimental' | (string & {});
 export type SettingsAccessLevel = 'hidden' | 'readOnly' | 'editable';
 export type SettingsCompositionMode = 'base' | 'extended';
 export type SettingsSource = 'config' | 'browser' | 'locale';
@@ -36,6 +36,8 @@ export type SettingSelectOption = {
 export type SettingSubItems = {
   show: 'always' | 'when-parent-checked';
   disabled: 'never' | 'when-parent-unchecked';
+  /** Turning the parent switch off also turns off every sub-item switch in the same save. */
+  uncheckWithParent?: boolean;
   items: readonly SettingItemDefinition[];
 };
 export type SettingsCustomItemProps = {

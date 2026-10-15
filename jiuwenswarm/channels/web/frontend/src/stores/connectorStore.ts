@@ -1,8 +1,17 @@
+import { scheduleCatalogRefresh, catalogScope } from '../features/catalogCache';
 import { create } from 'zustand';
 import i18n from '../i18n';
 import { connectorApi } from '../services/connectorApi';
-import type { ConnectorConnectResponse, ConnectorDetail, ConnectorSummary, McpBusyKind } from '../types/connector';
+import type {
+  ConnectorConnectResponse,
+  ConnectorDetail,
+  ConnectorInstallResponse,
+  ConnectorSummary,
+  McpBusyKind,
+} from '../types/connector';
 import type { WebError } from '../types/websocket';
+
+export const CONNECTOR_ERROR_TOAST_ID = 'connector-market-action-error';
 
 // 命名/组织风格照抄 cronStore.ts：inline action、无独立 actions 对象。
 // connect/disconnect/registerCustom 悲观更新——这几个是重操作，且有 busyMap/
@@ -74,7 +83,7 @@ interface ConnectorState {
 
   loadList: (filter: 'builtin' | 'local', options?: { silent?: boolean }) => Promise<void>;
   loadDetail: (name: string, options?: { refresh?: boolean }) => Promise<void>;
-  installPackage: (assetId: string) => Promise<boolean>;
+  installPackage: (assetId: string) => Promise<ConnectorInstallResponse | null>;
   uninstallPackage: (identifier: string) => Promise<boolean>;
   connect: (name: string) => Promise<ConnectorConnectResponse | null>;
   disconnect: (name: string) => Promise<void>;
@@ -86,6 +95,7 @@ interface ConnectorState {
   deleteConnector: (name: string) => Promise<boolean>;
   // 取代旧版 authComplete：一次 hold-open 请求等到最终结果，调用方（CliAuthModal）不用再自己轮询。
   waitAuth: (name: string, stepIndex: number) => Promise<ConnectorConnectResponse | null>;
+  cancelConnectAction: (name: string) => Promise<void>;
   // 插"连接中"占位卡片（同步，调用方不 await 也能立刻看到）→ 长 RPC（mcp.register_custom
   // 内部"写配置→探活→注册"，hold 住到探活完成，最长 10min，见 MCP 接口文档 §5.6）在后台跑
   // →跑完 patchConnection 更新占位卡片态 + loadList 拉真实数据覆盖。成功弹 success Toast、
@@ -161,11 +171,11 @@ function invalidateDetail(detailCache: Record<string, ConnectorDetail>, name: st
 
 // 2026-08-20 MCP 连接错误提示友好化（见 MCP连接错误提示友好化-接口对接说明.md）：CLI 驱动型
 // MCP（飞书/钉钉/企微等）连接失败时，后端在 mcp.connect/mcp.wait_auth 的 ok:false payload 里新增
-// code（MCP_RUNTIME_MISSING/MCP_INSTALL_NETWORK/MCP_CLI_INCOMPLETE 三种可分类失败）+ runtime +
-// install_cmd 结构化字段，替代原来直接透传的底层报错串（如 `[WinError 2]`）。这里按 code 选 i18n
-// key 拼出用户可读文案；非这三种 code（如 MCP_BAD_REQUEST、非 CLI 路径失败）走 error.message 兜底，
-// 不受影响。只有 connect/waitAuth 两个 action 的 catch 分支会用到——文档明确只有这两个 RPC 的 CLI
-// 边界失败会下发新字段，disconnect/deleteConnector/registerCustom 等不受影响。
+// code（MCP_RUNTIME_MISSING/MCP_INSTALL_NETWORK/MCP_CLI_INCOMPLETE/MCP_INSTALL_SCRIPT_DEP 四种
+// 可分类失败）+ runtime + install_cmd 结构化字段，替代原来直接透传的底层报错串（如 `[WinError 2]`）。
+// 这里按 code 选 i18n key 拼出用户可读文案；非这几种 code（如 MCP_BAD_REQUEST、非 CLI 路径失败）走
+// error.message 兜底，不受影响。只有 connect/waitAuth 两个 action 的 catch 分支会用到——文档明确
+// 只有这两个 RPC 的 CLI 边界失败会下发新字段，disconnect/deleteConnector/registerCustom 等不受影响。
 const RUNTIME_LABELS: Record<string, string> = { node: 'Node.js', python: 'Python' };
 
 function friendlyCliError(error: unknown): string {
@@ -182,6 +192,9 @@ function friendlyCliError(error: unknown): string {
       : i18n.t('connectorMarket.errors.runtimeMissing');
   }
   if (code === 'MCP_INSTALL_NETWORK') return i18n.t('connectorMarket.errors.installNetwork');
+  if (code === 'MCP_INSTALL_SCRIPT_DEP') {
+    return i18n.t('connectorMarket.errors.installScriptDep');
+  }
   if (code === 'MCP_CLI_INCOMPLETE') {
     return installCmd
       ? i18n.t('connectorMarket.errors.cliIncompleteNamed', { command: installCmd })
@@ -235,9 +248,19 @@ export const useConnectorStore = create<ConnectorState>((set, get) => ({
   loadList: async (filter, options) => {
     const silent = options?.silent ?? false;
     const mySeq = ++listRequestSeq[filter];
+    const requestScope = catalogScope();
     if (!silent) set({ isLoading: true, error: null });
     try {
       const response = await connectorApi.list(filter);
+      if (requestScope !== catalogScope()) return;
+      scheduleCatalogRefresh(
+        'connectorStore.ts:' + filter,
+        response.cache,
+        () => {
+          void get().loadList(filter, { silent: true });
+        },
+        () => listRequestSeq[filter] === mySeq,
+      );
       if (listRequestSeq[filter] !== mySeq) return; // 已有更新的同 filter 调用发起过，这次结果作废
       const fresh = response;
       set((state) => ({
@@ -249,7 +272,6 @@ export const useConnectorStore = create<ConnectorState>((set, get) => ({
       if (listRequestSeq[filter] !== mySeq) return;
       if (silent) return;
       set({
-        ...(filter === 'builtin' ? { builtinConnectors: [] } : { myConnectors: [] }),
         isLoading: false,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -269,6 +291,7 @@ export const useConnectorStore = create<ConnectorState>((set, get) => ({
   },
 
   installPackage: async (assetId: string) => {
+    if (get().busyMap[assetId]) return null;
     set((state) => ({
       busyMap: { ...state.busyMap, [assetId]: 'install' },
       error: null,
@@ -276,28 +299,37 @@ export const useConnectorStore = create<ConnectorState>((set, get) => ({
     try {
       const response = await connectorApi.install(assetId);
       const runtimeName = response.item.name;
+      const connectResult = response.connect;
       const patchInstalled = (items: ConnectorSummary[]) =>
         items.map((item) =>
           item.id === assetId || item.runtimePackageName === runtimeName
-            ? { ...item, name: runtimeName, runtimePackageName: runtimeName, installed: true }
+            ? {
+                ...item,
+                name: runtimeName,
+                runtimePackageName: runtimeName,
+                installed: true,
+                connectionState: connectResult?.type === 'connected' ? 'connected' : item.connectionState,
+              }
             : item,
         );
       set((state) => ({
         connectors: patchInstalled(state.connectors),
         builtinConnectors: patchInstalled(state.builtinConnectors),
         myConnectors: patchInstalled(state.myConnectors),
+        detailCache: invalidateDetail(state.detailCache, runtimeName),
         busyMap: { ...state.busyMap, [assetId]: undefined },
-        successMessage: successKey.mcpInstalled,
+        successMessage: connectResult?.type === 'connected' ? successKey.mcpConnected : successKey.mcpInstalled,
       }));
       void get().loadList('builtin', { silent: true });
       void get().loadList('local', { silent: true });
-      return true;
+      return response;
     } catch (error) {
       set((state) => ({
         busyMap: { ...state.busyMap, [assetId]: undefined },
         error: error instanceof Error ? error.message : String(error),
       }));
-      return false;
+      scheduleQuickRefresh(get);
+      return null;
     }
   },
 
@@ -464,6 +496,31 @@ export const useConnectorStore = create<ConnectorState>((set, get) => ({
       scheduleQuickRefresh(get);
       return null;
     }
+  },
+
+  cancelConnectAction: async (name: string) => {
+    // 用户主动放弃连接/授权（误操作想重走 OAuth、等太久等）：先通知后端把 hold-open 的
+    // mcp.connect/mcp.wait_auth 收尾成 cancelled（杀掉挂起的 CLI 授权进程、回滚 connecting
+    // 记录），再本地释放 busy；取消失败也不影响本地收摊（后端取消幂等，下次 connect 会自动
+    // 清掉残留标记），错误只走顶层 Toast。
+    // 只有连接/授权确实在进行中（busy 或 connecting）才把卡片回落 disconnected：取消晚到、
+    // 或用户对已连接的 MCP 误点取消时，不能把已连好的卡片翻回未连接。
+    const state = get();
+    const current = state.connectors.find((c) => c.name === name);
+    const isInflight = !!state.busyMap[name] || current?.connectionState === 'connecting';
+    try {
+      await connectorApi.cancelConnect(name);
+    } catch (error) {
+      set({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    set((s) => ({
+      ...(isInflight ? patchConnectionAll(s, name, 'disconnected') : {}),
+      detailCache: isInflight ? invalidateDetail(s.detailCache, name) : s.detailCache,
+      busyMap: { ...s.busyMap, [name]: undefined },
+    }));
+    scheduleQuickRefresh(get);
   },
 
   registerCustom: async (params) => {

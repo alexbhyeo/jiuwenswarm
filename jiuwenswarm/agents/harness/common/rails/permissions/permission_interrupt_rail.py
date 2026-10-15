@@ -8,6 +8,7 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from openjiuwen.core.runner.callback import AbortError
@@ -22,6 +23,7 @@ from jiuwenswarm.agents.harness.common.rails.permissions.root_permission_queue_r
 from jiuwenswarm.agents.harness.common.rails.permissions.native_path_context import (
     NativePathGuardProjection, current_native_path_access,
 )
+from jiuwenswarm.common.utils import logger
 
 ExactPermissionPersistCallback = Callable[
     [str, dict[str, Any], tuple[tuple[str, str], ...]], bool
@@ -60,7 +62,42 @@ class JiuwenSwarmPermissionInterruptRail(PermissionInterruptRail):
         if checker is not None and not isinstance(checker, NativePathGuardProjection):
             self._engine._file_guard = NativePathGuardProjection(checker)  # pylint: disable=protected-access
 
+    def _sync_engine_workspace_root(self) -> None:
+        """Refresh file_guard workspace when the host resolver changes."""
+        host = getattr(self, "_host", None)
+        resolver = getattr(host, "resolve_workspace_dir", None) if host is not None else None
+        if resolver is None:
+            return
+        try:
+            workspace = resolver()
+            if workspace is None:
+                return
+            normalized = Path(workspace).expanduser().resolve(strict=False)
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            logger.debug(
+                "[PermissionInterruptRail] workspace_resolve_failed: %s",
+                exc,
+                exc_info=True,
+            )
+            return
+        engine = self._engine
+        current = getattr(engine, "_workspace_root", None)
+        if current is not None:
+            try:
+                if Path(current).expanduser().resolve(strict=False) == normalized:
+                    return
+            except (OSError, RuntimeError, ValueError) as exc:
+                logger.debug(
+                    "[PermissionInterruptRail] workspace_compare_failed: %s",
+                    exc,
+                    exc_info=True,
+                )
+        engine._workspace_root = normalized  # pylint: disable=protected-access
+        engine._rebuild_file_guard()  # pylint: disable=protected-access
+        self._project_native_path_guard()
+
     def update_config(self, *args: Any, **kwargs: Any) -> None:
+        self._sync_engine_workspace_root()
         super().update_config(*args, **kwargs)
         self._project_native_path_guard()
 
@@ -84,15 +121,24 @@ class JiuwenSwarmPermissionInterruptRail(PermissionInterruptRail):
     def _invoke_permissions_hook(
         self, hook: Any, *args: Any, session_id: str | None = None,
     ) -> Any:
-        if self._exact_persist_callback is None or hook is not self._host.get_permissions_snapshot:
+        if hook is not self._host.get_permissions_snapshot:
             return super()._invoke_permissions_hook(hook, *args, session_id=session_id)
+        if self._exact_persist_callback is None:
+            snapshot = super()._invoke_permissions_hook(hook, *args, session_id=session_id)
+            if isinstance(snapshot, dict):
+                from jiuwenswarm.runtime.run_permissions import overlay_run_permissions
+                return overlay_run_permissions(snapshot)
+            return snapshot
         # Preserve the SDK's installed-config fallback, but return it through
         # the rail update path so a rebuild cannot discard native extraction.
         try:
             snapshot = super()._invoke_permissions_hook(hook, *args, session_id=session_id)
         except Exception:
             snapshot = None
-        return snapshot if isinstance(snapshot, dict) else self.installed_permission_config()
+        from jiuwenswarm.runtime.run_permissions import overlay_run_permissions
+        return overlay_run_permissions(
+            snapshot if isinstance(snapshot, dict) else self.installed_permission_config()
+        )
 
     async def resolve_interrupt(
         self,
@@ -100,6 +146,41 @@ class JiuwenSwarmPermissionInterruptRail(PermissionInterruptRail):
         tool_call: Any,
         user_input: Any,
         auto_confirm_config: dict | None = None,
+    ) -> Any:
+        from jiuwenswarm.runtime.run_permissions import (
+            RUN_PERMISSIONS, overlay_run_permissions,
+        )
+
+        levels = RUN_PERMISSIONS.get() or getattr(self, "run_permission_levels", None)
+        run_token = RUN_PERMISSIONS.set(levels)
+        normalized_name = self._normalize_tool_name(tool_call.name) if tool_call else ""
+        level = levels.get(normalized_name) if levels else None
+        if level == "deny":
+            RUN_PERMISSIONS.reset(run_token)
+            return self.reject(tool_result="[PERMISSION_DENIED] run policy")
+        original_config = self.installed_permission_config() if levels else None
+        original_hook = self._host.permission_scene_hook if levels and level == "ask" else None
+        if original_config is not None:
+            self.update_config(overlay_run_permissions(original_config))
+        if original_hook is not None:
+            async def preserve_scene_rejection(scene_input: Any) -> Any:
+                outcome = await original_hook(scene_input)
+                return outcome if outcome is not None and outcome[0] == "reject" else None
+            self._host.permission_scene_hook = preserve_scene_rejection
+        try:
+            return await self._resolve_interrupt_with_run_policy(
+                ctx, tool_call, user_input, auto_confirm_config
+            )
+        finally:
+            RUN_PERMISSIONS.reset(run_token)
+            if original_hook is not None:
+                self._host.permission_scene_hook = original_hook
+            if original_config is not None:
+                self.update_config(original_config)
+
+    async def _resolve_interrupt_with_run_policy(
+        self, ctx: AgentCallbackContext, tool_call: Any, user_input: Any,
+        auto_confirm_config: dict | None,
     ) -> Any:
         if self._exact_persist_callback is None:
             return await super().resolve_interrupt(
@@ -134,6 +215,9 @@ class JiuwenSwarmPermissionInterruptRail(PermissionInterruptRail):
     def _persist_allow_always(
         self, normalized_name: str, tool_args: dict, *, session_id: str | None = None,
     ) -> bool:
+        from jiuwenswarm.runtime.run_permissions import RUN_PERMISSIONS
+        if RUN_PERMISSIONS.get() is not None:
+            return False
         callback = self._exact_persist_callback
         if callback is None:
             return super()._persist_allow_always(normalized_name, tool_args, session_id=session_id)
@@ -151,6 +235,12 @@ class JiuwenSwarmPermissionInterruptRail(PermissionInterruptRail):
         except Exception:
             return False
 
+    def _persist_merged_allow(self, *args: Any, **kwargs: Any) -> bool:
+        from jiuwenswarm.runtime.run_permissions import RUN_PERMISSIONS
+        if RUN_PERMISSIONS.get() is not None:
+            return False
+        return super()._persist_merged_allow(*args, **kwargs)
+
     def _remove_exact_auto_confirm(self, ctx: Any, tool_call: Any) -> None:
         session = getattr(ctx, "session", None)
         key = self._get_auto_confirm_key(tool_call)
@@ -166,6 +256,7 @@ class JiuwenSwarmPermissionInterruptRail(PermissionInterruptRail):
     async def before_tool_call(self, ctx: AgentCallbackContext) -> None:
         if root_nonpermission_resume_from_context(ctx) is not None:
             return
+        self._sync_engine_workspace_root()
         try:
             await super().before_tool_call(ctx)
         except AbortError as exc:

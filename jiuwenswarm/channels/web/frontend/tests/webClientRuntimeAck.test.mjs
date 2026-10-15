@@ -1,3 +1,5 @@
+// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
@@ -12,6 +14,7 @@ class FakeWebSocket {
     this.url = url;
     this.readyState = 0;
     this.listeners = new Map();
+    this.sentRequests = [];
     FakeWebSocket.instance = this;
     queueMicrotask(() => {
       this.readyState = FakeWebSocket.OPEN;
@@ -27,6 +30,7 @@ class FakeWebSocket {
 
   send(raw) {
     this.lastRequest = JSON.parse(raw);
+    this.sentRequests.push(this.lastRequest);
   }
 
   close(code = 1000, reason = '') {
@@ -45,6 +49,9 @@ globalThis.WebSocket = FakeWebSocket;
 
 const { webClient } = await import(
   '../node_modules/.cache/web-client-runtime-ack/webClient.mjs'
+);
+const { attachTeamSession, resetTeamAttachments } = await import(
+  '../node_modules/.cache/web-client-runtime-ack/teamAttach.mjs'
 );
 
 await webClient.connect();
@@ -122,6 +129,44 @@ test('abort keeps runtime-ack request rejected without waiting for Host event', 
   await Promise.resolve();
 });
 
+test('request identity is bound before send and runtime errors preserve their code and payload', async () => {
+  let boundId;
+  const socket = FakeWebSocket.instance;
+  const originalSend = socket.send;
+  socket.send = function (raw) {
+    const outgoing = JSON.parse(raw);
+    assert.equal(boundId, outgoing.id);
+    originalSend.call(this, raw);
+  };
+  try {
+    const pending = webClient.request('chat.send', { input_mode: 'steer' }, {
+      awaitRuntimeAccepted: true,
+      onRequestId: (id) => { boundId = id; },
+    });
+    await Promise.resolve();
+    runtimeEvent('chat.error', boundId, { code: 'SESSION_INPUT_DELIVERY_UNKNOWN', error: 'uncertain' });
+    await assert.rejects(pending, (error) => {
+      assert.equal(error.code, 'SESSION_INPUT_DELIVERY_UNKNOWN');
+      assert.equal(error.payload.error, 'uncertain');
+      assert.equal(error.requestId, boundId);
+      return true;
+    });
+  } finally { socket.send = originalSend; }
+});
+
+test('legacy content wrapping an acceptance is routed as ACK, not final output', async () => {
+  let finalCount = 0;
+  const unsubscribe = webClient.on('chat.final', () => { finalCount += 1; });
+  try {
+    const pending = webClient.request('chat.send', { input_mode: 'steer' }, { awaitRuntimeAccepted: true });
+    await Promise.resolve();
+    const requestId = FakeWebSocket.instance.lastRequest.id;
+    FakeWebSocket.instance.receive({ type: 'content', payload: { event_type: 'runtime.accepted', request_id: requestId } });
+    assert.equal((await pending).request_id, requestId);
+    assert.equal(finalCount, 0);
+  } finally { unsubscribe(); }
+});
+
 test('timeout and disconnect reject runtime-ack requests after gateway acceptance', async () => {
   const timedOut = webClient.request(
     'chat.send',
@@ -142,4 +187,28 @@ test('timeout and disconnect reject runtime-ack requests after gateway acceptanc
   const closed = webClient.disconnect();
   await assert.rejects(disconnected, (error) => error.code === 'WS_CLOSED');
   await closed;
+});
+
+test('team attachment is fire-and-forget and resets only for reconnect', async () => {
+  await webClient.connect();
+  resetTeamAttachments();
+  const socket = FakeWebSocket.instance;
+  const initialCount = socket.sentRequests.length;
+
+  await attachTeamSession('team-session-1', 'team.work.normal');
+  assert.equal(socket.sentRequests.length, initialCount + 1);
+  assert.deepEqual(socket.lastRequest.params, {
+    session_id: 'team-session-1',
+    query: '',
+    mode: 'team.work.normal',
+    attach_only: true,
+  });
+  assert.equal(socket.lastRequest.is_stream, true);
+
+  await attachTeamSession('team-session-1', 'team.work.normal');
+  assert.equal(socket.sentRequests.length, initialCount + 1);
+
+  resetTeamAttachments();
+  await attachTeamSession('team-session-1', 'team.work.normal');
+  assert.equal(socket.sentRequests.length, initialCount + 2);
 });

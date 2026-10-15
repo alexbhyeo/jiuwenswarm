@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 from openjiuwen.core.foundation.llm import ToolMessage
@@ -15,13 +15,61 @@ from jiuwenswarm.agents.harness.common.rails.permissions.root_ask_user import (
     ASK_USER_TOOL_NAME, ask_user_continuation, prepare_ask_user_resume,
     put_ask_user_resume_in_inputs,
 )
-from jiuwenswarm.agents.harness.common.rails.permissions.root_permission_queue import RootPermissionQueueError
+from jiuwenswarm.agents.harness.common.rails.permissions.root_permission_queue import (
+    RootPermissionAnswer, RootPermissionQueue, RootPermissionQueueError,
+)
 from jiuwenswarm.agents.harness.common.rails.permissions.root_permission_queue_rail import (
-    RootNonPermissionResume, put_root_nonpermission_resume_in_inputs,
+    RootNonPermissionResume, RootPermissionWrapperResume, put_root_nonpermission_resume_in_inputs,
 )
 from jiuwenswarm.agents.harness.common.rails.permissions.tool_invocation_key import ToolInvocationKeyV1
 
 logger = logging.getLogger(__name__)
+
+
+def _permission_entries(state: Any) -> Iterator[tuple[Any, ToolInvocationKeyV1]]:
+    """Read inner identities from Core, retaining outer calls for context cleanup."""
+    interrupted = getattr(state, "interrupted_tools", None)
+    if not isinstance(interrupted, Mapping) or not interrupted:
+        raise RootPermissionQueueError("permission_continuation_state_missing")
+    for outer_id, entry in interrupted.items():
+        call = getattr(entry, "tool_call", None)
+        requests = getattr(entry, "interrupt_requests", None)
+        if (
+            not isinstance(requests, Mapping) or len(requests) != 1
+            or getattr(call, "id", None) != outer_id
+        ):
+            raise RootPermissionQueueError("permission_continuation_state_invalid")
+        inner_id, request = next(iter(requests.items()))
+        metadata = getattr(request, "metadata", None)
+        key = ToolInvocationKeyV1.from_wire(
+            metadata.get("tool_invocation_key") if isinstance(metadata, Mapping) else None
+        )
+        if key.tool_call_id != inner_id or (inner_id != outer_id and call.name != "tool_call"):
+            raise RootPermissionQueueError("permission_continuation_identity_mismatch")
+        yield call, key
+
+
+def prepare_permission_wrappers(
+    loop_session: Any, queue: RootPermissionQueue, answer: RootPermissionAnswer,
+) -> tuple[RootPermissionWrapperResume, ...]:
+    """Carry one-shot references for Core's replay batch, not a second state map."""
+    state = loop_session.get_state(INTERRUPTION_KEY) if loop_session is not None else None
+    if state is None:
+        return ()
+    wrappers, keys = [], []
+    for call, key in _permission_entries(state):
+        card = queue.get(key)
+        if (
+            card is None or card.state not in {"pending", "resuming"}
+            or key.root_session_id != answer.card.key.root_session_id
+        ):
+            raise RootPermissionQueueError("permission_continuation_card_mismatch")
+        keys.append(key)
+        if call.id != key.tool_call_id:
+            wrappers.append(RootPermissionWrapperResume(call, card))
+    if answer.card.key not in keys or len(set(keys)) != len(keys):
+        raise RootPermissionQueueError("permission_continuation_answer_mismatch")
+    return tuple(wrappers)
 
 
 async def discard_permission_continuation(
@@ -50,28 +98,11 @@ async def discard_permission_continuation(
             return False
         pending: dict[str, ToolInvocationKeyV1] = {}
         pending_tool_ids: list[str] = []
-        for entry in interrupted_tools.values():
-            tool_call = getattr(entry, "tool_call", None)
-            tool_call_id = str(getattr(tool_call, "id", "") or "").strip()
-            requests = getattr(entry, "interrupt_requests", None)
-            if (
-                not tool_call_id
-                or not isinstance(requests, Mapping)
-                or len(requests) != 1
-            ):
-                return False
-            interrupt_request = next(iter(requests.values()))
-            metadata = getattr(interrupt_request, "metadata", None)
-            wire_key = (
-                metadata.get("tool_invocation_key")
-                if isinstance(metadata, Mapping)
-                else None
-            )
-            key = ToolInvocationKeyV1.from_wire(wire_key)
+        for tool_call, key in _permission_entries(state):
+            tool_call_id = tool_call.id
             if (
                 key.invocation_id in pending
                 or key.root_session_id != target_sid
-                or key.tool_call_id != tool_call_id
             ):
                 return False
             pending[key.invocation_id] = key
@@ -172,6 +203,141 @@ async def discard_permission_continuation(
         "session=%s cards=%d",
         target_sid,
         len(frozen_keys),
+    )
+    return True
+
+
+async def discard_pending_permission_interrupt_for_target(
+    instance: Any,
+    target_sid: str,
+    loop_session_id: str | None,
+    *,
+    cancel_reason: str = "host_fresh_user_input_drops_pending_permission",
+) -> bool:
+    """Clear any pending Core permission interrupt for *target_sid*.
+
+    This is the manual-mode / Smart-queue-empty counterpart of
+    ``discard_permission_continuation``. It does not require frozen_keys:
+    whatever pending entries are in ``INTERRUPTION_KEY.interrupted_tools``
+    are cleared, with cancellation ToolMessages appended to balance context.
+
+    Mirrors the validation pattern of ``discard_permission_continuation``:
+    cross-checks ``ai_message.tool_calls`` against the last assistant message
+    in the context engine and verifies completed tool results before clearing.
+
+    Returns True if state was cleared, False if nothing pending, mismatch,
+    or session does not match.
+    """
+    loop_session = getattr(instance, "_loop_session", None)
+    if loop_session is None or loop_session_id != target_sid:
+        return False
+
+    try:
+        state = loop_session.get_state(INTERRUPTION_KEY)
+        interrupted_tools = getattr(state, "interrupted_tools", None)
+        if not isinstance(interrupted_tools, Mapping) or not interrupted_tools:
+            return False
+
+        pending_tool_ids: list[str] = []
+        for outer_id, entry in interrupted_tools.items():
+            call = getattr(entry, "tool_call", None)
+            tool_call_id = str(getattr(call, "id", "") or "") if call is not None else ""
+            if not tool_call_id or tool_call_id != str(outer_id or ""):
+                continue
+            pending_tool_ids.append(tool_call_id)
+
+        ai_message = getattr(state, "ai_message", None)
+        state_calls = list(getattr(ai_message, "tool_calls", None) or [])
+        state_signature = [
+            (
+                str(getattr(call, "id", "") or ""),
+                str(getattr(call, "name", "") or ""),
+            )
+            for call in state_calls
+        ]
+        all_tool_ids = {tool_call_id for tool_call_id, _name in state_signature}
+        if (
+            not state_signature
+            or len(all_tool_ids) != len(state_signature)
+            or not set(pending_tool_ids).issubset(all_tool_ids)
+        ):
+            return False
+
+        react_agent = getattr(instance, "react_agent", None)
+        context_engine = getattr(react_agent, "context_engine", None)
+        context = (
+            context_engine.get_context(session_id=target_sid)
+            if context_engine is not None
+            else None
+        )
+        messages = list(context.get_messages() or []) if context is not None else []
+        assistant_index = next(
+            (
+                index
+                for index in range(len(messages) - 1, -1, -1)
+                if getattr(messages[index], "tool_calls", None)
+            ),
+            -1,
+        )
+        if assistant_index < 0:
+            return False
+        context_signature: list[tuple[str, str]] = []
+        for call in list(
+            getattr(messages[assistant_index], "tool_calls", None) or []
+        ):
+            context_signature.append(
+                (
+                    str(getattr(call, "id", "") or ""),
+                    str(getattr(call, "name", "") or ""),
+                )
+            )
+        if context_signature != state_signature:
+            return False
+        pending_id_set = set(pending_tool_ids)
+        tail_id_set: set[str] = set()
+        for message in messages[assistant_index + 1:]:
+            if getattr(message, "role", None) != "tool":
+                continue
+            tool_call_id = str(getattr(message, "tool_call_id", "") or "")
+            if tool_call_id in all_tool_ids:
+                tail_id_set.add(tool_call_id)
+        active_ids = [tid for tid in pending_tool_ids if tid not in tail_id_set]
+        stale_ids = [tid for tid in pending_tool_ids if tid in tail_id_set]
+
+        added = 0
+        try:
+            for tool_call_id in active_ids:
+                await context.add_messages(
+                    ToolMessage(
+                        tool_call_id=tool_call_id,
+                        content="[INTERRUPTED - Superseded by new user input]",
+                    )
+                )
+                added += 1
+            loop_session.update_state({INTERRUPTION_KEY: None})
+            await context_engine.save_contexts(loop_session)
+        except Exception:
+            loop_session.update_state({INTERRUPTION_KEY: state})
+            if added:
+                context.pop_messages(added, with_history=True)
+            raise
+    except Exception:
+        logger.debug(
+            "[PermissionContinuation] pending permission interrupt discard failed "
+            "session=%s reason=%s",
+            target_sid,
+            cancel_reason,
+            exc_info=True,
+        )
+        return False
+
+    logger.info(
+        "[PermissionContinuation] discarded pending permission interrupt "
+        "session=%s active=%d stale=%d reason=%s",
+        target_sid,
+        len(active_ids),
+        len(stale_ids),
+        cancel_reason,
     )
     return True
 

@@ -1,7 +1,7 @@
 """session_metadata 模块单元测试"""
 from __future__ import annotations
 
-import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
 import threading
 import time
@@ -670,6 +670,25 @@ class TestGetAllSessionsMetadata:
         assert ids == {"sess_a", "sess_b"}
         assert len(sessions) == 2
 
+    @staticmethod
+    def test_excludes_persisted_ephemeral_sessions_from_both_lists(sessions_dir):
+        from jiuwenswarm.server.runtime.session.session_metadata import (
+            _write_metadata_sync,
+            collect_all_sessions_metadata,
+            get_all_sessions_metadata,
+        )
+
+        _write_metadata_sync("normal", {"session_id": "normal"})
+        _write_metadata_sync(
+            "temporary", {"session_id": "temporary", "ephemeral": True}
+        )
+
+        sessions, total = get_all_sessions_metadata(limit=20)
+        assert total == 1
+        assert [session["session_id"] for session in sessions] == ["normal"]
+        assert [session["session_id"] for session in collect_all_sessions_metadata()] == [
+            "normal"
+        ]
 
 # ===========================================================================
 # _read_metadata 容错
@@ -1584,7 +1603,6 @@ class TestSyncChatRequestMetadata:
         from jiuwenswarm.server.runtime.session.session_metadata import (
             init_session_metadata,
             update_session_metadata,
-            get_session_metadata,
         )
 
         init_session_metadata(session_id="sess_1")
@@ -2348,6 +2366,51 @@ class TestSetSessionPinnedQueuedWriteRace:
         assert data["pin_order"] == 1
 
 
+def test_equipment_write_preserves_queued_first_user_metadata(sessions_dir, monkeypatch):
+    from jiuwenswarm.server.runtime.session import session_metadata as sm
+
+    sid = "s_pending_equipment"
+    sm.init_session_metadata(session_id=sid)
+    original_write = sm._write_metadata_sync
+    original_flush = sm.flush_pending_writes
+    user_write_started = threading.Event()
+    release_user_write = threading.Event()
+    flush_started = threading.Event()
+
+    def delayed_write(session_id, metadata, options=None):
+        if session_id == sid and metadata.get("title") == "first user turn":
+            user_write_started.set()
+            assert release_user_write.wait(5)
+        return original_write(session_id, metadata, options)
+
+    monkeypatch.setattr(sm, "_write_metadata_sync", delayed_write)
+
+    def traced_flush(*args, **kwargs):
+        flush_started.set()
+        return original_flush(*args, **kwargs)
+
+    monkeypatch.setattr(sm, "flush_pending_writes", traced_flush)
+    sm.update_session_metadata(
+        session_id=sid, user_content="first user turn", increment_message_count=True
+    )
+    assert user_write_started.wait(5)
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            saved = pool.submit(sm.save_session_equipment, sid, plugin_names=["example"])
+            assert flush_started.wait(5)
+            release_user_write.set()
+            saved.result(timeout=5)
+    finally:
+        release_user_write.set()
+
+    assert sm.flush_pending_writes()
+    metadata = _read_json(sessions_dir / sid / "metadata.json")
+    assert metadata["title"] == "first user turn"
+    assert metadata["message_count"] == 1
+    assert metadata["session_equipment"]["plugin_names"] == ["example"]
+
+
 # ===========================================================================
 # Session identity preservation under concurrent writes (regression tests)
 #
@@ -2563,6 +2626,39 @@ def test_remove_team_mode_session_dirs_at_startup_keeps_stable_team_sessions(
 # ===========================================================================
 # rebind_session_project：并发场景（陈旧异步快照 vs 重绑）
 # ===========================================================================
+def test_external_harness_checkpoint_survives_stale_snapshot(sessions_dir):
+    from jiuwenswarm.server.runtime.session.session_metadata import (
+        _enqueue_write,
+        get_session_metadata,
+        init_session_metadata,
+        update_session_metadata,
+    )
+
+    session_id = "external-checkpoint-stale"
+    init_session_metadata(session_id=session_id, channel_id="web")
+    stale = get_session_metadata(session_id, cache_bust=True)
+    checkpoint = {
+        "agent_template_name": "codex-expert",
+        "provider_name": "codex",
+        "checkpoint": {
+            "checkpoint_id": "checkpoint-2",
+            "sequence": 2,
+        },
+    }
+    update_session_metadata(
+        session_id=session_id,
+        session_harness_checkpoint=checkpoint,
+        touch_last_message_at=False,
+        cache_bust=True,
+        sync_write=True,
+    )
+
+    _enqueue_write(session_id, stale, sync_write=True)
+
+    metadata = get_session_metadata(session_id, cache_bust=True)
+    assert metadata["session_harness_checkpoint"] == checkpoint
+
+
 class TestRebindSessionProjectConcurrency:
     """覆盖 P1 关键场景：rebind 的 sync 写入与队列中陈旧异步快照的竞态。
 
@@ -2953,3 +3049,111 @@ class TestRebindSessionProjectConcurrency:
         assert ch.get("cwd") == "/new/dir"
         # 陈旧快照的非 project 字段 (message_count) 应被保留
         assert after["message_count"] == 1
+
+
+class TestSessionPinOptimization:
+    def test_repeated_pin_skips_scan_and_write(self, sessions_dir, monkeypatch):
+        from jiuwenswarm.server.runtime.session import session_metadata as sm
+
+        sm.init_session_metadata(session_id="repeat")
+        assert sm.set_session_pinned("repeat", True) == (True, 1)
+        original_read = sm._read_metadata
+        reads = []
+
+        def read(sid, **kwargs):
+            reads.append(sid)
+            return original_read(sid, **kwargs)
+
+        monkeypatch.setattr(sm, "_read_metadata", read)
+        def unexpected_write(**kwargs):
+            pytest.fail("unchanged pin must not write metadata")
+        monkeypatch.setattr(sm, "update_session_metadata", unexpected_write)
+        assert sm.set_session_pinned("repeat", True) == (True, 1)
+        assert reads == ["repeat"]
+
+    def test_pin_order_and_unpin_only_write_changed_sessions(self, sessions_dir, monkeypatch):
+        from jiuwenswarm.server.runtime.session import session_metadata as sm
+
+        for sid in ("a", "b", "c"):
+            sm.init_session_metadata(session_id=sid)
+            sm.set_session_pinned(sid, True)
+        before = {sid: _read_json(sessions_dir / sid / "metadata.json") for sid in ("a", "b", "c")}
+        assert [before[sid]["pin_order"] for sid in ("c", "b", "a")] == [1, 2, 3]
+        original_update = sm.update_session_metadata
+        writes = []
+        def update(**kwargs):
+            writes.append(kwargs["session_id"])
+            return original_update(**kwargs)
+        monkeypatch.setattr(sm, "update_session_metadata", update)
+        assert sm.set_session_pinned("b", False) == (False, 0)
+        assert writes == ["b", "a"]
+        for sid, order in (("c", 1), ("a", 2), ("b", 0)):
+            after = _read_json(sessions_dir / sid / "metadata.json")
+            assert after["pin_order"] == order
+            assert after["last_message_at"] == before[sid]["last_message_at"]
+
+class TestCanonicalModeBoundary:
+    """公共会话数据保持 canonical mode；客户端兼容由 Gateway 出口负责。"""
+
+    @staticmethod
+    def test_sync_explicit_mode_stores_canonical_mode(sessions_dir):
+        """请求旧 mode 仍归一化，不新增用于全局回显的 wire_mode。"""
+        from jiuwenswarm.server.runtime.session.session_metadata import (
+            init_session_metadata,
+            sync_session_request_metadata,
+            get_session_metadata,
+        )
+
+        init_session_metadata(session_id="s_wire")
+        sync_session_request_metadata(
+            session_id="s_wire", mode="team", explicit_mode_provided=True
+        )
+        _drain_queue()
+        meta = get_session_metadata("s_wire")
+        assert meta["mode"] == "team.work.normal"
+        assert "wire_mode" not in meta
+
+    @staticmethod
+    def test_to_session_info_ignores_legacy_wire_mode():
+        """已有 wire_mode 数据也不能覆盖公共出口的 canonical mode。"""
+        from jiuwenswarm.server.runtime.session.session_info import to_session_info
+
+        assert to_session_info({"mode": "team.work.normal", "wire_mode": "team"})["mode"] == "team.work.normal"
+        assert to_session_info({"mode": "team.work.normal"})["mode"] == "team.work.normal"
+        assert to_session_info({})["mode"] == "unknown"
+
+    @staticmethod
+    def test_chat_turn_code_team_stores_canonical_mode(sessions_dir):
+        """聊天请求的 mode/work_mode 组合在公共元数据中保持 canonical。"""
+        from jiuwenswarm.common.schema.agent import AgentRequest
+        from jiuwenswarm.common.schema.message import ReqMethod
+        from jiuwenswarm.runtime.request import (
+            apply_resolved_mode_to_request,
+            sync_chat_request_metadata,
+        )
+        from jiuwenswarm.server.runtime.session.session_metadata import (
+            get_session_metadata,
+            init_session_metadata,
+        )
+
+        init_session_metadata(session_id="s_code_team")
+        request = AgentRequest(
+            request_id="r1",
+            channel_id="web",
+            session_id="s_code_team",
+            req_method=ReqMethod.CHAT_SEND,
+            params={"mode": "team", "work_mode": "code"},
+        )
+        apply_resolved_mode_to_request(request, work_mode="code")
+        assert request.params["mode"] == "code.team", "前置：组合发生在 sync 之前"
+        sync_chat_request_metadata(
+            request,
+            None,
+            request.params["mode"],
+            explicit_mode_provided=True,
+            user_id="u1",
+        )
+        _drain_queue()
+        meta = get_session_metadata("s_code_team")
+        assert meta["mode"] == "team.code.normal"
+        assert "wire_mode" not in meta

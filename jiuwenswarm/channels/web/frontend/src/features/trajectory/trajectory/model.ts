@@ -1,5 +1,3 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-
 /**
  * Standalone trajectory read model.
  *
@@ -45,6 +43,9 @@ export interface TrajectoryRecordedFacts {
     finishReasons?: readonly string[]
     totalLatencyMs?: number
     timePerOutputTokenMs?: number
+    timeToFirstByteMs?: number
+    timeToFirstTokenMs?: number
+    retryCount?: number
     promptTokenIds?: unknown
     completionTokenIds?: unknown
     logprobs?: unknown
@@ -112,17 +113,14 @@ export interface TrajectoryUsage {
 interface TrajectoryRequestBase {
   /** Stable identity of one physical model request, independent from its Step group. */
   recordId?: string
-  seq?: number
+  /** The raw record of the physical model request, shown as OTel in its detail. */
+  traceDetail?: unknown
   group: string
   number: number
   status?: 'complete' | 'running' | 'error'
   startedAt?: number
   completedAt?: number | null
   error?: string
-  retry?: number
-  maxRetries?: number
-  retryDelayMs?: number
-  resultSeq?: number
   provider?: string
   model?: string
   requestConfig?: TrajectoryRequestConfig
@@ -141,7 +139,6 @@ export type TrajectoryRequest = TrajectoryRequestBase & (
 export interface TrajectorySnapshot {
   turns: readonly TrajectoryTurnModel[]
   requests?: readonly TrajectoryRequest[]
-  streamingCells?: readonly TrajectoryCell[]
   diagnostics?: readonly TrajectoryDiagnostic[]
 }
 

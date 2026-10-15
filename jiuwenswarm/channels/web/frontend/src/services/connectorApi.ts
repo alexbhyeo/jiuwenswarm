@@ -1,3 +1,5 @@
+import { assetSearchNames } from '../features/assetNameSearch';
+import { withCatalogCache, type CatalogItems, type CatalogCacheMetadata } from '../features/catalogCache';
 import { webRequest } from './webClient';
 import type {
   ConnectorConnectResponse,
@@ -33,6 +35,7 @@ interface RawConnectorSummary {
   name: string;
   package_name?: string;
   display_name: string;
+  display_name_i18n?: { zh?: string; en?: string };
   description: string;
   category: string;
   integration_type: ConnectorSummary['integrationType'];
@@ -66,6 +69,7 @@ function fromRawSummary(raw: RawConnectorSummary): ConnectorSummary {
     runtimePackageName: identity.runtimePackageName,
     hubAssetId: identity.hubAssetId,
     displayName: raw.display_name,
+    searchNames: assetSearchNames(raw.display_name_i18n, raw.display_name || raw.name),
     description: raw.description,
     category: raw.category,
     integrationType: raw.integration_type,
@@ -182,16 +186,31 @@ export const connectorApi = {
   // (local，= 已连接的预置 + 全部自定义)。实测过 dev_aipc_feat_v2 分支：缺省 filter 时后端按
   // "builtin" 处理，之前不传 filter 的单次调用会让"我的MCP"完全看不到自定义 MCP，是真实 bug，
   // 不是理论风险（评估过程见 cjh/feature/MCP/_migration/mcp-interface-v2-gap-assessment.md）。
-  list: async (filter: 'builtin' | 'local'): Promise<ConnectorSummary[]> => {
-    const payload = await requestEquipmentList<{ items: RawConnectorSummary[] }>(webRequest, 'mcp.list', { filter });
-    return payload.items.map(fromRawSummary);
+  list: async (filter: 'builtin' | 'local', query = ''): Promise<CatalogItems<ConnectorSummary>> => {
+    const payload = await requestEquipmentList<{ items: RawConnectorSummary[]; cache?: CatalogCacheMetadata }>(
+      webRequest,
+      'mcp.list',
+      { filter, ...(query ? { query } : {}) },
+      !query,
+    );
+    return withCatalogCache(payload.items.map(fromRawSummary), payload.cache);
   },
   show: async (id: string): Promise<ConnectorDetail> => {
-    const payload = await webRequest<{ item: RawConnectorDetail }>('mcp.show', { id });
+    const payload = await webRequest<{ item: RawConnectorDetail }>('mcp.show', { id }, { timeoutMs: 90000 });
     return fromRawDetail(payload.item);
   },
-  install: (id: string): Promise<ConnectorInstallResponse> =>
-    webRequest<ConnectorInstallResponse>('mcp.install', { id }),
+  // mcp.install embeds the connect result used by the same token/OAuth flow.
+  install: async (id: string): Promise<ConnectorInstallResponse> => {
+    const payload = await webRequest<{ type: 'installed'; item: ConnectorInstallResponse['item']; connect?: RawConnectResponse }>(
+      'mcp.install',
+      { id },
+      { timeoutMs: CONNECT_TIMEOUT_MS },
+    );
+    return {
+      ...payload,
+      connect: payload.connect ? fromRawConnect(payload.connect) : undefined,
+    };
+  },
   uninstall: (id: string): Promise<ConnectorUninstallResponse> =>
     webRequest<ConnectorUninstallResponse>('mcp.uninstall', { id }),
   connect: async (name: string): Promise<ConnectorConnectResponse> => {
@@ -209,6 +228,11 @@ export const connectorApi = {
     );
     return fromRawConnect(payload);
   },
+  // 用户在中途放弃连接/授权（误操作想重新走一遍 OAuth，或等太久了）。后端把正在 hold-open 的
+  // mcp.connect/mcp.wait_auth 收尾成 cancelled，杀掉挂起的 CLI 授权进程并回滚 connecting 记录。
+  // 幂等，连接没在进行中时调用也无副作用。
+  cancelConnect: (name: string) =>
+    webRequest<{ type: 'cancelled'; name: string; applied?: boolean }>('mcp.cancel_connect', { name }),
   disconnect: (name: string) =>
     webRequest<{ type: 'disconnected'; name: string; applied: boolean; item: Record<string, unknown> }>(
       'mcp.disconnect',

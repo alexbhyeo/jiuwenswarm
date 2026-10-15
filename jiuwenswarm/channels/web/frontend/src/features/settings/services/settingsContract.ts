@@ -70,12 +70,15 @@ export const SETTINGS_CONFIG_FIELDS: readonly ConfigFieldContract[] = [
   yamlField('skill_evolution', 'agent', 'boolean', 'react.evolution.skill_evolution'),
   yamlField('skill_retrieval_enabled', 'agent', 'boolean', 'symphony.skill_retrieval.enabled'),
   yamlField('skill_retrieval_index_enabled', 'agent', 'boolean', 'symphony.skill_retrieval.index.enabled'),
+  yamlField('ttse_enabled', 'agent', 'boolean', 'react.ttse.enabled'),
   envField('free_search_ddg_enabled', 'agent', 'boolean', 'FREE_SEARCH_DDG_ENABLED'),
   envField('free_search_bing_enabled', 'agent', 'boolean', 'FREE_SEARCH_BING_ENABLED'),
   envField('jina_api_key', 'agent', 'text', 'JINA_API_KEY'),
   envField('bocha_api_key', 'agent', 'text', 'BOCHA_API_KEY'),
   envField('perplexity_api_key', 'agent', 'text', 'PERPLEXITY_API_KEY'),
   envField('serper_api_key', 'agent', 'text', 'SERPER_API_KEY'),
+  envField('jev_openrouter_api_key', 'browser', 'text', 'OPENROUTER_API_KEY'),
+  envField('jev_typesafe_api_key', 'browser', 'text', 'TYPESAFE_API_KEY'),
   envField('github_token', 'agent', 'text', 'GITHUB_TOKEN'),
   envField('vision_api_base', 'agent', 'text', 'VISION_API_BASE'),
   envField('vision_api_key', 'agent', 'text', 'VISION_API_KEY'),
@@ -84,6 +87,7 @@ export const SETTINGS_CONFIG_FIELDS: readonly ConfigFieldContract[] = [
   envField('vision_endpoint_profile', 'agent', 'text', 'VISION_ENDPOINT_PROFILE'),
   envField('vision_vendor_key', 'agent', 'text', 'VISION_VENDOR_KEY'),
   envField('vision_plan', 'agent', 'text', 'VISION_PLAN'),
+  envField('vision_context_window_tokens', 'agent', 'text', 'VISION_CONTEXT_WINDOW_TOKENS'),
   envField('vision_enabled', 'agent', 'boolean', 'VISION_ENABLED'),
   envField('audio_api_base', 'agent', 'text', 'AUDIO_API_BASE'),
   envField('audio_api_key', 'agent', 'text', 'AUDIO_API_KEY'),
@@ -92,6 +96,7 @@ export const SETTINGS_CONFIG_FIELDS: readonly ConfigFieldContract[] = [
   envField('audio_endpoint_profile', 'agent', 'text', 'AUDIO_ENDPOINT_PROFILE'),
   envField('audio_vendor_key', 'agent', 'text', 'AUDIO_VENDOR_KEY'),
   envField('audio_plan', 'agent', 'text', 'AUDIO_PLAN'),
+  envField('audio_context_window_tokens', 'agent', 'text', 'AUDIO_CONTEXT_WINDOW_TOKENS'),
   envField('audio_enabled', 'agent', 'boolean', 'AUDIO_ENABLED'),
   envField('video_api_base', 'agent', 'text', 'VIDEO_API_BASE'),
   envField('video_api_key', 'agent', 'text', 'VIDEO_API_KEY'),
@@ -100,6 +105,7 @@ export const SETTINGS_CONFIG_FIELDS: readonly ConfigFieldContract[] = [
   envField('video_endpoint_profile', 'agent', 'text', 'VIDEO_ENDPOINT_PROFILE'),
   envField('video_vendor_key', 'agent', 'text', 'VIDEO_VENDOR_KEY'),
   envField('video_plan', 'agent', 'text', 'VIDEO_PLAN'),
+  envField('video_context_window_tokens', 'agent', 'text', 'VIDEO_CONTEXT_WINDOW_TOKENS'),
   envField('video_enabled', 'agent', 'boolean', 'VIDEO_ENABLED'),
   // Video processing (generation) - dedicated slot, separate from the video
   // understanding fields above.
@@ -108,6 +114,7 @@ export const SETTINGS_CONFIG_FIELDS: readonly ConfigFieldContract[] = [
   envField('video_gen_model', 'agent', 'text', 'VIDEO_GEN_MODEL_NAME'),
   envField('video_gen_provider', 'agent', 'text', 'VIDEO_GEN_PROVIDER'),
   envField('video_gen_protocol', 'agent', 'text', 'VIDEO_GEN_PROTOCOL'),
+  envField('video_gen_context_window_tokens', 'agent', 'text', 'VIDEO_GEN_CONTEXT_WINDOW_TOKENS'),
   envField('video_gen_enabled', 'agent', 'boolean', 'VIDEO_GEN_ENABLED'),
   // Visual processing (image generation) - dedicated slot, independent of
   // both the Image processing (vision) fields above and image_tools.py's
@@ -118,13 +125,25 @@ export const SETTINGS_CONFIG_FIELDS: readonly ConfigFieldContract[] = [
   envField('visual_gen_model', 'agent', 'text', 'VISUAL_GEN_MODEL_NAME'),
   envField('visual_gen_provider', 'agent', 'text', 'VISUAL_GEN_PROVIDER'),
   envField('visual_gen_protocol', 'agent', 'text', 'VISUAL_GEN_PROTOCOL'),
+  envField('visual_gen_context_window_tokens', 'agent', 'text', 'VISUAL_GEN_CONTEXT_WINDOW_TOKENS'),
   envField('visual_gen_enabled', 'agent', 'boolean', 'VISUAL_GEN_ENABLED'),
 
   yamlField('permissions_enabled', 'security', 'boolean', 'permissions.enabled'),
 
   yamlField('a2ui_enabled', 'experimental', 'boolean', 'a2ui.enabled'),
+  yamlField('rsi_enabled', 'experimental', 'boolean', 'rsi.enabled'),
   yamlField('trajectory_ui_enabled', 'experimental', 'boolean', 'trajectory_ui.enabled'),
+  yamlField('team_organization_ui_enabled', 'experimental', 'boolean', 'experimental.team_organization_ui_enabled'),
+  yamlField('team_scheduled_dispatch_enabled', 'experimental', 'boolean', 'modes.team.jiuwen_team.dispatch_mode'),
+  yamlField(
+    'team_task_verification_enabled',
+    'experimental',
+    'boolean',
+    'modes.team.jiuwen_team.enable_task_verification',
+  ),
   yamlField('task_full_duplex_enabled', 'experimental', 'boolean', 'experimental.task_full_duplex_enabled'),
+  yamlField('task_asr_enabled', 'experimental', 'boolean', 'experimental.task_asr_enabled'),
+  yamlField('symphony_evolution_enabled', 'experimental', 'boolean', 'symphony.evolution.flow.enabled'),
   envField('asr_api_base', 'experimental', 'text', 'ASR_API_BASE'),
   envField('asr_api_key', 'experimental', 'text', 'ASR_API_KEY'),
   envField('asr_model', 'experimental', 'text', 'ASR_MODEL_NAME'),
@@ -184,7 +203,7 @@ export const SETTINGS_OTHER_PERSISTENCE = [
     id: 'browser',
     method: 'path.set',
     persistence: 'config.yaml',
-    path: 'browser.chrome_path, browser.headless',
+    path: 'browser.chrome_path, browser.headless, browser.decision.mode, browser.decision.provider',
   },
   {
     id: 'permissions.tools',
@@ -301,5 +320,13 @@ export function buildModelsSavePayload(models: ModelEntry[]): Record<string, unk
   if (models.length === 0) {
     throw new Error('At least one model is required');
   }
-  return { models };
+  return {
+    models: models.map(({ has_api_key: hasApiKey, ...model }) => {
+      if (hasApiKey && !model.api_key.trim()) {
+        const { api_key: _unchangedApiKey, ...modelWithoutApiKey } = model;
+        return modelWithoutApiKey;
+      }
+      return model;
+    }),
+  };
 }

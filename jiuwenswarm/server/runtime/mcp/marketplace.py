@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 from pathlib import Path, PureWindowsPath
 from typing import Any
@@ -20,6 +21,7 @@ from jiuwenswarm.server.runtime.marketplace.hub_asset_port import (
     HubAssetQuery,
     HubSearchRequest,
     create_default_hub_asset_port,
+    hub_asset_matches_visible_query,
 )
 from jiuwenswarm.server.runtime.marketplace.hub_install_state import (
     HubInstallRecord,  # noqa: F401 - compatibility re-export
@@ -27,6 +29,8 @@ from jiuwenswarm.server.runtime.marketplace.hub_install_state import (
 )
 from jiuwenswarm.server.runtime.mcp import registry
 from jiuwenswarm.server.runtime.mcp.package_manifest import load_mcp_package
+
+logger = logging.getLogger(__name__)
 
 
 def _mcp_root() -> Path:
@@ -52,7 +56,7 @@ def _remote_card(item: Any) -> dict[str, Any]:
         "package_name": item.package_name,
         "display_name": item.display_name or item.package_name,
         "description": item.short_description,
-        "category": "",
+        "category": item.category_name,
         "integration_type": "",
         "connection_state": "disconnected",
         "has_bundled_skills": False,
@@ -64,12 +68,12 @@ def _remote_card(item: Any) -> dict[str, Any]:
     }
 
 
-async def _all_remote(port: HubAssetPort) -> list[Any]:
+async def _all_remote(port: HubAssetPort, query: str = "") -> list[Any]:
     items: list[Any] = []
     seen_asset_ids: set[str] = set()
     for page in range(1, 101):
         result = await port.search_assets(
-            HubSearchRequest(kind="mcp", page=page, page_size=100)
+            HubSearchRequest(kind="mcp", query=query, page=page, page_size=100)
         )
         new_items: list[Any] = []
         for item in result.items:
@@ -85,10 +89,51 @@ async def _all_remote(port: HubAssetPort) -> list[Any]:
     raise ValueError("Hub MCP pagination exceeded 100 pages")
 
 
+def installed_mcp_descriptions() -> dict[str, dict[str, str]]:
+    """Localized display metadata of installed MCP packages, by server name.
+
+    Reads the installed package manifests (builtins + hub) — the same
+    ``基本信息`` the web catalogue shows, available locally without a hub
+    round-trip. Keyed by both the manifest's MCP server name (the
+    ``mcp_{server}_`` tool-prefix segment) and the package id; values carry
+    ``zh``/``en`` display descriptions (empty when absent).
+    """
+
+    out: dict[str, dict[str, str]] = {}
+    for root in (_builtin_root(), _hub_root()):
+        if not root.is_dir():
+            continue
+        for package_dir in sorted(root.iterdir()):
+            if not package_dir.is_dir() or not (package_dir / "manifest.json").is_file():
+                continue
+            try:
+                manifest = load_mcp_package(package_dir)
+            except Exception:
+                logger.debug(
+                    "mcp manifest load failed: %s", package_dir, exc_info=True
+                )
+                continue
+            raw = manifest.raw
+            display_description = raw.get("display_description")
+            if not isinstance(display_description, dict):
+                display_description = {}
+            payload = {
+                "zh": str(display_description.get("zh") or "").strip(),
+                "en": str(display_description.get("en") or "").strip(),
+            }
+            for key in (manifest.server_name, manifest.package_id):
+                if key:
+                    out.setdefault(str(key), payload)
+    return out
+
+
 async def list_mcps_with_hub(
     mcp_filter: str = "builtin",
     *,
     hub_port: HubAssetPort | None = None,
+    cache_mode: str | None = None,
+    refresh: bool = False,
+    query: str = "",
 ) -> list[dict[str, Any]]:
     """Merge installed packages with ordinary, non-persisted Hub cards."""
     local = registry.list_marketplace_mcps("local" if mcp_filter == "local" else "builtin")
@@ -99,24 +144,62 @@ async def list_mcps_with_hub(
         record = _state().get_by_package_id(name)
         if record is not None and record.kind == "mcp":
             installed_asset_ids.add(record.asset_id)
-            card = {
-                **card,
-                "id": record.asset_id,
-                "package_name": name,
-                "source": "hub",
-                "installed": True,
-                "version": record.version,
-            }
+            if card.get("source") == "hub":
+                card = {
+                    **card,
+                    "id": record.asset_id,
+                    "package_name": name,
+                    "source": "hub",
+                    "installed": True,
+                    "version": record.version,
+                }
+            else:
+                card = {**card, "id": name, "package_name": name, "installed": True}
         else:
             card = {**card, "id": name, "package_name": name, "installed": True}
         cards[name] = card
     if mcp_filter == "local":
         return list(cards.values())
+    normalized_query = str(query or "").strip()
+    if normalized_query:
+        query_terms = normalized_query.casefold().split()
+        filtered_cards: dict[str, dict[str, Any]] = {}
+        for name, card in cards.items():
+            searchable_text = " ".join(
+                (
+                    str(card.get("name", "")),
+                    str(card.get("display_name", "")),
+                    str(card.get("description", "")),
+                    str(card.get("category", "")),
+                    " ".join(card.get("tags") or []),
+                )
+            ).casefold()
+            matches_query = True
+            for term in query_terms:
+                if term not in searchable_text:
+                    matches_query = False
+                    break
+            if matches_query:
+                filtered_cards[name] = card
+        cards = filtered_cards
     port = hub_port or create_default_hub_asset_port()
-    try:
-        remote_items = await _all_remote(port)
-    except Exception:
-        return list(cards.values())
+    cache_state = None
+    if cache_mode == "prefer_cache" and not normalized_query:
+        from jiuwenswarm.server.runtime.marketplace.hub_catalog_cache import cached_asset_catalog
+        remote_items, cache_state = await cached_asset_catalog(
+            port, "mcp", refresh=refresh
+        )
+    else:
+        try:
+            remote_items = await _all_remote(port, normalized_query)
+        except Exception:
+            return list(cards.values())
+    if normalized_query:
+        remote_items = [
+            item
+            for item in remote_items
+            if hub_asset_matches_visible_query(item, normalized_query)
+        ]
     for item in remote_items:
         if (
             not item.package_name
@@ -125,7 +208,19 @@ async def list_mcps_with_hub(
         ):
             continue
         cards[item.package_name] = _remote_card(item)
-    return list(cards.values())
+    # Use the same marketplace sort as registry.list_marketplace_mcps.
+    priority = {"huaweiyun-mcp": 0, "harmonyos-mcp": 0}
+    sorted_cards = sorted(
+        cards.values(),
+        key=lambda card: (
+            priority.get(str(card.get("name") or ""), 1),
+            str(card.get("name") or ""),
+        ),
+    )
+    if cache_state is not None:
+        from jiuwenswarm.server.runtime.marketplace.hub_catalog_cache import CatalogCards
+        return CatalogCards(sorted_cards, cache_state)
+    return sorted_cards
 
 
 async def show_mcp_with_hub(
@@ -134,6 +229,20 @@ async def show_mcp_with_hub(
     hub_port: HubAssetPort | None = None,
 ) -> dict[str, Any] | None:
     target = str(identifier or "").strip()
+    local = registry.get_mcp(target)
+    if local is not None:
+        record = _state().get(target) or _state().get_by_package_id(target)
+        if record is not None and local.get("source") == "hub":
+            return {
+                **local,
+                "id": record.asset_id,
+                "package_name": record.package_id,
+                "source": "hub",
+                "installed": True,
+                "version": record.version,
+            }
+        return {**local, "id": target, "package_name": target, "installed": True}
+
     record = _state().get(target) or _state().get_by_package_id(target)
     if record is not None and (_hub_root() / record.package_id).is_dir():
         detail = registry.get_mcp(record.package_id)
@@ -146,9 +255,6 @@ async def show_mcp_with_hub(
                 "installed": True,
                 "version": record.version,
             }
-    local = registry.get_mcp(target)
-    if local is not None:
-        return {**local, "id": target, "package_name": target, "installed": True}
     port = hub_port or create_default_hub_asset_port()
     detail = await port.query_asset(HubAssetQuery(kind="mcp", asset_id=target))
     if detail.kind != "mcp" or detail.asset_id != target:

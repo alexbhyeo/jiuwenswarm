@@ -45,7 +45,11 @@ from jiuwenswarm.agents.harness.common.rails.skill_retrieval_prompt_rail import 
 from jiuwenswarm.agents.harness.common.rails.symphony import (
     SymphonyOrchestrationRail,
 )
+from jiuwenswarm.agents.harness.common.tools.session_messaging_toolkit import (
+    SessionMessagingRouteRail,
+)
 from jiuwenswarm.agents.harness.code.rails.heartbeat_rail import HeartbeatRail
+from jiuwenswarm.agents.harness.common.tools.heartbeat_policy import is_heartbeat_supported
 from jiuwenswarm.agents.harness.team.rails.team_skill_storage_policy_rail import (
     TeamSkillStoragePolicyRail,
 )
@@ -58,6 +62,7 @@ from jiuwenswarm.agents.harness.team.rails.team_workspace_report_path_rail impor
 from jiuwenswarm.agents.harness.team.team_runtime_inheritance import (
     _build_context_processor_rail,
 )
+from jiuwenswarm.common.cron_session import is_cron_execution_session
 
 from jiuwenswarm.agents.swarm.context import SwarmBuildContext
 
@@ -78,6 +83,23 @@ PLUGIN_RAILS = "swarm.plugin_rails"
 SKILL_RETRIEVAL_PROMPT = "swarm.skill_retrieval_prompt"
 SYMPHONY_ORCHESTRATION_PROMPT = "swarm.symphony_orchestration_prompt"
 HEARTBEAT = "swarm.heartbeat"
+SESSION_MESSAGING_ROUTE = "swarm.session_messaging_route"
+
+
+@harness_element(
+    kind=ElementKind.RAIL,
+    name=SESSION_MESSAGING_ROUTE,
+    description="Leader-only invocation-scoped Session messaging route rail.",
+)
+def _build_session_messaging_route_rail(
+    params: dict[str, Any],
+    context: SwarmBuildContext,
+) -> SessionMessagingRouteRail | None:
+    """Mount Session messaging routing only on the Team leader."""
+    _ = params
+    if str(getattr(context, "role", "") or "") != "leader":
+        return None
+    return SessionMessagingRouteRail()
 
 
 @harness_element(
@@ -101,6 +123,30 @@ def _build_heartbeat_rail(
     if service is None or not session_id:
         return None
     metadata = dict(getattr(context, "request_metadata", None) or {})
+    # cron 执行会话不挂心跳工具（判定信号与 swarm.cron_tools / code_rails 的
+    # permission rail 对齐）：心跳任务绑定创建它的会话，从 cron 运行里再派生
+    # 心跳任务与"禁止 cron 派生 cron"同理，且随一次性 cron 会话回收无意义；
+    # 普通会话三个信号都不命中，心跳能力不受影响。
+    if (
+        metadata.get("cron")
+        or str(getattr(context, "channel_id", None) or "").strip() == "__cron__"
+        or is_cron_execution_session(session_id)
+    ):
+        logger.info(
+            "[swarm.heartbeat] skip HeartbeatRail for cron execution session %s",
+            session_id,
+        )
+        return None
+    # 小艺等渠道没有可用的主动投递路径（见 heartbeat_policy），不挂心跳工具，
+    # 否则成员会回答"心跳已创建"而结果永远送不到手机。
+    if not is_heartbeat_supported(getattr(context, "channel_id", None)):
+        logger.info(
+            "[swarm.heartbeat] skip HeartbeatRail for channel without heartbeat "
+            "support channel=%s session=%s",
+            getattr(context, "channel_id", None),
+            session_id,
+        )
+        return None
     tool_context = SimpleNamespace(
         channel_id=str(getattr(context, "channel_id", None) or "web"),
         session_id=session_id,
@@ -610,6 +656,7 @@ __all__ = [
     "SKILL_RETRIEVAL_PROMPT",
     "SYMPHONY_ORCHESTRATION_PROMPT",
     "HEARTBEAT",
+    "SESSION_MESSAGING_ROUTE",
     "TEAM_PERMISSION",
     "TEAM_PERMISSION_POLICY",
 ]

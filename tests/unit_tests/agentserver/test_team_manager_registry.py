@@ -22,6 +22,19 @@ from jiuwenswarm.agents.harness.team.team_manager import (
 )
 
 
+def test_default_team_spec_accessor_preserves_loader_result(monkeypatch):
+    spec = object()
+    sessions = []
+
+    def load(session_id):
+        sessions.append(session_id)
+        return spec
+
+    monkeypatch.setattr(TeamManager, "_load_team_spec", staticmethod(load))
+    assert TeamManager.load_default_team_spec("session") is spec
+    assert sessions == ["session"]
+
+
 class _TeamManagerHarness(TeamManager):
     def set_active_runtime_for_test(self, session_id: str, team_name: str) -> None:
         self.commit_runtime_ready(session_id, team_name)
@@ -870,6 +883,64 @@ async def test_prepare_session_switch_keeps_other_local_sessions_running(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "organization_id", "should_stop"),
+    [("local", "org-1", False), ("local", None, True), ("distributed", "org-1", True)],
+)
+async def test_session_switch_preserves_only_local_organization_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    organization_id: str | None,
+    should_stop: bool,
+) -> None:
+    monkeypatch.setattr(
+        "jiuwenswarm.agents.harness.team.team_manager.get_config",
+        lambda: {"team": {"runtime": {"mode": mode}}},
+    )
+    manager = _TeamManagerHarness()
+    backend = SimpleNamespace(org_task_manager=SimpleNamespace(organization_id=organization_id))
+    entry = SimpleNamespace(current_session_id="sess-owner", agent=SimpleNamespace(team_backend=backend))
+    pool = {"team-owner": entry}
+    monkeypatch.setattr(
+        "jiuwenswarm.agents.harness.team.team_manager._runner_team_runtime_manager",
+        lambda _runner: SimpleNamespace(pool=SimpleNamespace(get=AsyncMock(side_effect=pool.get))),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_find_paused_runner_team_name",
+        AsyncMock(side_effect=lambda session_id: "team-owner" if session_id == "sess-owner" else None),
+    )
+
+    async def stop_runtime(*_args):
+        pool.pop("team-owner")
+        return True
+
+    stop = AsyncMock(side_effect=stop_runtime)
+    cleanup = AsyncMock()
+    monkeypatch.setattr(manager, "_stop_runner_team_runtime", stop)
+    monkeypatch.setattr(manager, "_stop_runner_team_agent_transport", AsyncMock())
+    monkeypatch.setattr(manager, "_finalize_runtime_cleanup", cleanup)
+    monkeypatch.setattr(manager, "_dispatch_swarmflow_controller", AsyncMock())
+    monkeypatch.setattr(manager, "_stop_stale_distributed_sessions", AsyncMock())
+
+    await manager.prepare_session_switch("sess-other", previous_session_id="sess-owner")
+    await manager.prepare_session_switch("sess-owner", previous_session_id="sess-other")
+
+    if should_stop:
+        stop.assert_awaited_once()
+        cleanup.assert_awaited_once()
+        assert "team-owner" not in pool
+    else:
+        stop.assert_not_awaited()
+        cleanup.assert_not_awaited()
+        assert pool["team-owner"].agent.team_backend is backend
+
+        # Explicit shutdown still releases a parked organization Team.
+        assert await manager.stop_paused_session_runtime("sess-owner", offload=False)
+        stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_find_paused_runner_team_name_normalizes_session_and_team_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1238,7 +1309,7 @@ async def test_distributed_runtime_activations_switch_atomically(
 
 
 @pytest.mark.asyncio
-async def test_delete_session_runtime_deletes_single_team_session_team(
+async def legacy_delete_session_runtime_deletes_single_team_session_team(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager = _TeamManagerHarness()
@@ -1277,7 +1348,7 @@ async def test_delete_session_runtime_deletes_single_team_session_team(
 
 
 @pytest.mark.asyncio
-async def test_delete_session_runtime_uses_metadata_not_active_team_name(
+async def legacy_delete_session_runtime_uses_metadata_not_active_team_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager = _TeamManagerHarness()
@@ -1827,7 +1898,7 @@ async def test_stop_session_runtime_uses_metadata_team_name_for_non_active_sessi
 
 
 @pytest.mark.asyncio
-async def test_delete_session_runtime_uses_metadata_team_name(
+async def legacy_delete_session_runtime_uses_metadata_team_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager = _TeamManagerHarness()
@@ -1865,7 +1936,7 @@ async def test_delete_session_runtime_uses_metadata_team_name(
 
 
 @pytest.mark.asyncio
-async def test_delete_session_runtime_falls_back_to_release_without_team_name(
+async def legacy_delete_session_runtime_falls_back_to_release_without_team_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager = _TeamManagerHarness()
@@ -2323,3 +2394,97 @@ async def test_cleanup_drops_controller_on_stop_but_keeps_it_across_pause(monkey
 
     await tm._cleanup_runtime_locals("s")                             # stop/cancel path
     assert tm.get_background_task_controller("s") is not ctl
+
+@pytest.mark.asyncio
+async def test_permanent_delete_quiesce_closes_team_execution_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = TeamManager()
+    monkeypatch.setattr(manager, "_dispatch_swarmflow_controller", AsyncMock())
+    monkeypatch.setattr(manager, "_cleanup_runtime_locals", AsyncMock())
+    target = SimpleNamespace(descriptor=SimpleNamespace(session_id="deleting-session"))
+
+    await manager.quiesce_for_delete(target, reason="permanent-delete")
+
+    with pytest.raises(RuntimeError, match="permanently deleted"):
+        manager.begin_round("deleting-session", "request-1")
+    with pytest.raises(RuntimeError, match="permanently deleted"):
+        await manager.prepare_runtime_activation("deleting-session", "team-1")
+
+    manager.delete_aborted(target)
+    assert "deleting-session" not in manager._terminal_delete_sessions
+
+    await manager.quiesce_for_delete(target, reason="permanent-delete-retry")
+    manager.delete_committed(target)
+    assert "deleting-session" not in manager._terminal_delete_sessions
+
+
+@pytest.mark.asyncio
+async def test_team_running_window_follows_execution_not_round_or_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only executing members block, even if an old round still owns the stream."""
+    from jiuwenswarm.agents.harness.team import team_manager as team_manager_module
+    from openjiuwen.agent_teams.agent.member_activity import MemberActivityRegistry
+    from openjiuwen.agent_teams.schema.status import MemberStatus
+
+    manager = TeamManager()
+    monkeypatch.setattr(team_manager_module, "_team_manager", manager)
+    session_id = "sess-running"
+
+    assert not team_manager_module.is_team_session_running(session_id)
+
+    manager.begin_request(session_id, "request-1")
+    assert not team_manager_module.is_team_session_running(session_id)
+
+    manager.begin_round(session_id, "request-1")
+    assert not team_manager_module.is_team_session_running(session_id)
+
+    registry = MemberActivityRegistry("leader")
+    agent = SimpleNamespace(
+        is_agent_running=lambda: True,
+        _state=SimpleNamespace(member_registry=registry),
+    )
+    manager._runner_team_agents[session_id] = agent
+    assert team_manager_module.is_team_session_running(session_id)
+    agent.is_agent_running = lambda: False
+    registry.record("leader", MemberStatus.BUSY)  # lagging leader projection
+    assert not team_manager_module.is_team_session_running(session_id)
+    registry.record("peer", MemberStatus.BUSY)
+    assert team_manager_module.is_team_session_running(session_id)
+    registry.record("peer", MemberStatus.PAUSED)
+    assert not team_manager_module.is_team_session_running(session_id)
+
+    # 持久 stream 与常驻运行时在 round 结束后仍然存在，但不得继续算运行中。
+    manager.commit_runtime_ready(session_id, "team-1")
+    manager._stream_tasks[session_id] = SimpleNamespace()  # type: ignore[assignment]
+    await manager.release_round(session_id, "request-1")
+
+    assert not manager.is_round_active(session_id)
+    assert manager.has_stream_task(session_id)
+    assert manager.is_runtime_active(session_id)
+    assert not team_manager_module.is_team_session_running(session_id)
+
+    manager.begin_request(session_id, "request-2")
+    manager.end_request(session_id, "request-2")
+    assert not team_manager_module.is_team_session_running(session_id)
+
+
+@pytest.mark.parametrize("status", ["running", "waiting_for_human", "completed", "failed"])
+@pytest.mark.parametrize("live", [False, True])
+def test_team_running_checks_workflow_execution_only(monkeypatch, status, live):
+    from jiuwenswarm.agents.harness.team import team_manager as module
+
+    manager = TeamManager()
+    monkeypatch.setattr(module, "_team_manager", manager)
+    run = SimpleNamespace(
+        status="running",
+        phases=[SimpleNamespace(agents=[SimpleNamespace(status=status)])],
+    )
+    manager._workflow_handlers["sid"] = SimpleNamespace(get_run_states=lambda: {"wf": run})
+    manager._background_task_controllers["sid"] = SimpleNamespace(
+        _active={"wf": object()} if live else {},
+    )
+    assert module.is_team_session_running("sid") is (live and status == "running")
+    run.status = "paused"
+    assert not module.is_team_session_running("sid")

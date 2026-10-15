@@ -1,5 +1,3 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-
 /** Standalone trajectory toolbar dictionary. */
 
 export type TrajectoryKey =
@@ -37,15 +35,6 @@ export const en: Readonly<Record<TrajectoryKey, string>> = {
   'toolbar.collapseCalls': 'Collapse calls',
   'toolbar.search': 'Search trajectory',
   'toolbar.searchPlaceholder': 'Search',
-}
-
-export const zh: Readonly<Record<TrajectoryKey, string>> = {
-  ...en,
-  'toolbar.aria': '轨迹工具栏',
-  'toolbar.actualTime': '实际时间',
-  'toolbar.useTokenCost': '按 token 开销显示',
-  'toolbar.search': '搜索轨迹',
-  'toolbar.searchPlaceholder': '搜索',
 }
 
 /** Create a translator from a complete or partial dictionary. */

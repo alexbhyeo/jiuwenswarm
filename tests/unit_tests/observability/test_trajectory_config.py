@@ -27,8 +27,7 @@ def test_config_defaults_keep_legacy_installations_disabled(tmp_path: Path) -> N
         retention_days=7,
         queue_size=4096,
         batch_size=64,
-        flush_interval_ms=200,
-        poll_interval_ms=2000,
+        flush_interval_ms=500,
     )
     test_logger.info("legacy configs require the packaged explicit trajectory opt-in")
 
@@ -53,6 +52,25 @@ def test_config_resolves_relative_path_and_rejects_non_positive_limits(
     assert settings.queue_size == DEFAULT_QUEUE_SIZE
     assert settings.batch_size == 12
     test_logger.info("trajectory config normalized paths and unsafe limits")
+
+
+def test_discarding_ended_spans_frames_defaults_on_and_reads_loose_booleans(
+    tmp_path: Path,
+) -> None:
+    """Nothing reads the frames of an ended span, so they go by default.
+
+    A config predating the switch still discards them; keeping them is what a
+    frame-by-frame replay of a finished answer would ask for, explicitly.
+    """
+    default = load_trajectory_store_settings({}, workspace=tmp_path)
+    assert default.discard_final_span_frames is True
+
+    kept = load_trajectory_store_settings(
+        {"trajectory_ui": {"discard_final_span_frames": "off"}},
+        workspace=tmp_path,
+    )
+    assert kept.discard_final_span_frames is False
+    test_logger.info("frame discard defaults on and accepts the usual boolean spellings")
 
 
 def test_session_database_path_is_deterministic_and_traversal_safe(

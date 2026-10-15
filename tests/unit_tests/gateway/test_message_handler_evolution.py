@@ -346,11 +346,18 @@ async def _wait_for_pending_clear(
     handler: _TestMessageHandler,
     *,
     require_stream_request: bool = False,
+    require_queued_supplement: bool = False,
 ) -> None:
     for _ in range(20):
+        has_queued_supplement = any(
+            isinstance(getattr(request, "params", None), dict)
+            and "supplement_input" in request.params
+            for request in _FakeAgentClient.sent_stream_requests
+        )
         if (
             handler.pending_evolution_approval("sess-1") is None
             and (not require_stream_request or _FakeAgentClient.sent_stream_requests)
+            and (not require_queued_supplement or has_queued_supplement)
         ):
             return
         await asyncio.sleep(0.05)
@@ -485,6 +492,58 @@ def test_processing_status_is_only_emitted_for_chat_streams() -> None:
     assert handler.should_emit_processing_status_for_stream(
         _message(ReqMethod.HISTORY_GET)
     ) is False
+
+
+def test_attach_only_stream_does_not_emit_processing_status() -> None:
+    """An attach subscription must not raise or own the processing state."""
+    from jiuwenswarm.runtime.session.model import TEAM_ATTACH_ONLY_PARAM
+
+    handler = _TestMessageHandler.create()
+    attach_message = _message(ReqMethod.CHAT_SEND)
+    attach_message.params = {TEAM_ATTACH_ONLY_PARAM: True}
+
+    assert handler.should_emit_processing_status_for_stream(attach_message) is False
+
+
+@pytest.mark.asyncio
+async def test_attach_only_stream_does_not_block_processing_false() -> None:
+    """A terminal is_processing=false must pass while an attach stream is live."""
+    handler = _TestMessageHandler.create()
+    _FakeAgentClient.stream_payloads = [
+        {"event_type": "chat.delta", "request_id": "turn-1", "content": "hi"},
+        {
+            "event_type": "chat.processing_status",
+            "request_id": "turn-1",
+            "session_id": "sess-attach",
+            "is_processing": False,
+            "is_complete": True,
+        },
+    ]
+    # Seed an in-flight attach stream on the same session (emit=False).
+    getattr(handler, "_stream_emits_processing_status")["attach-1"] = False
+    getattr(handler, "_stream_methods")["attach-1"] = ReqMethod.CHAT_SEND.value
+    getattr(handler, "_stream_sessions")["attach-1"] = "sess-attach"
+    getattr(handler, "_stream_modes")["attach-1"] = "team.work.normal"
+    getattr(handler, "_stream_channels")["attach-1"] = "web"
+
+    await handler.process_stream(
+        SimpleNamespace(
+            request_id="turn-1",
+            channel="web",
+            method=ReqMethod.CHAT_SEND.value,
+            params={"query": "hi", "mode": "team.work.normal"},
+        ),
+        "sess-attach",
+        None,
+        emit_processing_status=True,
+    )
+
+    payloads = await _drain_robot_payloads_for_permission_resume(handler)
+    assert any(
+        p.get("event_type") == "chat.processing_status"
+        and p.get("is_processing") is False
+        for p in payloads
+    ), "attach stream must not block the terminal processing_status=false"
 
 
 
@@ -763,7 +822,11 @@ async def test_interrupt_evolution_approval_chat_send_cleans_pending_and_release
             )
         )
 
-        await _wait_for_pending_clear(handler, require_stream_request=True)
+        await _wait_for_pending_clear(
+            handler,
+            require_stream_request=True,
+            require_queued_supplement=True,
+        )
 
         _assert_evolution_state_cleared(handler)
         assert _FakeAgentClient.sent_requests == []
@@ -900,7 +963,11 @@ async def test_interrupt_evolution_approval_user_answer_is_dispatched_as_chat_se
             )
         )
 
-        await _wait_for_pending_clear(handler, require_stream_request=True)
+        await _wait_for_pending_clear(
+            handler,
+            require_stream_request=True,
+            require_queued_supplement=True,
+        )
 
         assert handler.pending_evolution_approval("sess-1") is None
         assert _FakeAgentClient.sent_requests == []
@@ -935,7 +1002,11 @@ async def test_stream_interrupt_evolution_approval_chat_send_cleans_pending() ->
             )
         )
 
-        await _wait_for_pending_clear(handler, require_stream_request=True)
+        await _wait_for_pending_clear(
+            handler,
+            require_stream_request=True,
+            require_queued_supplement=True,
+        )
 
         _assert_evolution_state_cleared(handler)
         assert _FakeAgentClient.sent_stream_requests[0].params["request_id"] == "call_123"
@@ -1073,9 +1144,13 @@ async def test_forward_loop_cancel_intent_uses_fire_and_forget(
 
 
 @pytest.mark.asyncio
-async def test_forward_loop_supplement_forwards_new_input_to_interrupt() -> None:
+@pytest.mark.parametrize("interrupt_success", [True, False])
+async def test_forward_loop_supplement_forwards_new_input_to_interrupt(monkeypatch, interrupt_success) -> None:
     """AgentServer needs the text marker to discard a superseded ask_user round."""
     handler = _TestMessageHandler.create()
+    monkeypatch.setattr(_FakeAgentClient, "response_payload", {
+        "event_type": "chat.interrupt_result", "success": interrupt_success,
+    })
     await handler.start_forwarding()
     try:
         supplement_msg = Message(

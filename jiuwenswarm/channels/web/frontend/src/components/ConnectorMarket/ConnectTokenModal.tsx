@@ -5,6 +5,7 @@ import { X, Loader2, ExternalLink } from 'lucide-react';
 import { useConnectorStore } from '../../stores/connectorStore';
 import type { ConnectorConnectResponse } from '../../types/connector';
 import { getSkillAvatar } from '../../utils/skillAvatar';
+import { Input } from '../ui/Input/Input';
 import { EntityAvatar } from './EntityAvatar';
 import logoIcon from '/logo.svg';
 
@@ -52,6 +53,14 @@ export function ConnectTokenModal({ name, displayName, iconUrl, response, onCanc
     }
   }
 
+  // 关闭弹窗（X）：如果 saveCredentialsAndConnect 的 connect 还在进行中（form B 探活等），
+  // 通知后端收尾成 cancelled，避免卡片一直 stuck 在 connecting 等 10 分钟超时。store 的
+  // cancelConnectAction 幂等且只在实际进行中时才回落 disconnected，已连好的 MCP 不会被误翻。
+  function handleClose() {
+    void useConnectorStore.getState().cancelConnectAction(name);
+    onCancel();
+  }
+
   // z-[10100]：这个弹窗可能从 ChatPanel/ExtensionPickerPanel.tsx 的"+"扩展面板里弹出，那个
   // 面板自身是 zIndex:9999 的 fixed 浮层，弹窗必须盖在它上面（2026-08-25 用户反馈：连接弹窗
   // 之前用 z-50，被扩展面板整个压在下面，弹窗形同虚设）。
@@ -66,7 +75,7 @@ export function ConnectTokenModal({ name, displayName, iconUrl, response, onCanc
   return createPortal(
     <div data-connector-auth-modal="true" data-testid="connector-market-token-modal" className="fixed inset-0 z-[10100] flex items-center justify-center bg-overlay-cron-dialog">
       <div className="relative w-[400px] rounded-2xl bg-card p-6 shadow-xl">
-        <button type="button" onClick={onCancel} className="absolute right-5 top-5 text-text-muted hover:text-text" data-testid="connector-market-token-modal-close">
+        <button type="button" onClick={handleClose} className="absolute right-5 top-5 text-text-muted hover:text-text" data-testid="connector-market-token-modal-close">
           <X size={18} />
         </button>
 
@@ -99,14 +108,13 @@ export function ConnectTokenModal({ name, displayName, iconUrl, response, onCanc
           return (
             <div key={key} className="mb-4">
               <label className="mb-1.5 block text-[13px] font-medium text-text">{field?.label ?? key}</label>
-              <input
+              <Input
                 type={field?.type === 'password' ? 'password' : 'text'}
                 name={`connector-token-${key}`}
                 autoComplete={field?.type === 'password' ? 'new-password' : 'off'}
                 value={tokens[key] ?? ''}
-                onChange={(event) => setTokens((prev) => ({ ...prev, [key]: event.target.value }))}
+                onChange={(next) => setTokens((prev) => ({ ...prev, [key]: next }))}
                 placeholder={field?.placeholder ?? t('connectorMarket.tokenModal.placeholder', { name: displayName })}
-                className="h-9 w-full rounded-lg border border-border bg-bg px-3 text-[13px] text-text outline-none placeholder:text-[color:var(--color-text-placeholder)] focus:border-border-hover"
                 data-testid="connector-market-token-modal-field"
                 data-variant={key}
               />

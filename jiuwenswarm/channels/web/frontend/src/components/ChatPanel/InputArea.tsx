@@ -20,7 +20,7 @@
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { AtSign, ChevronRight, CircleX, Loader2, Mic, Plus, Settings, Square, Workflow, X } from 'lucide-react';
+import { AtSign, ChevronRight, CircleX, Loader2, Lock, Mic, Pencil, Plus, Settings, Square, Workflow, X } from 'lucide-react';
 
 // import { stopAllTts } from '../../utils';
 import {
@@ -31,39 +31,61 @@ import {
   useWorkspaceStore,
   usePersonalContextStore,
 } from '../../stores';
+import { seedAgentCatalog, useAgentCatalogStore } from '../../stores/agentCatalogStore';
+import { getSelectedAgentGroup } from '../../stores/agentGroupCatalogSeed';
 import { supportsPlanMode } from '../../features/planMode/wireMode';
 import { applyPlanToggle, evaluatePlanToggle } from '../../features/planMode/planModeGate';
+import { applyGoalArm, evaluateGoalArm } from '../../features/goalMode/goalModeGate';
 import { queueOrAddGoalObjectiveMessage } from '../../features/goalPendingObjectiveBubble';
+import { OverwriteGoalConfirmModal } from '../GoalBar/OverwriteGoalConfirmModal';
 import { AgentMode, MediaItem, Permission, type ProjectInfo } from '../../types';
 import { NEW_CONVERSATION_ID } from '../../multi-session/state/newConversationLifecycle';
 import { ProjectCreateMenu, type ProjectCreateMode } from '../../multi-session/sidebar/ProjectCreateMenu';
 import { projectCreateErrorKey } from '../../multi-session/sidebar/projectCreateErrors';
 import { AGENT_MODE_OPTIONS, PERMISSION_OPTIONS } from '../../config/chatConfig';
+import { effectivePermissionProfile, permissionOptionsForMode } from '../../config/permissionProfiles';
 import clsx from 'clsx';
 import { PermissionWarningDialog } from './PermissionWarningDialog';
 import ChatModelSelector from './ChatModelSelector';
 import { FileIcon } from '../FileIcon';
 import { getEvolutionPillLabel } from './evolution-status';
 import { webRequest } from '../../services/webClient';
+import { selectSessionAssets, useSessionAssetsStore } from '../../features/sessionAssets/sessionAssets';
+import {
+  assetKindFromMime,
+  findReferencedAssets,
+  normalizePath,
+  samePath,
+  stemFilename,
+  validateAssetName,
+} from '../../features/sessionAssets/assetReferences';
+import { useSessionArtifacts } from '../ArtifactsPanel';
+import { WorktreeProjectGuide } from './WorktreeProjectGuide';
 import {
   parseSlashLine,
+  parseGoalSlashArgs,
   findSlashCommand,
+  type GoalSlashAction,
+  type GoalSlashSnapshot,
   type SlashCommand,
   type SlashCommandContext,
 } from './slashCommands/registry';
 import {
+  canUseSlashCommand,
   getWebSlashCommandsForMode,
   hasUnfinishedGoal as isUnfinishedGoal,
   isSlashCommandDisabledByGoal,
+  resolveSlashCommandDescription,
   shouldExecuteRegisteredSlashCommand,
-  supportsWebSlashCommands,
 } from './slashCommands/semantics';
 import { withUploadDocumentBlock } from '../../utils/documentMessage';
+import { planUnsentImageDiscard, type UnsentImageDraft } from './unsentImageDiscard';
 import { ExtensionPickerPanel } from './ExtensionPickerPanel';
 import { SkillPickerPanel } from './SkillPickerPanel';
 import { PickerPanel } from './PickerPanel';
+import { PickerSearchInput } from './PickerSearchInput';
 import { Switch } from '../Switch';
-import { Input, Tabs } from '../ui';
+import { Input } from '../ui';
 import { Select } from '../ui/Select/Select';
 import { ExtensionIcon } from '../ConnectorMarket/icons';
 import {
@@ -82,17 +104,24 @@ import { useDesktopLocalFilePickerReady } from '../../hooks';
 import { useAdaptiveTooltip } from '../../hooks/useAdaptiveTooltip';
 import { getInputProjectOptions, isDefaultInputProject } from './projectSelection';
 import {
+  canRetryAttachmentDraft,
+  DESKTOP_CLIPBOARD_IMAGES_EVENT,
   getClipboardImageFiles,
+  inspectClipboardImageFiles,
   IMAGE_INPUT_DISABLED_ALERT_KEY,
   isImageInputDisabled,
+  resolveImageMimeType,
   shouldAlertImagePasteDisabled,
+  type DesktopClipboardImagesEventDetail,
 } from './clipboardImagePaste';
 import AgentPickerIcon from '../../assets/agent-management/智能体选择.svg?react';
 import AttachmentIcon from '../../assets/agent-management/attachment.svg?react';
 import GoalIcon from '../../assets/agent-management/goal.svg?react';
 import PlanIcon from '../../assets/agent-management/planned-events.svg?react';
-import SearchIcon from '../../assets/agent-management/agent-search.svg?react';
 import SkillIcon from '../../assets/agent-management/agent-skill.svg?react';
+import CommandIcon from '../../assets/chat/command.svg?react';
+import closeSvg from '../../assets/work-mode/close.svg?raw';
+import { insertPlainText } from '../../utils/textEditCommands';
 
 // 个人上下文图标——文档/知识库隐喻，与 SessionSidebar 的 personalContextNavIcon 同源内联 SVG。
 function PersonalContextIcon(props: SVGProps<SVGSVGElement>) {
@@ -116,10 +145,26 @@ function PersonalContextIcon(props: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+import { TeamSelector } from './TeamSelector';
+import { resolveOrganizationTeamIdentity } from '../../features/teamOrganization/teamIdentity';
+import { useTeamSelectorStore } from '../../stores/teamSelectorStore';
+import { useTeamOrganizationUiEnabled } from '../../features/teamOrganization/featureConfig';
 
 const MENU_GAP = 10;
 /** 智能体选择列表单行高度（与 ChatPanel.css 的 .chat-agent-picker__item min-height 一致） */
 const AGENT_PICKER_ROW_HEIGHT = 40;
+const GROUP_PICKER_ROW_HEIGHT = 40;
+
+/**
+ * 专家选择 id 既可能是目录项 id（chat 面板 picker 路径），也可能是 runtimePackageName
+ * （AgentManagementPanel"使用/快捷输入"路径，见 AgentManagementPanel/index.tsx 的
+ * onUseAgent 与 DefinitionDetailPage 的 onUsePrompt）。两条入口必须等价——否则从详情页
+ * 跳转后，下面按 id 查找的守卫会把刚选上的专家 tag 立刻清掉。后端
+ * resolve_equipment_runtime_id 对两种标识都能解析，wire 层不受影响。
+ */
+function isSameAgentOption(item: AgentCatalogItem, selectedId: string | null): boolean {
+  return selectedId !== null && (item.id === selectedId || item.runtimePackageName === selectedId);
+}
 
 function resolveMenuDirection(anchorBottom: number, menuHeight: number) {
   const spaceBelow = window.innerHeight - anchorBottom - MENU_GAP;
@@ -132,10 +177,20 @@ import { TeamMemberAvatar } from '../TeamMemberAvatar';
 import { CodeBranchSelector } from '../../features/code-mode/CodeBranchSelector';
 import { generateUuidV4 } from '../../utils/uuid';
 import { buildInstalledSkillNames, filterEnabledMySkills } from '../../utils/mySkills';
-import { createAgentManagementClient, getAgentAvatarUrl, type AgentCatalogItem } from '../../features/agentManagement';
+import {
+  createAgentManagementClient,
+  createAgentGroupManagementClient,
+  getAgentAvatarUrl,
+  isAgentGroupSelected,
+  isExternalHarnessCatalogItem,
+  type AgentCatalogItem,
+  type AgentGroupCatalogItem,
+  type AgentGroupIdentity,
+} from '../../features/agentManagement';
 import { ContextUsageIndicator } from './ContextUsageIndicator';
 import { isImeCompositionKey } from './imeComposition';
 import { useTaskAsr } from '../../features/taskAsr/useTaskAsr';
+import { useTaskAsrEnabled } from '../../features/taskAsr/featureFlag';
 import { ApplicationPluginTaskInputActions } from '../../applicationPlugins/ApplicationPluginOutlet';
 
 /** 输入栏下拉所需的最小技能数据结构（与 SkillPanel 中的 SkillItem 保持一致） */
@@ -150,12 +205,13 @@ type InputAreaSkillItem = {
   enabled?: boolean;
   installed?: boolean;
   tags?: string[];
-  skill_type?: 'skill' | 'swarm_skill' | 'multimodal_skill';
+  skill_type?: 'skill' | 'skillpack' | 'swarm_skill' | 'multimodal_skill';
 };
 
 type SlashCommandMeta = {
   name: string;
   description: string;
+  description_i18n?: Record<string, string>;
   usage?: string;
   takesArgs?: boolean;
   execution?: string;
@@ -195,10 +251,16 @@ type ComposerSuggestionItem = {
   label: string;
   status?: string;
   description?: string;
-  itemKind?: 'command' | 'skill';
+  itemKind?: 'command' | 'skill' | 'asset';
   takesArgs?: boolean;
   disabled?: boolean;
   disabledReason?: string;
+  /** 素材候选项的真实缩略图（本地 blob URL）；没有时列表退回按文件类型显示通用图标，
+   *  不再借团队成员那套"按 id 生成"的头像（那套头像和上传的文件内容毫无关系）。 */
+  previewUrl?: string;
+  /** 素材在磁盘上的绝对路径。图标兜底时要用它判类型：素材名常常没有扩展名
+   *  （如 `serum`、`Scene1_Shot1-1_OS10s`），只看名字会退回"未知类型"的灰色问号图标。 */
+  assetPath?: string;
 };
 
 function getComposerSuggestionItems(
@@ -222,7 +284,10 @@ function getComposerSuggestionItems(
       }));
     const skills = slashSkills
       .filter((skill) =>
-        isTeamMode ? skill.skill_type === 'swarm_skill' : !skill.skill_type || skill.skill_type === 'skill',
+        // 单 agent：普通 skill + skillpack（技能包可当普通技能选用）；集群：swarm_skill。
+        isTeamMode
+          ? skill.skill_type === 'swarm_skill'
+          : !skill.skill_type || skill.skill_type === 'skill' || skill.skill_type === 'skillpack',
       )
       .filter((skill) => {
         if (!query) return true;
@@ -264,10 +329,13 @@ function isDefaultProject(project: ProjectInfo): boolean {
 interface InputAreaProps {
   onSubmit: (content: string, mediaItems?: MediaItem[]) => void;
   onEnsureSession: (initialTitle?: string) => Promise<string | null>;
+  onForkSession: (sourceSessionId: string) => Promise<void>;
   /** Signals that the user is editing an existing real Session. */
   onInputIntent?: (sessionId: string) => void;
   onPersistMedia: (content: string, mediaItems: MediaItem[]) => Promise<PersistMediaResponse>;
   onPersistDocuments: (content: string, mediaItems: MediaItem[]) => Promise<PersistMediaResponse>;
+  /** Delete an unsent image copy under the session uploads directory. */
+  onDiscardMedia?: (sessionId: string, path: string) => Promise<unknown>;
   onInterrupt: (newInput?: string) => void;
   onCancel: () => void;
   onSwitchMode: (mode: AgentMode) => void;
@@ -275,14 +343,19 @@ interface InputAreaProps {
   autoFocusKey?: string | null;
   /** 跳转到技能管理页 */
   onNavigateToSkills?: () => void;
-  /** 跳转到智能体管理页 */
-  onNavigateToAgents?: () => void;
-  permissionsEnabled: boolean;
+  /** 跳转到专家管理页，可指定“我的专家”下的资产类型 */
+  onNavigateToAgents?: (target?: 'agent' | 'group') => void;
+  /** Keeps the selected Expert Team identity available to the conversation surface. */
+  onAgentGroupIdentityChange?: (identity: AgentGroupIdentity | null) => void;
+  permissionProfile: Permission;
   onSavePermission: (updates: Record<string, string>) => Promise<void>;
   /** 目标待设置态（"+"菜单选了「目标」）下发送时调用，取代普通 onSubmit/排队逻辑 */
-  onSetGoal?: (sessionId: string, objective: string) => void;
+  onSetGoal?: (sessionId: string, objective: string) => void | Promise<void>;
+  onPauseGoal?: (sessionId: string) => void | Promise<void>;
+  onResumeGoal?: (sessionId: string) => void | Promise<void>;
+  onRefreshGoal?: (sessionId: string) => void | Promise<void>;
   /** 工具栏"目标"标签的 × 按钮：目标已存在时点击等同删除目标 */
-  onClearGoal?: (sessionId: string) => void;
+  onClearGoal?: (sessionId: string) => void | Promise<void>;
   /**
    * 目标 active 时消息按设计走排队（见下方 isGoalActive 注释），但如果入队那一刻当前没有
    * 任何任务在处理，现有的自动排空触发点（chat.processing_status/interrupt_result）都要求
@@ -427,7 +500,16 @@ interface AttachmentDraft {
   file?: File;
   /** Absolute local path from desktop native picker (WebView2 has no File.path). */
   localPath?: string;
+  /** 用户在卡片上给这个文件起的素材名（之后可用 @名称 引用）；没改过就用文件名。 */
+  assetName?: string;
 }
+
+// ChatPanel/InputArea is unmounted when navigating between some conversation
+// surfaces (notably an existing session and the new-conversation page). Keep
+// unsent attachment drafts at module scope so that navigation does not discard
+// a session's composer state. The persisted image itself already lives under
+// that session's uploads directory; this map preserves only the pending UI draft.
+const attachmentDraftsBySession = new Map<string, AttachmentDraft[]>();
 
 interface AttachmentAlert {
   id: string;
@@ -469,9 +551,21 @@ function attachmentToMediaItem(attachment: AttachmentDraft): MediaItem {
     mimeType,
     mime_type: mimeType,
     filename,
+    // 卡片上重命名过的话，历史消息里的这张卡片也要显示新名字，而不是落盘时用的存储文件名
+    // （大图走 HTTP bridge 落盘后，文件名是服务端生成的随机 id，和用户看到的完全对不上）。
+    ...(attachment.assetName ? { displayName: attachment.assetName } : {}),
     ...(path ? { path } : { base64Data: attachment.base64Data }),
     sizeBytes,
     size_bytes: sizeBytes,
+  };
+}
+
+function toUnsentImageDraft(draft: AttachmentDraft): UnsentImageDraft {
+  return {
+    id: draft.id,
+    kind: draft.kind,
+    status: draft.status,
+    persistedPath: pickString(draft.persistedMediaItem?.path),
   };
 }
 
@@ -541,10 +635,10 @@ function getImageValidationError(file: File, t: TFunction): string | null {
   if (!isImageFile(file)) {
     return t('chat.inputAttachment.unsupportedFileType', { name: file.name || t('chat.inputAttachment.unnamedFile') });
   }
-  if (file.size > MAX_FILE_BYTES) {
+  if (file.size > MAX_IMAGE_BYTES) {
     return t('chat.inputAttachment.fileSizeExceeded', {
       name: file.name || t('chat.inputAttachment.unnamedFile'),
-      limit: formatAttachmentSize(MAX_FILE_BYTES),
+      limit: formatAttachmentSize(MAX_IMAGE_BYTES),
     });
   }
   return null;
@@ -561,7 +655,7 @@ function getDocumentValidationError(
   options?: { filename?: string; localPath?: string },
 ): string | null {
   const filename = options?.filename || file?.name || t('chat.inputAttachment.unnamedFile');
-  if (file && file.size > MAX_FILE_BYTES) {
+  if (file && !getLocalFilePath(file, options?.localPath) && file.size > MAX_FILE_BYTES) {
     return t('chat.inputAttachment.fileSizeExceeded', { name: filename, limit: formatAttachmentSize(MAX_FILE_BYTES) });
   }
   if (file && isForbiddenDocumentFile(file)) {
@@ -570,7 +664,9 @@ function getDocumentValidationError(
   if (file && !isDocumentFile(file)) {
     return t('chat.inputAttachment.unsupportedFileType', { name: filename });
   }
-  if (!getLocalFilePath(file, options?.localPath)) {
+  // 桌面端依赖本机绝对路径；浏览器端（Docker/远程，无服务器侧路径）由 base64 内容上传，
+  // 因此没有本地路径时只要携带浏览器 File 即视为可上传。
+  if (!getLocalFilePath(file, options?.localPath) && !file) {
     return t('chat.inputAttachment.localPathUnavailable', { name: filename });
   }
   return null;
@@ -625,9 +721,11 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
   {
     onSubmit,
     onEnsureSession,
+    onForkSession,
     onInputIntent,
     onPersistMedia,
     onPersistDocuments,
+    onDiscardMedia,
     onInterrupt,
     onCancel,
     onSwitchMode,
@@ -635,17 +733,24 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     autoFocusKey = null,
     onNavigateToSkills,
     onNavigateToAgents,
-    permissionsEnabled,
+    onAgentGroupIdentityChange,
+    permissionProfile,
     onSavePermission,
     onSetGoal,
+    onPauseGoal,
+    onResumeGoal,
+    onRefreshGoal,
     onClearGoal,
     onDrainTaskQueueIfIdle,
   },
   ref,
 ) {
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
   const [speechError, setSpeechError] = useState('');
   const [isModeMenuOpen, setIsModeMenuOpen] = useState(false);
-  const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
+  const [attachments, setAttachments] = useState<AttachmentDraft[]>(() =>
+    activeSessionId ? (attachmentDraftsBySession.get(activeSessionId) ?? []) : [],
+  );
   const [attachmentAlerts, setAttachmentAlerts] = useState<AttachmentAlert[]>([]);
   const attachmentAlertTimersRef = useRef<Map<string, number>>(new Map());
   const [attachmentMenuId, setAttachmentMenuId] = useState<string | null>(null);
@@ -660,20 +765,62 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
   const [projectCreateMode, setProjectCreateMode] = useState<ProjectCreateMode>('blank');
   const [menuDirection, setMenuDirection] = useState<'up' | 'down'>('up');
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  const [externalAgentSwitchNotice, setExternalAgentSwitchNotice] = useState<string | null>(null);
   const [agentPickerQuery, setAgentPickerQuery] = useState('');
+  const [pickerTab, setPickerTab] = useState<'agent' | 'group'>('agent');
   const { tooltip: agentTooltipNode, handlers: agentTooltipHandlers } = useAdaptiveTooltip({ offsetX: -50 });
-  const { tooltip: attachTooltipNode, handlers: attachTooltipHandlers } = useAdaptiveTooltip();
+  const { tooltip: attachTooltipNode, handlers: attachTooltipHandlers } = useAdaptiveTooltip({ placement: 'top' });
+  const { tooltip: uploadLimitsTooltipNode, handlers: uploadLimitsTooltipHandlers } = useAdaptiveTooltip({
+    placement: 'right',
+    multiline: true,
+  });
+  const { tooltip: micTooltipNode, handlers: micTooltipHandlers } = useAdaptiveTooltip();
+  const { tooltip: sendTooltipNode, handlers: sendTooltipHandlers } = useAdaptiveTooltip();
+  const { tooltip: workClearTooltipNode, handlers: workClearTooltipHandlers } = useAdaptiveTooltip({
+    placement: 'top',
+  });
+  const workTriggerRef = useRef<HTMLButtonElement>(null);
+  const { tooltip: workTriggerTooltipNode, handlers: workTriggerTooltipHandlers } = useAdaptiveTooltip({
+    placement: 'top',
+  });
   const [hoveredOptionDesc, setHoveredOptionDesc] = useState<string | null>(null);
   const [hoveredOptionRect, setHoveredOptionRect] = useState<DOMRect | null>(null);
-  const [agentOptions, setAgentOptions] = useState<AgentCatalogItem[]>([]);
+  // 初始值从共享目录缓存播种：详情页"使用/快捷输入"跳转过来时，tag 首帧就能解析出
+  // displayName/头像，而不是先显示原始 runtimePackageName、等目录请求回来再跳变。
+  const [agentOptions, setAgentOptions] = useState<AgentCatalogItem[]>(
+    () => useAgentCatalogStore.getState().catalog ?? [],
+  );
   const [agentOptionsStatus, setAgentOptionsStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const agentManagementClient = useMemo(() => createAgentManagementClient(), []);
+  const [groupOptions, setGroupOptions] = useState<AgentGroupCatalogItem[]>(
+    () => [getSelectedAgentGroup()].filter((group): group is AgentGroupCatalogItem => group !== null),
+  );
+  const [groupOptionsStatus, setGroupOptionsStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [failedGroupAvatarIds, setFailedGroupAvatarIds] = useState<ReadonlySet<string>>(() => new Set());
+  const groupManagementClient = useMemo(() => createAgentGroupManagementClient(), []);
 
   useEffect(() => {
     if (!projectDirError || workDialogOpen) return;
     const timeoutId = window.setTimeout(() => setProjectDirError(null), 3000);
     return () => window.clearTimeout(timeoutId);
   }, [projectDirError, workDialogOpen]);
+
+  // bugfix 2026092201 bug001 子问题 1：覆盖已有目标时改用自定义弹窗（OverwriteGoalConfirmModal）
+  // 取代 window.confirm。confirmGoalOverwrite 把参数存进这个 state、返回一个等按钮点击才
+  // resolve 的 Promise；两处需要"确认覆盖"的调用点（handleSubmit 整行提交 / 建议菜单选中后
+  // 立即执行）都改用同一个 useCallback，不再各自内联 window.confirm。
+  const [goalOverwriteRequest, setGoalOverwriteRequest] = useState<{
+    currentObjective: string;
+    requestedObjective: string;
+    resolve: (confirmed: boolean) => void;
+  } | null>(null);
+  const confirmGoalOverwrite = useCallback(
+    (currentObjective: string, requestedObjective: string) =>
+      new Promise<boolean>((resolve) => {
+        setGoalOverwriteRequest({ currentObjective, requestedObjective, resolve });
+      }),
+    [],
+  );
 
   const [composerSuggestion, setComposerSuggestion] = useState<ComposerSuggestionState | null>(null);
   const [composerSuggestionIndex, setComposerSuggestionIndex] = useState(0);
@@ -716,8 +863,10 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
   const attachmentMenuTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attachmentMenuOpenedByLongPressRef = useRef(false);
   const isComposingRef = useRef(false);
-  const { t } = useTranslation();
-  const activeSessionId = useChatStore((s) => s.activeSessionId);
+  const { t, i18n } = useTranslation();
+  const agentGroupUnavailable = useChatStore(
+    (s) => s.runtimes[activeSessionId ?? '']?.agentGroupUnavailable ?? false,
+  );
   const hasPendingQuestion = useChatStore((s) => Boolean(s.runtimes[activeSessionId ?? '']?.pendingQuestions[0]));
   const isCompactRunning = Boolean(activeSessionId && compactingSessionIds.has(activeSessionId));
   // 并行场景：一个 agent 等人工、其它 agent 还在跑时开放输入以便 supplement，故要
@@ -726,7 +875,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     const runs = s.runtimes[activeSessionId ?? '']?.workflowRuns ?? [];
     return runs.some((run) => run.phases?.some((phase) => phase.agents?.some((agent) => agent.status === 'running')));
   });
-  const composerDisabled = isCompactRunning || (hasPendingQuestion && !hasRunningAgent);
+  const composerDisabled = agentGroupUnavailable || isCompactRunning || (hasPendingQuestion && !hasRunningAgent);
   const selectedAgentId = useSessionStore((s) => {
     const runtime = s.runtimes[activeSessionId ?? ''];
     if (runtime?.mode !== 'agent') return null;
@@ -734,7 +883,10 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     return intent?.kind === 'select' ? intent.id : null;
   });
   const setAgentSelectionIntent = useSessionStore((s) => s.setAgentSelectionIntent);
-  const selectedAgent = agentOptions.find((item) => item.id === selectedAgentId) ?? null;
+  const setAgentGroupSelectionIntent = useSessionStore((s) => s.setAgentGroupSelectionIntent);
+  const clearAgentGroupSelectionIntent = useSessionStore((s) => s.clearAgentGroupSelectionIntent);
+  const clearSelectedSkills = useSessionStore((s) => s.clearSelectedSkills);
+  const selectedAgent = agentOptions.find((item) => isSameAgentOption(item, selectedAgentId)) ?? null;
   const installedAgentOptions = useMemo(
     () =>
       agentOptions.filter((item) => item.installed && item.connectionState === 'connected' && item.enabled !== false),
@@ -747,20 +899,73 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       `${item.displayName} ${item.description} ${item.category}`.toLocaleLowerCase().includes(query),
     );
   }, [agentPickerQuery, installedAgentOptions]);
+  const selectedGroupId = useSessionStore((s) => {
+    const runtime = s.runtimes[activeSessionId ?? ''];
+    if (runtime?.mode !== 'team') return null;
+    if (runtime.agentGroupBinding?.trim()) return runtime.agentGroupBinding.trim();
+    if (activeSessionId !== NEW_CONVERSATION_ID && !runtime.agentGroupBindingPending?.trim()) return null;
+    const intent = runtime.agentGroupSelectionIntent;
+    return intent?.kind === 'select' ? intent.id : null;
+  });
+  const organizationUiEnabled = useTeamOrganizationUiEnabled();
+  const organizationTeam = useTeamSelectorStore((s) => {
+    if (!organizationUiEnabled || !activeSessionId) return undefined;
+    const runtime = s.runtimes[activeSessionId];
+    return runtime?.teams.find((team) => team.team_id === runtime.selectedTeamId && team.organization_id);
+  });
+  const agentGroupBinding = useSessionStore((s) => s.runtimes[activeSessionId ?? '']?.agentGroupBinding ?? null);
+  const agentGroupBindingPending = useSessionStore(
+    (s) => s.runtimes[activeSessionId ?? '']?.agentGroupBindingPending ?? null,
+  );
+  const agentGroupLocked = Boolean(agentGroupBinding || agentGroupBindingPending);
+  const selectedGroup = groupOptions.find((item) => item.name === selectedGroupId || item.id === selectedGroupId) ?? null;
+  const displayedGroupId = organizationTeam ? organizationTeam.agent_group_name?.trim() || null : selectedGroupId;
+  const displayedGroup = useMemo(
+    () => (organizationTeam ? resolveOrganizationTeamIdentity(organizationTeam, groupOptions) : selectedGroup),
+    [organizationTeam, groupOptions, selectedGroup],
+  );
+  const organizationGroupCatalogNeeded = Boolean(organizationTeam?.agent_group_name);
+  const installedGroupOptions = useMemo(
+    () => groupOptions.filter((item) => item.installed && item.capabilities.canUse),
+    [groupOptions],
+  );
+  const filteredGroupOptions = useMemo(() => {
+    const query = agentPickerQuery.trim().toLocaleLowerCase();
+    if (!query) return installedGroupOptions;
+    return installedGroupOptions.filter((item) =>
+      `${item.displayName} ${item.description} ${item.category} ${item.tags.map((tag) => tag.label).join(' ')}`
+        .toLocaleLowerCase()
+        .includes(query),
+    );
+  }, [agentPickerQuery, installedGroupOptions]);
 
   useEffect(() => {
-    if (!activeSessionId || (!agentPickerOpen && !selectedAgentId)) return;
+    if (!onAgentGroupIdentityChange) return;
+    onAgentGroupIdentityChange(displayedGroupId && displayedGroup ? displayedGroup : null);
+  }, [onAgentGroupIdentityChange, displayedGroup, displayedGroupId]);
+
+  useEffect(() => {
+    if (!activeSessionId || (pickerTab !== 'agent' && !selectedAgentId) || (!agentPickerOpen && !selectedAgentId))
+      return;
     let cancelled = false;
     setAgentOptionsStatus('loading');
     void agentManagementClient
-      .listCatalog()
+      .listCatalog({ filter: 'mine' })
       .then((items) => {
         if (cancelled) return;
-        const selectedItem = selectedAgentId ? items.find((item) => item.id === selectedAgentId) : null;
-        if (selectedItem?.enabled === false || selectedItem?.connectionState !== 'connected') {
+        const selectedItem = selectedAgentId ? items.find((item) => isSameAgentOption(item, selectedAgentId)) : null;
+        // 'connecting' 是连接器建立中的瞬态，随后大概率回到 'connected'；用它清空选择
+        // 会造成刚选上的专家 tag 过一会儿自己消失。filter:'mine' 下已选专家可能不在
+        // 列表内，查不到时保留选择；仅在明确禁用或已断连（含连接失败）时清。
+        if (
+          selectedItem &&
+          (selectedItem.enabled === false ||
+            (selectedItem.connectionState !== 'connected' && selectedItem.connectionState !== 'connecting'))
+        ) {
           setAgentSelectionIntent(activeSessionId, { kind: 'clear' });
         }
         setAgentOptions(items);
+        seedAgentCatalog(items);
         setAgentOptionsStatus('success');
       })
       .catch(() => {
@@ -769,12 +974,37 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     return () => {
       cancelled = true;
     };
-  }, [activeSessionId, agentManagementClient, agentPickerOpen, selectedAgentId]);
+  }, [activeSessionId, agentManagementClient, agentPickerOpen, pickerTab, selectedAgentId]);
+
+  useEffect(() => {
+    if (
+      !activeSessionId ||
+      (!agentPickerOpen && !selectedGroupId && !organizationGroupCatalogNeeded) ||
+      (pickerTab !== 'group' && !selectedGroupId && !organizationGroupCatalogNeeded)
+    )
+      return;
+    let cancelled = false;
+    setGroupOptionsStatus('loading');
+    void groupManagementClient
+      .listGroups({ filter: 'local' })
+      .then((items) => {
+        if (cancelled) return;
+        setGroupOptions(items);
+        setGroupOptionsStatus('success');
+      })
+      .catch(() => {
+        if (!cancelled) setGroupOptionsStatus('error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId, agentPickerOpen, groupManagementClient, pickerTab, selectedGroupId, organizationGroupCatalogNeeded]);
 
   useEffect(() => {
     if (attachMenuOpen) return;
     setAgentPickerOpen(false);
     setAgentPickerQuery('');
+    setPickerTab('agent');
   }, [attachMenuOpen]);
   const isPaused = useChatStore((s) => s.runtimes[activeSessionId ?? '']?.isPaused ?? false);
   const queuePaused = useChatStore((s) => s.runtimes[activeSessionId ?? '']?.queuePaused ?? false);
@@ -796,6 +1026,15 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
   const { workMode, projects, selectedProject, setSelectedProject, createProject } = useWorkspaceStore();
   const loadedMsgLen = useChatStore((s) => s.runtimes[activeSessionId ?? '']?.messages?.length ?? 0);
   const hasHistory = (currentSession?.message_count ?? 0) > 0 || loadedMsgLen > 0;
+  const externalAgentSwitchBlocked = Boolean(
+    activeSessionId && activeSessionId !== NEW_CONVERSATION_ID && hasHistory,
+  );
+
+  useEffect(() => {
+    if (!externalAgentSwitchNotice) return;
+    const timer = window.setTimeout(() => setExternalAgentSwitchNotice(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [externalAgentSwitchNotice]);
   const goalArmed = useGoalStore((s) => s.runtimes[activeSessionId ?? '']?.armed ?? false);
   const currentGoal = useGoalStore((s) => s.runtimes[activeSessionId ?? '']?.goal ?? null);
   // 目标 active 时普通发送改走排队，而不是文档 §5.1 原定的 input_mode:'steer' 实时插话——
@@ -808,32 +1047,42 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
   const isAgentMode = mode === 'agent';
   const isTeamMode = mode === 'team';
   const isAutoHarnessMode = mode === 'auto_harness';
+  const existingTeamGroupSelectionDisabled = Boolean(
+    isTeamMode && activeSessionId !== NEW_CONVERSATION_ID && !agentGroupBinding && !agentGroupBindingPending,
+  );
+  const agentGroupPickerLocked = agentGroupLocked || existingTeamGroupSelectionDisabled;
+  const teamGroupSelectionActive = isTeamMode && Boolean(selectedGroupId);
+  const teamSkillSelectionActive = isTeamMode && selectedSkills.length > 0;
+  const agentSelectionDisabled = isTeamMode;
+  const agentGroupSelectionDisabled = isAgentMode || agentGroupPickerLocked || teamSkillSelectionActive;
 
   useEffect(() => {
-    if (!isTeamMode) return;
+    if (!isTeamMode && !isAgentMode) return;
     setAgentPickerOpen(false);
     setAgentPickerQuery('');
-  }, [isTeamMode]);
+    setPickerTab(isTeamMode ? 'group' : 'agent');
+  }, [isAgentMode, isTeamMode]);
 
   const isWorkContextLocked = Boolean(activeSessionId && activeSessionId !== NEW_CONVERSATION_ID);
   const showWorkContextRow = activeSessionId === NEW_CONVERSATION_ID;
   /** Goal 入口是否适用于当前上下文（agent 模式 + 已接入 onSetGoal，如欢迎页新会话就不适用） */
   const canUseGoalMenu = isAgentMode && Boolean(onSetGoal);
-  // 只跟 armed 挂钩：这个 tag 是"下一条消息将用于设置目标"的过渡态指示，发送后 armed 变 false
-  // 就该跟着消失，不能靠"目标是否存在"续命——目标存在与否、当前状态、编辑/暂停/删除，已经由
-  // 输入框上方常驻的 GoalBar 完整覆盖，工具栏这里再挂一份重复的常驻入口只会显得"选择没解除"。
-  const goalTagVisible = canUseGoalMenu && goalArmed;
+  // bugfix 2026092201 bug001 第2轮修订：原来只跟 armed 挂钩（发送后 armed 变 false 就消失，
+  // 理由是"目标是否存在"已由 GoalBar 覆盖，工具栏不需要重复常驻）。但这样一来目标在真正执行
+  // 期间（armed 已经变 false、hasUnfinishedGoal 才是 true）这个 tag 会凭空消失，跟 Plan 的
+  // tag（跟 planActive 走、整个执行期间常驻）体验不一致，用户测试后明确要求对齐 Plan——所以
+  // 改成跟"+"菜单开关的 `goalChecked` 同一个公式：武装中或者真有未完成目标都要显示，关闭按钮
+  // 会在下面按 evaluateGoalArm 的"关闭方向"结果做忙态保护，不会出现"tag 一直在、点了却把执行
+  // 中的目标误关掉"的问题。
+  const goalTagVisible = canUseGoalMenu && (goalArmed || hasUnfinishedGoal);
   // Plan 是持续开关（不是 Goal 那种"下一条消息生效"的过渡态）：打开后一直用
   // agent.plan 发送，直到用户点叉或后端推 plan.mode_exited。
   // 和 Goal 一样只对单 agent 开放，集群模式不提供 Plan 入口。
   const planActive = usePlanStore((s) => s.runtimes[activeSessionId ?? '']?.active ?? false);
-  const planPendingExplicitEntry = usePlanStore(
-    (s) => s.runtimes[activeSessionId ?? '']?.pendingExplicitEntry ?? false,
-  );
   // 个人上下文：agent 加载开关（总开关联动）。总开关关闭时整个菜单项隐藏；开启时默认打开，可单独控制。
   const isConnected = useSessionStore((s) => s.isConnected);
   const personalContextMasterEnabled = usePersonalContextStore(
-    (s) => s.config.collection_enabled || s.config.agent_use_enabled,
+    (s) => s.config.master_enabled ?? (s.config.collection_enabled || s.config.agent_use_enabled),
   );
   const agentUseEnabled = usePersonalContextStore((s) => s.config.agent_use_enabled);
   const agentUsePending = usePersonalContextStore((s) => !!s.pendingWrites.agent_use_enabled);
@@ -853,9 +1102,6 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
   const swarmflowBudget = useSessionStore((s) => s.runtimes[activeSessionId ?? '']?.swarmflowBudget ?? null);
   // 进入真实会话后开关只读：仅新建对话页可修改，真实会话可查看不可改
   const swarmflowToggleDisabled = isProcessing || (activeSessionId !== NEW_CONVERSATION_ID && hasHistory);
-  // Plan 已经真正生效：开关打开且至少发出过一条 Plan 消息（pendingExplicitEntry 已被消费）。
-  // 区别于"刚打开开关但还没发消息"的未提交态——后者和 Goal 的 armed 一样可以被对方随手顶替。
-  const planCommitted = planActive && !planPendingExplicitEntry;
   const canUsePlanMenu = supportsPlanMode(mode);
   const planTagVisible = canUsePlanMenu && planActive;
 
@@ -872,20 +1118,165 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       }));
   }, [teamMembers]);
 
+  // 任务素材：和团队成员一起出现在 @ 候选里（名称就是引用名）。已经登记到后端的（sessionAssets）
+  // 之外，这条消息里刚选好、还没来得及走完"落盘 -> 注册"往返的附件（欢迎页第一条消息尤其如此，
+  // 那时候还没有 session_id，注册无从谈起）也按同样的默认命名规则加进候选，不用等注册完才能 @。
+  const commandDescriptionLanguage = i18n.resolvedLanguage ?? i18n.language;
+  const sessionAssets = useSessionAssetsStore(selectSessionAssets(activeSessionId));
+  const sessionAssetsRef = useRef(sessionAssets);
+  sessionAssetsRef.current = sessionAssets;
+  // 已经登记到后端的素材只有文件系统绝对路径，浏览器没法直接当图片 src 加载；如果这个素材
+  // 恰好还挂在本地的附件卡片上（刚上传完，最常见的情况），就借它现成的本地预览图，而不是干脆
+  // 不显示缩略图——不能不假思索地借团队成员那套"按 id 生成"的头像，那和文件内容毫无关系。
+  const previewUrlByPath = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const attachment of attachments) {
+      const path = pickString(attachment.persistedMediaItem?.path);
+      if (path && attachment.previewUrl) map.set(normalizePath(path), attachment.previewUrl);
+    }
+    return map;
+  }, [attachments]);
+  const assetSuggestionItems = useMemo(
+    () =>
+      sessionAssets.map((asset) => ({
+        id: asset.name,
+        label: asset.name,
+        status: asset.kind,
+        itemKind: 'asset' as const,
+        // 已经落盘的素材没有本地预览图可用，直接用 file-api 读绝对路径（生成产物在
+        // agent 工作区，Web 端可读）。图片和视频都给 previewUrl：图片直接当缩略图用，
+        // 视频用它当第一帧的来源；音频/文档仍然走文件图标。
+        previewUrl:
+          previewUrlByPath.get(normalizePath(asset.path)) ??
+          (asset.kind === 'image' || asset.kind === 'video'
+            ? `/file-api/raw-file?path=${encodeURIComponent(asset.path)}`
+            : undefined),
+        assetPath: asset.path,
+      })),
+    [previewUrlByPath, sessionAssets],
+  );
+  const pendingAssetSuggestionItems = useMemo(() => {
+    const known = new Set(sessionAssets.map((asset) => asset.name.toLowerCase()));
+    const seen = new Set<string>();
+    return attachments
+      .filter((attachment) => attachment.status === 'ready')
+      .flatMap((attachment) => {
+        const name = attachment.assetName ?? stemFilename(attachment.filename);
+        const key = name.toLowerCase();
+        if (known.has(key) || seen.has(key)) return [];
+        seen.add(key);
+        return [
+          {
+            id: name,
+            label: name,
+            status: assetKindFromMime(attachment.mimeType),
+            itemKind: 'asset' as const,
+            previewUrl: attachment.previewUrl,
+            assetPath: attachment.filename,
+          },
+        ];
+      });
+  }, [attachments, sessionAssets]);
+  // @ 引用的素材直接预览在输入框上方：用 @ 选中图片素材后立刻能看到是哪一张。
+  // 引用是从当前草稿文本里解析出来的，所以把 @名称 从文本里删掉，卡片就跟着消失；
+  // 已经有真实附件卡片的路径（刚上传的那份）不重复显示。
+  const referencedAssetCards = useMemo(() => {
+    if (!inputValue.includes('@')) return [];
+    const attachedPaths = new Set(
+      attachments.flatMap((attachment) => {
+        const path = pickString(attachment.persistedMediaItem?.path);
+        return path ? [normalizePath(path)] : [];
+      }),
+    );
+    return findReferencedAssets(inputValue, sessionAssets)
+      .filter((asset) => asset.kind === 'image')
+      .filter((asset) => !attachedPaths.has(normalizePath(asset.path)))
+      .map((asset) => ({
+        key: `ref-${asset.asset_id}`,
+        name: asset.name,
+        // 刚上传的素材借本地预览图；已经落盘的生成图用 file-api 直接读（这些路径 Web 端可读）。
+        previewUrl:
+          previewUrlByPath.get(normalizePath(asset.path)) ??
+          `/file-api/raw-file?path=${encodeURIComponent(asset.path)}`,
+      }));
+  }, [attachments, inputValue, previewUrlByPath, sessionAssets]);
+  const mentionCandidates = useMemo(
+    () => [...mentionableMembers, ...assetSuggestionItems, ...pendingAssetSuggestionItems],
+    [assetSuggestionItems, mentionableMembers, pendingAssetSuggestionItems],
+  );
+
+  // 任务素材同步：进入会话时拉取；上传完成的附件、agent 产出的文件按路径登记（后端按路径去重，
+  // 没有文件的路径会被忽略，所以用 attemptedAssetPaths 避免对同一路径反复请求）。
+  const sessionArtifacts = useSessionArtifacts();
+  const attemptedAssetPaths = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    attemptedAssetPaths.current = new Set();
+    if (!canPersistAttachments || !activeSessionId) return;
+    void useSessionAssetsStore
+      .getState()
+      .refresh(activeSessionId)
+      .catch((error) => console.error('Failed to load session assets:', error));
+  }, [activeSessionId, canPersistAttachments]);
+  useEffect(() => {
+    if (!canPersistAttachments || !activeSessionId) return;
+    const pending: Array<{ path: string; source: 'upload' | 'generated'; name?: string }> = [];
+    const consider = (path: string | undefined, source: 'upload' | 'generated', name?: string) => {
+      const value = path?.trim();
+      if (!value || attemptedAssetPaths.current.has(value)) return;
+      attemptedAssetPaths.current.add(value);
+      pending.push({ path: value, source, ...(name ? { name } : {}) });
+    };
+    attachments.forEach((attachment) => {
+      if (attachment.status === 'ready') {
+        consider(pickString(attachment.persistedMediaItem?.path), 'upload', attachment.assetName);
+      }
+    });
+    sessionArtifacts.forEach((artifact) => consider(artifact.path, 'generated'));
+    if (pending.length === 0) return;
+    void useSessionAssetsStore
+      .getState()
+      .register(activeSessionId, pending)
+      .catch((error) => console.error('Failed to register session assets:', error));
+  }, [activeSessionId, attachments, canPersistAttachments, sessionArtifacts]);
+
   const composerSuggestionItems = useMemo(() => {
     const items = getComposerSuggestionItems(
       composerSuggestion,
-      mentionableMembers,
-      getWebSlashCommandsForMode(slashCommands, mode),
+      mentionCandidates,
+      getWebSlashCommandsForMode(slashCommands, mode)
+        .filter((command) =>
+          canUseSlashCommand(
+            findSlashCommand(command.name),
+            Boolean(activeSessionId && activeSessionId !== NEW_CONVERSATION_ID),
+          ),
+        )
+        .map((command) => ({
+          ...command,
+          description: resolveSlashCommandDescription(command, commandDescriptionLanguage),
+        })),
       slashSkills,
       isTeamMode,
     );
     return items.map((item) =>
-      item.itemKind === 'command' && isSlashCommandDisabledByGoal(item.id, hasUnfinishedGoal)
-        ? { ...item, disabled: true, disabledReason: t('plan.toolbarUnavailableGoal') }
-        : item,
+      item.itemKind === 'skill' && teamGroupSelectionActive
+        ? { ...item, disabled: true, disabledReason: t('chat.teamSkillsGroupLocked') }
+        : item.itemKind === 'command' && isSlashCommandDisabledByGoal(item.id, hasUnfinishedGoal)
+          ? { ...item, disabled: true, disabledReason: t('plan.toolbarUnavailableGoal') }
+          : item,
     );
-  }, [composerSuggestion, hasUnfinishedGoal, isTeamMode, mentionableMembers, mode, slashCommands, slashSkills, t]);
+  }, [
+    activeSessionId,
+    commandDescriptionLanguage,
+    composerSuggestion,
+    hasUnfinishedGoal,
+    isTeamMode,
+    mentionCandidates,
+    mode,
+    slashCommands,
+    slashSkills,
+    teamGroupSelectionActive,
+    t,
+  ]);
 
   const selectableComposerSuggestionIndices = useMemo(
     () =>
@@ -994,6 +1385,49 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     return selectedProject && !isDefaultInputProject(selectedProject) ? selectedProject : null;
   }, [activeSession, projects, selectedProject, t, workMode]);
 
+  // Worktree 隔离开关的显示默认值：全局 config（团队模板的 worktree.enabled），
+  // 仅在会话未显式拨过（swarmflowWorktree === undefined）时用于展示。
+  // 挂载时读一次，配置面板每次打开时刷新；会话自身的值存 sessionStore。
+  const [swarmflowWorktreeDefault, setSwarmflowWorktreeDefault] = useState<boolean | null>(null);
+  const refreshSwarmflowWorktreeDefault = useCallback(() => {
+    webRequest<Record<string, unknown>>('config.get')
+      .then((config) => {
+        const raw = (config as { swarmflow_worktree?: unknown } | undefined)?.swarmflow_worktree;
+        setSwarmflowWorktreeDefault(raw === true || String(raw ?? '').trim().toLowerCase() === 'true');
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    refreshSwarmflowWorktreeDefault();
+  }, [refreshSwarmflowWorktreeDefault]);
+  // 会话级 worktree 值（undefined=未拨过）；有效值 = 会话值 ?? 全局默认
+  const swarmflowWorktreeValue = useSessionStore(
+    (s) => s.runtimes[activeSessionId ?? '']?.swarmflowWorktree,
+  );
+  const swarmflowWorktreeEffective = swarmflowWorktreeValue ?? (swarmflowWorktreeDefault ?? false);
+  // Worktree 无项目目录的聚光灯引导。动态工作流的"+"菜单/配置面板还开着时会挡住
+  // 项目下拉，先挂起，等它们全部关闭后再弹；弹出后选好项目自动消失。
+  const [worktreeGuideOpen, setWorktreeGuideOpen] = useState(false);
+  const [worktreeGuidePending, setWorktreeGuidePending] = useState(false);
+  useEffect(() => {
+    if (worktreeGuideOpen && displayedProject) setWorktreeGuideOpen(false);
+  }, [worktreeGuideOpen, displayedProject]);
+  useEffect(() => {
+    if (!worktreeGuidePending || attachMenuOpen || swarmflowConfigPanelOpen) return;
+    setWorktreeGuidePending(false);
+    if (!displayedProject && swarmflowWorktreeEffective) setWorktreeGuideOpen(true);
+  }, [worktreeGuidePending, attachMenuOpen, swarmflowConfigPanelOpen, displayedProject, swarmflowWorktreeEffective]);
+  const toggleSwarmflowWorktree = useCallback(
+    (next: boolean) => {
+      if (!activeSessionId || swarmflowToggleDisabled) return;
+      useSessionStore.getState().setSwarmflowWorktree(activeSessionId, next);
+      if (next && !displayedProject) {
+        setWorktreeGuidePending(true);
+      }
+    },
+    [activeSessionId, swarmflowToggleDisabled, displayedProject],
+  );
+
   const appendTaskAsrTranscript = useCallback(
     (transcript: string) => {
       const text = transcript.trim();
@@ -1027,6 +1461,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     onTranscript: appendTaskAsrTranscript,
     onError: setSpeechError,
   });
+  const taskAsrEnabled = useTaskAsrEnabled();
 
   const imageInputDisabled = isImageInputDisabled({
     isListening: isListening || isTranscribing,
@@ -1036,6 +1471,13 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     isAgentMode,
   });
   const isDesktopBridgeReady = useDesktopLocalFilePickerReady();
+  const uploadLimitsTooltip = [
+    t('chat.inputAttachment.imageLimitTooltip', { limit: MAX_IMAGE_BYTES / (1024 * 1024) }),
+    ...(!isDesktopBridgeReady
+      ? [t('chat.inputAttachment.fileLimitTooltip', { limit: MAX_FILE_BYTES / (1024 * 1024) })]
+      : []),
+    t('chat.inputAttachment.countLimitTooltip', { limit: MAX_ATTACHMENT_COUNT }),
+  ].join('\n');
   // "+" 触发按钮本身不跟图片/目标的可用性挂钩：菜单以后可能挂其他跟图片/目标无关的功能，
   // 触发按钮只要不在录音就该能点开；具体某一项能不能选，交给菜单里每一项各自的禁用态处理。
   const attachTriggerDisabled = isListening || isTranscribing || composerDisabled;
@@ -1096,21 +1538,122 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     setAttachmentAlerts((prev) => prev.filter((item) => item.id !== id));
   }, []);
 
-  const updateAttachment = useCallback((id: string, update: Partial<AttachmentDraft>) => {
-    setAttachments((prev) => prev.map((item) => (item.id === id ? { ...item, ...update } : item)));
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+  const discardedImageUploadsRef = useRef(new Map<string, string>());
+  const onDiscardMediaRef = useRef(onDiscardMedia);
+  onDiscardMediaRef.current = onDiscardMedia;
+
+  const requestImageDiscard = useCallback((sessionId: string, path: string) => {
+    const discard = onDiscardMediaRef.current;
+    if (!discard || !sessionId || sessionId === NEW_CONVERSATION_ID || !path) return;
+    void discard(sessionId, path).catch((error) => {
+      console.error('Failed to discard unsent image:', error);
+    });
   }, []);
+
+  const releaseUnsentUploads = useCallback((drafts: AttachmentDraft[]) => {
+    const removingIds = new Set(drafts.map((draft) => draft.id));
+    const remaining = attachmentsRef.current.filter((draft) => !removingIds.has(draft.id));
+    const plan = planUnsentImageDiscard(
+      drafts.map(toUnsentImageDraft),
+      remaining.map(toUnsentImageDraft),
+    );
+    const sessionId = activeSessionId || '';
+    for (const id of plan.pendingIds) {
+      discardedImageUploadsRef.current.set(id, sessionId);
+    }
+    for (const path of plan.paths) {
+      requestImageDiscard(sessionId, path);
+    }
+  }, [activeSessionId, requestImageDiscard]);
+
+  const updateAttachment = useCallback((id: string, update: Partial<AttachmentDraft>) => {
+    if (discardedImageUploadsRef.current.has(id)) {
+      const persistedPath = pickString(update.persistedMediaItem?.path);
+      const terminal = Boolean(persistedPath) || update.status === 'error' || update.status === 'ready';
+      if (!terminal) return;
+      const uploadSessionId = discardedImageUploadsRef.current.get(id) ?? '';
+      discardedImageUploadsRef.current.delete(id);
+      if (persistedPath) requestImageDiscard(uploadSessionId, persistedPath);
+      return;
+    }
+    setAttachments((prev) => {
+      if (prev.some((item) => item.id === id)) {
+        return prev.map((item) => (item.id === id ? { ...item, ...update } : item));
+      }
+      for (const [sessionId, drafts] of attachmentDraftsBySession) {
+        if (!drafts.some((item) => item.id === id)) continue;
+        attachmentDraftsBySession.set(
+          sessionId,
+          drafts.map((item) => (item.id === id ? { ...item, ...update } : item)),
+        );
+        break;
+      }
+      return prev;
+    });
+  }, [requestImageDiscard]);
 
   const removeAttachment = useCallback((id: string) => {
+    const target = attachmentsRef.current.find((item) => item.id === id);
+    if (target) releaseUnsentUploads([target]);
     setAttachments((prev) => prev.filter((item) => item.id !== id));
     setAttachmentMenuId((current) => (current === id ? null : current));
-  }, []);
+  }, [releaseUnsentUploads]);
+
+  // 附件卡片上重命名：记在草稿上（登记素材时用），也记到按文件名的待用名字里（欢迎页第一条消息
+  // 发出时才建会话、落盘）；文件已经登记过的话，直接改后端里的素材名。
+  const [renamingAttachmentId, setRenamingAttachmentId] = useState<string | null>(null);
+  const [attachmentRenameDraft, setAttachmentRenameDraft] = useState('');
+  const commitAttachmentRename = useCallback(
+    async (attachment: AttachmentDraft) => {
+      setRenamingAttachmentId(null);
+      const checked = validateAssetName(attachmentRenameDraft);
+      if ('error' in checked) {
+        pushAttachmentAlert(t('sessionAssets.invalidName'));
+        return;
+      }
+      const previous = attachment.assetName ?? attachment.filename;
+      if (checked.name === previous) return;
+      updateAttachment(attachment.id, { assetName: checked.name });
+      useSessionAssetsStore.getState().setPendingName(attachment.filename, checked.name);
+      const path = pickString(attachment.persistedMediaItem?.path);
+      const registered = path ? sessionAssetsRef.current.find((asset) => samePath(asset.path, path)) : undefined;
+      if (!registered || !activeSessionId) return;
+      try {
+        await useSessionAssetsStore.getState().rename(activeSessionId, registered.asset_id, checked.name);
+      } catch (error) {
+        updateAttachment(attachment.id, { assetName: attachment.assetName });
+        pushAttachmentAlert(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [activeSessionId, attachmentRenameDraft, pushAttachmentAlert, t, updateAttachment],
+  );
 
   const clearAttachments = useCallback(() => {
+    releaseUnsentUploads(attachmentsRef.current);
     setAttachments([]);
     setAttachmentAlerts([]);
     setAttachmentMenuId(null);
     clearAttachmentAlertTimers(attachmentAlertTimersRef.current);
-  }, []);
+  }, [releaseUnsentUploads]);
+
+  const attachmentSessionIdRef = useRef(activeSessionId);
+  useEffect(() => {
+    const sessionId = attachmentSessionIdRef.current;
+    if (sessionId) attachmentDraftsBySession.set(sessionId, attachments);
+  }, [attachments]);
+
+  useEffect(() => {
+    if (attachmentSessionIdRef.current === activeSessionId) return;
+    const previousSessionId = attachmentSessionIdRef.current;
+    if (previousSessionId) attachmentDraftsBySession.set(previousSessionId, attachments);
+    attachmentSessionIdRef.current = activeSessionId;
+    setAttachments(activeSessionId ? (attachmentDraftsBySession.get(activeSessionId) ?? []) : []);
+    setAttachmentAlerts([]);
+    setAttachmentMenuId(null);
+    clearAttachmentAlertTimers(attachmentAlertTimersRef.current);
+  }, [activeSessionId, attachments]);
 
   const stopAttachmentMenuTimer = useCallback(() => {
     if (attachmentMenuTimerRef.current) {
@@ -1165,10 +1708,11 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       }
       updateAttachment(attachment.id, { status: 'uploading', error: undefined });
 
-      // Documents: validate local path only — no base64 transfer / no disk persist / no parse.
+      // Documents: desktop 走本机路径；浏览器（Docker/远程）走 base64 内容上传。
       if (attachment.kind === 'document') {
         const localPath = getLocalFilePath(attachment.file, attachment.localPath);
-        if (!localPath) {
+        const browserFile = attachment.file && !localPath ? attachment.file : undefined;
+        if (!localPath && !browserFile) {
           const error = t('chat.inputAttachment.localPathUnavailable', {
             name: attachment.filename || t('chat.inputAttachment.unnamedFile'),
           });
@@ -1178,29 +1722,35 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
         }
         void (async () => {
           if (!canPersistAttachments) {
+            // 新会话尚无服务器侧会话路径：浏览器端无法获得 persistedMediaItem.path，
+            // 需携带 base64 作为发送载体，否则附件进不了 ready 列表、发送按钮保持灰色。
+            const base64Payload = browserFile ? await readBinaryFileAsBase64(browserFile) : null;
             updateAttachment(attachment.id, {
               persistedMediaItem: {
                 type: 'document',
                 filename: attachment.filename,
                 mime_type: attachment.mimeType,
-                path: localPath,
-                original_path: localPath,
+                ...(localPath ? { path: localPath, original_path: localPath } : {}),
                 size_bytes: attachment.size,
               },
+              ...(base64Payload?.base64Data ? { base64Data: base64Payload.base64Data } : {}),
               status: 'ready',
               error: undefined,
             });
             return;
           }
           try {
+            // 浏览器端没有服务器侧路径：读取为 base64，交给 document.persist 落盘到注入目录。
+            const base64Payload = browserFile ? await readBinaryFileAsBase64(browserFile) : null;
             const persisted = await onPersistDocuments('', [
               {
                 type: 'document',
                 mimeType: attachment.mimeType,
                 filename: attachment.filename,
-                path: localPath,
                 sizeBytes: attachment.size,
                 size_bytes: attachment.size,
+                ...(localPath ? { path: localPath } : {}),
+                ...(base64Payload?.base64Data ? { base64Data: base64Payload.base64Data } : {}),
               },
             ]);
             const persistedMediaItem = persisted.media_items?.[0];
@@ -1270,7 +1820,6 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
         updateAttachment(attachment.id, { status: 'error', error });
         return;
       }
-
       void readImageFile(attachment.file, t).then(async (payload) => {
         if (!payload) {
           updateAttachment(attachment.id, {
@@ -1315,7 +1864,15 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
 
   const retryAttachment = useCallback(
     (attachment: AttachmentDraft) => {
-      uploadAttachment(attachment);
+      if (attachment.kind !== 'image') {
+        uploadAttachment(attachment);
+        return;
+      }
+      const mimeType = resolveImageMimeType(attachment.filename, attachment.mimeType);
+      const previewUrl = attachment.base64Data
+        ? `data:${mimeType};base64,${attachment.base64Data}`
+        : attachment.previewUrl;
+      uploadAttachment({ ...attachment, mimeType, previewUrl });
     },
     [uploadAttachment],
   );
@@ -1354,7 +1911,10 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
           id: makeAttachmentId(file),
           kind,
           filename: file.name || (kind === 'document' ? `document-${Date.now()}` : `image-${Date.now()}`),
-          mimeType: file.type || 'application/octet-stream',
+          mimeType:
+            kind === 'image'
+              ? resolveImageMimeType(file.name || '', file.type)
+              : file.type || 'application/octet-stream',
           size: file.size,
           file,
           ...(localPath ? { localPath } : {}),
@@ -1429,28 +1989,32 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
           pushAttachmentAlert(t('chat.inputAttachment.readImageFailed', { name: pick.filename }));
           return items;
         }
-        if (pick.size > MAX_FILE_BYTES) {
+        if (pick.kind === 'image' && pick.size > MAX_IMAGE_BYTES) {
           pushAttachmentAlert(
-            t('chat.inputAttachment.fileSizeExceeded', {
+            t('chat.inputAttachment.imageSizeExceeded', {
               name: pick.filename,
-              limit: formatAttachmentSize(MAX_FILE_BYTES),
+              limit: formatAttachmentSize(MAX_IMAGE_BYTES),
             }),
           );
           return items;
         }
 
+        const mimeType =
+          pick.kind === 'image'
+            ? resolveImageMimeType(pick.filename, pick.mime_type)
+            : pick.mime_type || 'application/octet-stream';
         const draft: AttachmentDraft = {
           id: `${pick.filename}-${pick.size}-${generateUuidV4()}`,
           kind: pick.kind,
           filename: pick.filename,
-          mimeType: pick.mime_type || 'application/octet-stream',
+          mimeType,
           size: pick.size,
           localPath: pick.path,
           status: 'uploading',
           ...(pick.kind === 'image' && pick.base64
             ? {
                 base64Data: pick.base64,
-                previewUrl: `data:${pick.mime_type || 'application/octet-stream'};base64,${pick.base64}`,
+                previewUrl: `data:${mimeType};base64,${pick.base64}`,
               }
             : {}),
         };
@@ -1470,9 +2034,19 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
   const openAttachmentPicker = useCallback(async () => {
     if (imageInputDisabled) return;
     setAttachMenuOpen(false);
-    // 文档上传依赖本机绝对路径：桌面 pywebview 或浏览器后端 path.select_files。
-    // 不要回落 HTML <input type="file">，浏览器拿不到 File.path，只会得到
-    // 「无法获取本地文件路径」的假失败。
+    // Web 直接选择访问者电脑上的文件；桌面端通过原生桥接保留本机路径引用。
+    if (!isDesktopBridgeReady && !isDesktopLocalFilePicker()) {
+      if (fileInputRef.current) {
+        fileInputRef.current.click();
+      } else {
+        pushAttachmentAlert(t('chat.inputAttachment.filePickerFailed'));
+      }
+      return;
+    }
+    if (!isDesktopLocalFilePicker()) {
+      pushAttachmentAlert(t('chat.inputAttachment.filePickerFailed'));
+      return;
+    }
     const result = await selectLocalFiles(true);
     if (result.ok) {
       appendLocalFilePicks(result.files);
@@ -1481,12 +2055,8 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     if (result.reason === 'cancelled') {
       return;
     }
-    const hint =
-      result.reason === 'unsupported'
-        ? t('chat.inputAttachment.filePickerUnsupported')
-        : result.message || t('chat.inputAttachment.filePickerFailed');
-    pushAttachmentAlert(hint);
-  }, [appendLocalFilePicks, imageInputDisabled, pushAttachmentAlert, t]);
+    pushAttachmentAlert(t('chat.inputAttachment.filePickerFailed'));
+  }, [appendLocalFilePicks, imageInputDisabled, isDesktopBridgeReady, pushAttachmentAlert, t]);
 
   const acceptExternalLocalFilePicks = useCallback(
     (picks: LocalFilePick[]) => {
@@ -1551,6 +2121,9 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       // 下面任何 ref 的子树内——靠 data-connector-auth-modal 识别“点的是弹窗内部”，跳过关闭（与
       // ExtensionPickerPanel.tsx 的同款监听一致；bug 2026091001-001 portal 化后的回归修复）。
       if ((event.target as HTMLElement | null)?.closest?.('[data-connector-auth-modal]')) return;
+      // Select 下拉面板同样门户挂到 body（data-select-panel），点选单位等选项时不视为外部点击，
+      // 否则配置面板先于选项 click 卸载，选择丢失
+      if ((event.target as HTMLElement | null)?.closest?.('[data-select-panel]')) return;
       if (
         !attachMenuRef.current?.contains(event.target as Node) &&
         !attachMenuPortalRef.current?.contains(event.target as Node) &&
@@ -1730,6 +2303,42 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     return text.replace(/\u200B/g, '');
   }, []);
 
+  const runGoalSlashAction = useCallback(
+    async (sessionId: string, action: GoalSlashAction, objective?: string): Promise<GoalSlashSnapshot> => {
+      if (action === 'get' && sessionId === NEW_CONVERSATION_ID) return null;
+
+      if (action === 'set') {
+        const normalizedObjective = objective?.trim() ?? '';
+        if (!onSetGoal || !normalizedObjective) throw new Error('Goal setting is unavailable');
+        if (sessionId === NEW_CONVERSATION_ID) {
+          // 欢迎页没有真实 session：复用工具栏 Goal 的懒创建路径，
+          // 由 App 在 session.create 成功后迁移 armed 状态并发出 command.goal set。
+          useGoalStore.getState().setArmed(sessionId, true);
+          onSubmit(normalizedObjective);
+          return null;
+        }
+        queueOrAddGoalObjectiveMessage(sessionId, normalizedObjective);
+        useGoalStore.getState().setArmed(sessionId, false);
+        await onSetGoal(sessionId, normalizedObjective);
+      } else {
+        const handler =
+          action === 'pause'
+            ? onPauseGoal
+            : action === 'resume'
+              ? onResumeGoal
+              : action === 'clear'
+                ? onClearGoal
+                : onRefreshGoal;
+        if (!handler) throw new Error(`Goal ${action} is unavailable`);
+        await handler(sessionId);
+      }
+
+      const goal = useGoalStore.getState().getRuntime(sessionId)?.goal;
+      return goal ? { objective: goal.objective, status: goal.status } : null;
+    },
+    [onClearGoal, onPauseGoal, onRefreshGoal, onResumeGoal, onSetGoal, onSubmit],
+  );
+
   const executeSlashCommand = useCallback(
     async (command: SlashCommand, context: SlashCommandContext, args: string) => {
       // /plan 是计划开关的命令入口。两条调用路径都汇聚到这里：
@@ -1745,6 +2354,21 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
           if (decision.reason) pushAttachmentAlert(t(decision.reason));
           return;
         }
+      }
+      // bugfix 2026092201 bug001 子问题 3：`/goal`（不带目标正文——handleSubmit 精确输入
+      // `/goal` 回车，或 insertComposerToken 在建议菜单选中后立即走到这里）与 `/plan` 对齐，
+      // 选中/回车即"武装"、立刻显示"目标"tag，不再只插入一个占位 chip、什么状态都不改。
+      // 带目标正文的 `/goal set <objective>`、`/goal <objective>` 一次性单发用法不受影响，
+      // args 非空会跳过这里、继续走下面 command.execute 的正常解析。互斥判断统一走
+      // goalModeGate，和"+"菜单的目标开关共用同一套决策层，不再各自定制。
+      if (command.name === 'goal' && args.trim() === '') {
+        const decision = evaluateGoalArm(activeSessionId, true);
+        if (!decision.ok) {
+          if (decision.reason) pushAttachmentAlert(t(decision.reason));
+          return;
+        }
+        applyGoalArm(activeSessionId, true);
+        return;
       }
       if (command.name !== 'compact') {
         await command.execute(context, args);
@@ -1773,40 +2397,42 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     const richContent = extractRichContent();
     const trimmedBase = richContent.trim();
 
-    // 单 Agent 下拦截斜杠命令：控制命令不走 chat.send / 队列 / 中断逻辑。
-    // Team 下不拦截，以普通文本发送，不会触发 command.compact 等 RPC。
+    // 拦截当前模式支持的斜杠命令：控制命令不走 chat.send / 队列 / 中断逻辑。
+    // Team 模式下注册命令仍以普通文本发送。
     if (trimmedBase.startsWith('/')) {
       const { name, args } = parseSlashLine(trimmedBase);
       const cmd = findSlashCommand(name);
       const slashSid = useChatStore.getState().activeSessionId;
       const slashMode = useSessionStore.getState().getRuntime(slashSid)?.mode ?? mode;
       if (cmd && shouldExecuteRegisteredSlashCommand(name, args, slashMode)) {
+        if (!canUseSlashCommand(cmd, Boolean(slashSid && slashSid !== NEW_CONVERSATION_ID))) {
+          pushAttachmentAlert(t('chat.commandRequiresSession'));
+          return;
+        }
+        if (cmd.name === 'goal' && parseGoalSlashArgs(args).action === 'set' && readyMediaItems.length > 0) {
+          pushAttachmentAlert(t('chat.goalAttachmentsBlocked'));
+          return;
+        }
         if (slashSid) useChatStore.getState().setInputValue(slashSid, '');
+        releaseUnsentUploads(attachmentsRef.current);
         setAttachments([]);
         setAttachmentAlerts([]);
         if (inputRef.current) inputRef.current.innerHTML = '';
         setComposerSuggestion(null);
-        // requiresSession=false 的命令（如 /plan 纯本地开关）无需真实会话，欢迎页也能用
-        if (cmd.requiresSession === false || (slashSid && slashSid !== NEW_CONVERSATION_ID)) {
-          void executeSlashCommand(
-            cmd,
-            {
-              sessionId: slashSid ?? NEW_CONVERSATION_ID,
-              mode: slashMode,
-              inputLine: trimmedBase,
-              addMessage: useChatStore.getState().addMessage,
-              submitMessage: onSubmit,
-            },
-            args,
-          );
-        } else {
-          useChatStore.getState().addMessage(slashSid ?? NEW_CONVERSATION_ID, {
-            id: `slash-sys-${Date.now()}`,
-            role: 'system',
-            content: '请先开始一个对话再使用该指令。',
-            timestamp: new Date().toISOString(),
-          });
-        }
+        void executeSlashCommand(
+          cmd,
+          {
+            sessionId: slashSid ?? NEW_CONVERSATION_ID,
+            mode: slashMode,
+            inputLine: trimmedBase,
+            addMessage: useChatStore.getState().addMessage,
+            submitMessage: onSubmit,
+            forkConversation: onForkSession,
+            runGoalAction: runGoalSlashAction,
+            confirmGoalOverwrite,
+          },
+          args,
+        );
         return;
       }
     }
@@ -1815,6 +2441,9 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
         attachment.status === 'ready' &&
         (Boolean(pickString(attachment.persistedMediaItem?.path)) || Boolean(attachment.base64Data)),
     );
+    // @名称 -> 文件路径的引用笔记不在这里加：这条消息可能还在往后端落盘（欢迎页第一条消息甚至
+    // 连 session 都还没建），此刻能查到的已登记素材是不完整的。真正的笔记在 useWebSocket.sendMessage
+    // 里、落盘拿到路径之后统一补，同时也覆盖本会话之前已经登记过的素材。
     const trimmed = buildSubmitContent(trimmedBase, readyDrafts);
     const hasReadyMedia = readyMediaItems.length > 0;
     // Block only when there is neither text nor a ready attachment to send.
@@ -1889,6 +2518,8 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     composerDisabled,
     isInterruptible,
     onSubmit,
+    onForkSession,
+    runGoalSlashAction,
     onInterrupt,
     mode,
     isAgentMode,
@@ -1898,6 +2529,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     onSetGoal,
     onDrainTaskQueueIfIdle,
     pushAttachmentAlert,
+    releaseUnsentUploads,
     t,
   ]);
 
@@ -1967,12 +2599,12 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       return;
     }
     // slash 指令不依赖团队成员，即便没有可 @ 的成员也照常弹出
-    if (trigger.kind !== 'slash' && mentionableMembers.length === 0) {
+    if (trigger.kind !== 'slash' && mentionCandidates.length === 0) {
       setComposerSuggestion(null);
       return;
     }
     setComposerSuggestion(trigger);
-  }, [getCurrentComposerTrigger, mentionableMembers.length]);
+  }, [getCurrentComposerTrigger, mentionCandidates.length]);
 
   const setRangeStartByTextOffset = useCallback((range: Range, root: HTMLElement, offset: number) => {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -1997,7 +2629,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       kind: ComposerSuggestionKind,
       value: string,
       label: string,
-      slashItemKind?: 'command' | 'skill',
+      slashItemKind?: 'command' | 'skill' | 'asset',
       slashTakesArgs?: boolean,
     ) => {
       const el = inputRef.current;
@@ -2009,6 +2641,20 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       // slash 选中
       if (kind === 'slash') {
         if (slashItemKind === 'skill') {
+          const slashSid = useChatStore.getState().activeSessionId;
+          const slashRuntime = slashSid ? useSessionStore.getState().getRuntime(slashSid) : undefined;
+          if (
+            slashSid &&
+            isAgentGroupSelected(
+              slashRuntime?.mode,
+              slashRuntime?.agentGroupSelectionIntent,
+              slashRuntime?.agentGroupBinding,
+              slashRuntime?.agentGroupBindingPending,
+            )
+          ) {
+            setComposerSuggestion(null);
+            return;
+          }
           const trigger = getCurrentComposerTrigger();
           if (trigger) {
             const beforeRange = range.cloneRange();
@@ -2020,7 +2666,6 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
             range.deleteContents();
           }
           savedRangeRef.current = range.cloneRange();
-          const slashSid = useChatStore.getState().activeSessionId;
           if (slashSid) useSessionStore.getState().addSelectedSkill(slashSid, value);
           insertSkillChipRef.current(value);
           setComposerSuggestion(null);
@@ -2028,14 +2673,23 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
         }
         const slashSid = useChatStore.getState().activeSessionId;
         const slashMode = useSessionStore.getState().getRuntime(slashSid)?.mode ?? mode;
-        if (!supportsWebSlashCommands(slashMode)) {
+        const slashCmd = findSlashCommand(value);
+        if (!slashCmd || !shouldExecuteRegisteredSlashCommand(value, '', slashMode)) {
           setComposerSuggestion(null);
           return;
         }
-        const slashCmd = findSlashCommand(value);
-        // 无参命令（/plan、/compact）：选中即执行，不插入文本、不再等回车。
-        // `/plan hi` 这类手工输入不走此选中路径，提交时会被当作普通消息。
-        if (slashCmd && slashTakesArgs === false) {
+        if (!canUseSlashCommand(slashCmd, Boolean(slashSid && slashSid !== NEW_CONVERSATION_ID))) {
+          pushAttachmentAlert(t('chat.commandRequiresSession'));
+          return;
+        }
+        // 无参命令（/fork、/plan、/compact）：选中即执行，不插入文本、不再等回车。
+        // `/fork title`、`/plan hi` 这类手工输入不走此选中路径，提交时会被当作普通消息。
+        // `/goal` 后端元数据是 takesArgs:true（要支持 `/goal <objective>` 一次性单发），但
+        // "不带正文、从建议菜单选中"这一种情况要跟 /plan 对齐——选中即武装、清空输入框，不再
+        // 插入占位 chip（bugfix 2026092201 bug001 子问题 3），所以这里单独把 'goal' 也纳入
+        // 这条"选中即执行"分支；executeSlashCommand 内部会按 args 是否为空区分"武装"还是
+        // 走 goalCommand 正常解析。
+        if (slashCmd && (slashTakesArgs === false || slashCmd.name === 'goal')) {
           const trigger = getCurrentComposerTrigger();
           if (trigger) {
             const beforeRange = range.cloneRange();
@@ -2046,30 +2700,25 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
             setRangeStartByTextOffset(range, el, Math.max(0, beforeTextLength - triggerLength));
             range.deleteContents();
           }
-          if (slashSid) useChatStore.getState().setInputValue(slashSid, extractPlainText());
+          if (slashSid) {
+            useChatStore.getState().setInputValue(slashSid, extractPlainText());
+          }
           setComposerSuggestion(null);
           el.focus();
-          // requiresSession=false 的命令（如 /plan 纯本地开关）无需真实会话，欢迎页也能用
-          if (slashCmd.requiresSession === false || (slashSid && slashSid !== NEW_CONVERSATION_ID)) {
-            void executeSlashCommand(
-              slashCmd,
-              {
-                sessionId: slashSid ?? NEW_CONVERSATION_ID,
-                mode: slashMode,
-                inputLine: `/${value}`,
-                addMessage: useChatStore.getState().addMessage,
-                submitMessage: onSubmit,
-              },
-              '',
-            );
-          } else {
-            useChatStore.getState().addMessage(slashSid ?? NEW_CONVERSATION_ID, {
-              id: `slash-sys-${Date.now()}`,
-              role: 'system',
-              content: '请先开始一个对话再使用该指令。',
-              timestamp: new Date().toISOString(),
-            });
-          }
+          void executeSlashCommand(
+            slashCmd,
+            {
+              sessionId: slashSid ?? NEW_CONVERSATION_ID,
+              mode: slashMode,
+              inputLine: `/${value}`,
+              addMessage: useChatStore.getState().addMessage,
+              submitMessage: onSubmit,
+              forkConversation: onForkSession,
+              runGoalAction: runGoalSlashAction,
+              confirmGoalOverwrite,
+            },
+            '',
+          );
           return;
         }
         // 有参命令（如 /persist）：把 "/query" 替换成蓝色原子 chip。提取文本时再还原为
@@ -2101,7 +2750,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
         removeBtn.type = 'button';
         removeBtn.className = 'chat-input-chip-inline__remove';
         removeBtn.setAttribute('aria-label', 'remove slash command');
-        removeBtn.innerHTML = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4"><path stroke-linecap="round" stroke-linejoin="round" d="M6 6l8 8M14 6l-8 8"/></svg>`;
+        removeBtn.innerHTML = closeSvg;
         removeBtn.addEventListener('click', (event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -2161,7 +2810,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       removeBtn.type = 'button';
       removeBtn.className = 'chat-input-chip-inline__remove';
       removeBtn.setAttribute('aria-label', kind === 'role' ? 'remove role' : 'remove member');
-      removeBtn.innerHTML = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4"><path stroke-linecap="round" stroke-linejoin="round" d="M6 6l8 8M14 6l-8 8"/></svg>`;
+      removeBtn.innerHTML = closeSvg;
       removeBtn.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -2194,7 +2843,19 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       setComposerSuggestion(null);
       el.focus();
     },
-    [executeSlashCommand, extractPlainText, getCurrentComposerTrigger, mode, onSubmit, setRangeStartByTextOffset],
+    [
+      executeSlashCommand,
+      extractPlainText,
+      getCurrentComposerTrigger,
+      releaseUnsentUploads,
+      mode,
+      onForkSession,
+      onSubmit,
+      runGoalSlashAction,
+      pushAttachmentAlert,
+      setRangeStartByTextOffset,
+      t,
+    ],
   );
 
   const notifyKVCInputIntent = useCallback(() => {
@@ -2236,6 +2897,21 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
           if (isImeCompositionKey(e.nativeEvent, isComposingRef.current)) return;
           e.preventDefault();
           const item = composerSuggestionItems[composerSuggestionIndex];
+          if (e.key === 'Enter' && composerSuggestion.kind === 'slash') {
+            // 完整受限命令优先走提交守卫，避免过滤后误选名称/描述匹配的技能。
+            const { name, args } = parseSlashLine(extractRichContent());
+            const command = findSlashCommand(name);
+            const slashSid = useChatStore.getState().activeSessionId;
+            const slashMode = useSessionStore.getState().getRuntime(slashSid)?.mode ?? mode;
+            if (
+              command &&
+              shouldExecuteRegisteredSlashCommand(name, args, slashMode) &&
+              (!item || !canUseSlashCommand(command, Boolean(slashSid && slashSid !== NEW_CONVERSATION_ID)))
+            ) {
+              handleSubmit();
+              return;
+            }
+          }
           if (item && !item.disabled) {
             insertComposerToken(composerSuggestion.kind, item.id, item.label, item.itemKind, item.takesArgs);
           }
@@ -2252,8 +2928,10 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       composerSuggestion,
       composerSuggestionIndex,
       composerSuggestionItems,
+      extractRichContent,
       handleSubmit,
       insertComposerToken,
+      mode,
       moveComposerSuggestionHighlight,
       notifyKVCInputIntent,
     ],
@@ -2375,14 +3053,19 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
 
   const handlePaste = useCallback(
     (event: ClipboardEvent<HTMLDivElement>) => {
-      const hasText = Boolean(event.clipboardData.getData('text/plain').trim());
+      const text = event.clipboardData.getData('text/plain');
+      const hasText = text.length > 0;
       if (hasText) {
         notifyKVCInputIntent();
       }
       if (handleDesktopFilePaste(event)) return;
 
-      const imageFiles = getClipboardImageFiles(event.clipboardData);
-      if (imageFiles.length && !hasText) {
+      const { files: imageFiles, hasUnsupportedFiles } = inspectClipboardImageFiles(event.clipboardData);
+      if (hasUnsupportedFiles) {
+        event.preventDefault();
+        pushAttachmentAlert(t('chat.unsupportedImagePaste'));
+      }
+      if (imageFiles.length) {
         event.preventDefault();
         if (shouldAlertImagePasteDisabled(imageInputDisabled, true)) {
           pushAttachmentAlert(t(IMAGE_INPUT_DISABLED_ALERT_KEY));
@@ -2394,6 +3077,11 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
 
       if (clipboardHasFileItems(event.clipboardData) && !hasText) {
         event.preventDefault();
+        return;
+      }
+      if (hasText) {
+        event.preventDefault();
+        insertPlainText(event.currentTarget, text);
       }
     },
     [appendAttachmentFiles, handleDesktopFilePaste, imageInputDisabled, notifyKVCInputIntent, pushAttachmentAlert, t],
@@ -2411,6 +3099,25 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     document.addEventListener('paste', onDocumentPaste);
     return () => document.removeEventListener('paste', onDocumentPaste);
   }, [handleDesktopFilePaste, isDesktopBridgeReady]);
+
+  useEffect(() => {
+    // Context-menu Paste has no ClipboardEvent; desktop menu dispatches image blobs here.
+    const onDesktopClipboardImages = (event: Event) => {
+      const files = (event as CustomEvent<DesktopClipboardImagesEventDetail>).detail?.files;
+      if (!files?.length) return;
+      if (shouldAlertImagePasteDisabled(imageInputDisabled, true)) {
+        pushAttachmentAlert(t(IMAGE_INPUT_DISABLED_ALERT_KEY));
+        return;
+      }
+      if (imageInputDisabled) return;
+      appendAttachmentFiles(files);
+    };
+
+    window.addEventListener(DESKTOP_CLIPBOARD_IMAGES_EVENT, onDesktopClipboardImages as EventListener);
+    return () => {
+      window.removeEventListener(DESKTOP_CLIPBOARD_IMAGES_EVENT, onDesktopClipboardImages as EventListener);
+    };
+  }, [appendAttachmentFiles, imageInputDisabled, pushAttachmentAlert, t]);
 
   const handleFileDragOver = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
@@ -2479,7 +3186,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       removeBtn.type = 'button';
       removeBtn.className = 'chat-input-chip-inline__remove';
       removeBtn.setAttribute('aria-label', 'remove skill');
-      removeBtn.innerHTML = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4"><path stroke-linecap="round" stroke-linejoin="round" d="M6 6l8 8M14 6l-8 8"/></svg>`;
+      removeBtn.innerHTML = closeSvg;
       removeBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -2560,6 +3267,15 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       };
       const sid = useChatStore.getState().activeSessionId;
       if (!sid || !inputRef.current) return;
+      const runtime = useSessionStore.getState().getRuntime(sid);
+      if (
+        isAgentGroupSelected(
+          runtime?.mode,
+          runtime?.agentGroupSelectionIntent,
+          runtime?.agentGroupBinding,
+          runtime?.agentGroupBindingPending,
+        )
+      ) return;
 
       // 清空输入框并插入前缀文本（如"帮我修改这个技能"）
       inputRef.current.textContent = detail.prefixText || '';
@@ -2600,7 +3316,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     };
     window.addEventListener('chat-input-insert-skill', handler);
     return () => window.removeEventListener('chat-input-insert-skill', handler);
-  }, [insertSkillChip, extractPlainText]);
+  }, [extractPlainText, insertSkillChip]);
   // 外部进入新会话时可以预选技能。把 canonical session state 同步成输入框
   // 中的 chip，避免用户开始编辑后被 handleEditorInput 误判为手动移除。
   useEffect(() => {
@@ -2839,7 +3555,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
           )}
 
           <div className="chat-input-body" data-testid="chat-panel-input-body">
-            {attachments.length > 0 && (
+            {(attachments.length > 0 || referencedAssetCards.length > 0) && (
               <div className="chat-input-attachment-panel" data-testid="chat-panel-input-attachment-panel">
                 <div
                   className={cx(
@@ -2874,13 +3590,54 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                         )}
                       </div>
                       <div className="chat-input-attachment-main" data-testid="chat-panel-input-attachment-main">
-                        <div
-                          className="chat-input-attachment-name"
-                          title={attachment.filename}
-                          data-testid="chat-panel-input-attachment-name"
-                        >
-                          {attachment.filename}
-                        </div>
+                        {renamingAttachmentId === attachment.id ? (
+                          <input
+                            autoFocus
+                            className="chat-input-attachment-name-input"
+                            value={attachmentRenameDraft}
+                            maxLength={60}
+                            aria-label={t('sessionAssets.rename')}
+                            data-testid="chat-panel-input-attachment-rename-input"
+                            onChange={(event) => setAttachmentRenameDraft(event.target.value)}
+                            onKeyDown={(event) => {
+                              event.stopPropagation();
+                              if (event.key === 'Enter') void commitAttachmentRename(attachment);
+                              if (event.key === 'Escape') setRenamingAttachmentId(null);
+                            }}
+                            onBlur={() => void commitAttachmentRename(attachment)}
+                          />
+                        ) : (
+                          <div
+                            className="chat-input-attachment-name"
+                            data-testid="chat-panel-input-attachment-name"
+                            onDoubleClick={() => {
+                              setAttachmentRenameDraft(attachment.assetName ?? attachment.filename);
+                              setRenamingAttachmentId(attachment.id);
+                            }}
+                          >
+                            {/* 文件名单独放一个可截断的 span：名字和"编辑"按钮各占各的，名字再长
+                                也不会把按钮挤到 overflow:hidden 的裁切区之外而看不见。 */}
+                            <span className="chat-input-attachment-name-text" title={attachment.assetName ?? attachment.filename}>
+                              {attachment.assetName ?? attachment.filename}
+                            </span>
+                            {attachment.status === 'ready' ? (
+                              <button
+                                type="button"
+                                className="chat-input-attachment-rename"
+                                title={t('sessionAssets.rename')}
+                                aria-label={t('sessionAssets.rename')}
+                                data-testid="chat-panel-input-attachment-rename"
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => {
+                                  setAttachmentRenameDraft(attachment.assetName ?? attachment.filename);
+                                  setRenamingAttachmentId(attachment.id);
+                                }}
+                              >
+                                <Pencil size={12} strokeWidth={2} />
+                              </button>
+                            ) : null}
+                          </div>
+                        )}
                         <div className="chat-input-attachment-meta" data-testid="chat-panel-input-attachment-meta">
                           {attachment.status === 'uploading' ? (
                             <>
@@ -2899,7 +3656,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                               >
                                 {t('chat.uploadFailed')}
                               </span>
-                              {attachment.file && (
+                              {canRetryAttachmentDraft(attachment) && (
                                 <button
                                   type="button"
                                   className="chat-input-attachment-retry"
@@ -2977,6 +3734,32 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                         )}
                     </div>
                   ))}
+                  {referencedAssetCards.map((card) => (
+                    <div
+                      className="chat-input-attachment-card chat-input-attachment-card--reference"
+                      key={card.key}
+                      data-testid="chat-panel-input-reference-card"
+                      data-variant={card.key}
+                    >
+                      <div
+                        className="chat-input-attachment-preview chat-input-attachment-preview--image"
+                        aria-hidden="true"
+                        data-testid="chat-panel-input-reference-preview"
+                      >
+                        {card.previewUrl ? <img src={card.previewUrl} alt="" /> : <FileIcon fileName={card.name} size={32} />}
+                      </div>
+                      <div className="chat-input-attachment-main" data-testid="chat-panel-input-reference-main">
+                        <div className="chat-input-attachment-name" data-testid="chat-panel-input-reference-name">
+                          <span className="chat-input-attachment-name-text" title={`@${card.name}`}>
+                            {card.name}
+                          </span>
+                        </div>
+                        <div className="chat-input-attachment-meta" data-testid="chat-panel-input-reference-meta">
+                          <span>{t('sessionAssets.reference')}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
@@ -2999,6 +3782,9 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
             <div
               ref={inputRef}
               contentEditable={!composerDisabled}
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
               aria-disabled={composerDisabled}
               suppressContentEditableWarning
               onBeforeInput={handleEditorBeforeInput}
@@ -3013,7 +3799,9 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
               onBlur={saveSelection}
               onPaste={handlePaste}
               data-placeholder={
-                isCompactRunning
+                agentGroupUnavailable
+                  ? t('chat.placeholderAgentGroupDeleted')
+                  : isCompactRunning
                   ? t('chat.placeholderCompacting')
                   : hasPendingQuestion
                     ? t('chat.placeholderAwaitingApproval')
@@ -3037,6 +3825,9 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
 
             <div className="chat-input-toolbar" data-testid="chat-panel-input-toolbar">
               <div className="chat-input-toolbar-left" data-testid="chat-panel-input-toolbar-left">
+                {isTeamMode && organizationUiEnabled && (
+                  <TeamSelector sessionId={activeSessionId} isProcessing={isProcessing} groups={groupOptions} />
+                )}
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -3071,7 +3862,6 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                       attachTriggerDisabled && 'chat-input-btn--disabled',
                       attachMenuOpen && 'chat-input-btn--menu-open',
                     )}
-                    title={attachTriggerDisabled ? t('chat.addFileDisabled') : undefined}
                     aria-label={attachTriggerDisabled ? t('chat.addFileDisabled') : t('chat.addFile')}
                     aria-haspopup="menu"
                     aria-expanded={attachMenuOpen}
@@ -3081,6 +3871,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                     <Plus className="chat-input-btn-icon" strokeWidth={1.8} />
                   </button>
                   {attachTooltipNode}
+                  {uploadLimitsTooltipNode}
                   {attachMenuOpen &&
                     attachMenuAnchor &&
                     createPortal(
@@ -3111,7 +3902,8 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                           role="menuitem"
                           data-testid="chat-panel-input-attach-menu-file"
                           disabled={imageInputDisabled}
-                          title={imageInputDisabled ? t('chat.addFileDisabled') : undefined}
+                          data-tooltip={imageInputDisabled ? t('chat.addFileDisabled') : uploadLimitsTooltip}
+                          {...uploadLimitsTooltipHandlers}
                           onClick={() => {
                             void openAttachmentPicker();
                           }}
@@ -3123,33 +3915,34 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                             <span className="chat-mode-select__label">{t('chat.addFile')}</span>
                           </span>
                         </button>
-                        {!isTeamMode && (
-                          <>
-                            <div className="chat-attach-menu-item-anchor">
-                              <button
-                                type="button"
-                                className={clsx(
-                                  'chat-mode-select__option chat-agent-picker-trigger',
-                                  agentPickerOpen && 'chat-mode-select__option--panel-open',
-                                )}
-                                role="menuitem"
-                                aria-haspopup="menu"
-                                aria-expanded={agentPickerOpen}
-                                data-testid="chat-panel-input-attach-menu-agent"
-                                onClick={() => {
-                                  setAgentPickerOpen((open) => !open);
-                                  setExtensionPanelOpen(false);
-                                  setSkillPanelOpen(false);
-                                }}
-                              >
-                                <span className="chat-mode-select__option-main">
-                                  <span
-                                    className="chat-mode-select__icon chat-mode-select__icon--asset"
-                                    aria-hidden="true"
-                                  >
-                                    <AgentPickerIcon aria-hidden="true" />
+                        <div className="chat-attach-menu-item-anchor">
+                          <button
+                            type="button"
+                            className={clsx(
+                              'chat-mode-select__option chat-agent-picker-trigger',
+                              agentPickerOpen && 'chat-mode-select__option--panel-open',
+                            )}
+                            role="menuitem"
+                            aria-haspopup="menu"
+                            aria-expanded={agentPickerOpen}
+                            data-testid="chat-panel-input-attach-menu-agent"
+                            onClick={() => {
+                              if (!agentPickerOpen) setPickerTab(isTeamMode ? 'group' : 'agent');
+                              setAgentPickerOpen((open) => !open);
+                              setExtensionPanelOpen(false);
+                              setSkillPanelOpen(false);
+                            }}
+                          >
+                                  <span className="chat-mode-select__option-main">
+                                    <span
+                                      className="chat-mode-select__icon chat-mode-select__icon--asset"
+                                      aria-hidden="true"
+                                    >
+                                      <AgentPickerIcon aria-hidden="true" />
+                                    </span>
+                                  <span className="chat-mode-select__label">
+                                    {t(isTeamMode ? 'chat.agentGroup' : 'chat.agent')}
                                   </span>
-                                  <span className="chat-mode-select__label">{t('chat.agent')}</span>
                                 </span>
                                 <ChevronRight
                                   className="chat-agent-picker-trigger__chevron"
@@ -3161,45 +3954,44 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                                 <PickerPanel
                                   className="chat-agent-picker"
                                   direction={attachMenuDirection}
-                                  ariaLabel={t('chat.agent')}
+                                  ariaLabel={t(isTeamMode ? 'chat.agentGroup' : 'chat.agent')}
                                   testId="chat-panel-agent-picker-panel"
                                   onMouseEnter={() => setAgentPickerOpen(true)}
-                                  rowHeight={AGENT_PICKER_ROW_HEIGHT}
-                                  itemCount={filteredAgentOptions.length}
+                                  rowHeight={pickerTab === 'group' ? GROUP_PICKER_ROW_HEIGHT : AGENT_PICKER_ROW_HEIGHT}
+                                  itemCount={pickerTab === 'group' ? filteredGroupOptions.length : filteredAgentOptions.length}
                                   tabs={
-                                    <Tabs
-                                      role="tablist"
-                                      ariaLabel={t('agentManagement.detail.tabsLabel')}
-                                      wrapperTestId="chat-panel-agent-picker-tabs"
-                                      bordered
-                                      className="mb-4 text-sm"
-                                      value="agent"
-                                      items={[{ value: 'agent', label: t('chat.agent') }]}
-                                    />
+                                    !isAgentMode && !isTeamMode ? (
+                                      <div className="chat-picker-panel__tabs" role="tablist" aria-label={t('agentManagement.tabsLabel')}>
+                                        {!isTeamMode ? (
+                                          <button type="button" role="tab" aria-selected={pickerTab === 'agent'} aria-disabled={agentSelectionDisabled} className={pickerTab === 'agent' ? 'is-active' : ''} disabled={agentSelectionDisabled} data-testid="chat-panel-agent-picker-agent-tab" title={agentSelectionDisabled ? t('chat.agentOnlyInSingleAgentMode') : undefined} onClick={() => { setPickerTab('agent'); setAgentPickerQuery(''); }}>{t('chat.agent')}</button>
+                                        ) : null}
+                                        {!isAgentMode ? (
+                                          <button type="button" role="tab" aria-selected={pickerTab === 'group'} aria-disabled={agentGroupSelectionDisabled} className={pickerTab === 'group' ? 'is-active' : ''} disabled={agentGroupSelectionDisabled} data-testid="chat-panel-agent-picker-agent-group-tab" title={isAgentMode ? t('chat.agentGroupOnlyInTeamMode') : teamSkillSelectionActive ? t('chat.teamSkillsGroupLocked') : existingTeamGroupSelectionDisabled ? t('chat.agentGroupFirstBuildOnly') : agentGroupLocked ? t('chat.agentGroupBinding') : undefined} onClick={() => { setPickerTab('group'); setAgentPickerQuery(''); }}>{t('chat.agentGroup')}</button>
+                                        ) : null}
+                                      </div>
+                                    ) : null
                                   }
                                   search={
-                                    <label className="chat-picker-panel__search">
-                                      <div className="chat-picker-panel__search-inner">
-                                        <SearchIcon aria-hidden="true" />
-                                        <input
-                                          type="search"
-                                          value={agentPickerQuery}
-                                          onChange={(event) => setAgentPickerQuery(event.target.value)}
-                                          placeholder={t('chat.agentSearchPlaceholder')}
-                                          data-testid="chat-panel-agent-picker-search-input"
-                                        />
-                                      </div>
-                                    </label>
+                                    <PickerSearchInput
+                                      value={agentPickerQuery}
+                                      onChange={setAgentPickerQuery}
+                                      placeholder={t(
+                                        pickerTab === 'group'
+                                          ? 'chat.agentGroupSearchPlaceholder'
+                                          : 'chat.agentSearchPlaceholder',
+                                      )}
+                                      inputTestId="chat-panel-agent-picker-search-input"
+                                    />
                                   }
                                   footer={{
                                     label: t('chat.agentMore'),
                                     onClick: () => {
                                       setAttachMenuOpen(false);
-                                      onNavigateToAgents?.();
+                                      onNavigateToAgents?.(isTeamMode ? 'group' : 'agent');
                                     },
                                   }}
                                 >
-                                  {agentOptionsStatus === 'loading' ? (
+                                  {pickerTab === 'agent' && agentOptionsStatus === 'loading' ? (
                                     <div
                                       className="chat-agent-picker__state"
                                       data-testid="chat-panel-agent-picker-state"
@@ -3207,80 +3999,198 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                                     >
                                       {t('common.loading')}
                                     </div>
-                                  ) : agentOptionsStatus === 'error' ? (
-                                    <div
-                                      className="chat-agent-picker__state"
-                                      data-testid="chat-panel-agent-picker-state"
-                                      data-variant="error"
+                                  ) : pickerTab === 'agent' && agentOptionsStatus === 'error' ? (
+                                <div
+                                  className="chat-agent-picker__state"
+                                  data-testid="chat-panel-agent-picker-state"
+                                  data-variant="error"
+                                >
+                                  {t('agentManagement.states.loadError')}
+                                </div>
+                              ) : pickerTab === 'agent' && filteredAgentOptions.length === 0 ? (
+                                <div
+                                  className="chat-agent-picker__state"
+                                  data-testid="chat-panel-agent-picker-state"
+                                  data-variant={installedAgentOptions.length === 0 ? 'no-installed' : 'no-matches'}
+                                >
+                                  {installedAgentOptions.length === 0
+                                    ? t('chat.agentNoInstalled')
+                                    : t('chat.agentNoMatches')}
+                                </div>
+                              ) : pickerTab === 'agent' ? (
+                                filteredAgentOptions.map((item) => {
+                                  const avatarUrl = getAgentAvatarUrl(item);
+                                  const isSelected = isSameAgentOption(item, selectedAgentId);
+                                  const externalSwitchBlocked =
+                                    externalAgentSwitchBlocked && isExternalHarnessCatalogItem(item);
+                                  return (
+                                    <button
+                                      key={item.id}
+                                      type="button"
+                                      className={clsx(
+                                        'chat-agent-picker__item',
+                                        isSelected && 'is-selected',
+                                        (agentSelectionDisabled || externalSwitchBlocked) && 'is-locked',
+                                      )}
+                                      role="menuitemradio"
+                                      aria-checked={isSelected}
+                                      aria-disabled={agentSelectionDisabled || externalSwitchBlocked}
+                                      data-testid="chat-panel-agent-picker-item"
+                                      data-variant={item.id}
+                                      data-tooltip={
+                                        agentSelectionDisabled
+                                          ? t('chat.agentOnlyInSingleAgentMode')
+                                          : externalSwitchBlocked
+                                            ? t('chat.externalAgentRequiresNewSession')
+                                            : item.description || undefined
+                                      }
+                                      {...agentTooltipHandlers}
+                                      onClick={() => {
+                                        if (!activeSessionId || agentSelectionDisabled) return;
+                                        if (externalSwitchBlocked) {
+                                          setExternalAgentSwitchNotice(t('chat.externalAgentRequiresNewSession'));
+                                          return;
+                                        }
+                                        useSessionStore.getState().setMode(activeSessionId, 'agent');
+                                        setAgentSelectionIntent(activeSessionId, { kind: 'select', id: item.id });
+                                        setAttachMenuOpen(false);
+                                      }}
                                     >
-                                      {t('agentManagement.states.loadError')}
-                                    </div>
-                                  ) : filteredAgentOptions.length === 0 ? (
-                                    <div
-                                      className="chat-agent-picker__state"
-                                      data-testid="chat-panel-agent-picker-state"
-                                      data-variant={installedAgentOptions.length === 0 ? 'no-installed' : 'no-matches'}
-                                    >
-                                      {installedAgentOptions.length === 0
-                                        ? t('chat.agentNoInstalled')
-                                        : t('chat.agentNoMatches')}
-                                    </div>
-                                  ) : (
-                                    filteredAgentOptions.map((item) => {
-                                      const avatarUrl = getAgentAvatarUrl(item);
-                                      const isSelected = selectedAgentId === item.id;
-                                      return (
-                                        <button
-                                          key={item.id}
-                                          type="button"
-                                          className={clsx('chat-agent-picker__item', isSelected && 'is-selected')}
-                                          role="menuitemradio"
-                                          aria-checked={isSelected}
-                                          data-testid="chat-panel-agent-picker-item"
-                                          data-variant={item.id}
-                                          data-tooltip={item.description || undefined}
-                                          {...agentTooltipHandlers}
-                                          onClick={() => {
-                                            if (!activeSessionId) return;
-                                            useSessionStore.getState().setMode(activeSessionId, 'agent');
-                                            setAgentSelectionIntent(activeSessionId, { kind: 'select', id: item.id });
-                                            setAttachMenuOpen(false);
-                                          }}
+                                      <span className="chat-agent-picker__avatar" aria-hidden="true">
+                                        {avatarUrl ? (
+                                          <img src={avatarUrl} alt="" />
+                                        ) : (
+                                          item.displayName.trim().slice(0, 1).toUpperCase() || '?'
+                                        )}
+                                      </span>
+                                      <span className="chat-agent-picker__item-name">{item.displayName}</span>
+                                      {isSelected && (
+                                        <svg
+                                          className="chat-mode-select__check"
+                                          viewBox="0 0 20 20"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          strokeWidth={2}
+                                          aria-hidden="true"
                                         >
-                                          <span className="chat-agent-picker__avatar" aria-hidden="true">
-                                            {avatarUrl ? (
-                                              <img src={avatarUrl} alt="" />
-                                            ) : (
-                                              item.displayName.trim().slice(0, 1).toUpperCase() || '?'
-                                            )}
-                                          </span>
-                                          <span className="chat-agent-picker__item-name">{item.displayName}</span>
-                                          {isSelected && (
-                                            <svg
-                                              className="chat-mode-select__check"
-                                              viewBox="0 0 20 20"
-                                              fill="none"
-                                              stroke="currentColor"
-                                              strokeWidth={2}
-                                              aria-hidden="true"
-                                            >
-                                              <path
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                                d="M5 10.5l3 3L15 6.5"
-                                              />
-                                            </svg>
-                                          )}
-                                        </button>
-                                      );
-                                    })
-                                  )}
-                                </PickerPanel>
+                                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 10.5l3 3L15 6.5" />
+                                        </svg>
+                                      )}
+                                    </button>
+                                  );
+                                })
+                              ) : groupOptionsStatus === 'loading' ? (
+                                <div
+                                  className="chat-agent-picker__state"
+                                  data-testid="chat-panel-agent-group-picker-state"
+                                  data-variant="loading"
+                                >
+                                  {t('common.loading')}
+                                </div>
+                              ) : groupOptionsStatus === 'error' ? (
+                                <div
+                                  className="chat-agent-picker__state"
+                                  data-testid="chat-panel-agent-group-picker-state"
+                                  data-variant="error"
+                                >
+                                  {t('agentManagement.group.states.loadError')}
+                                </div>
+                              ) : filteredGroupOptions.length === 0 ? (
+                                <div
+                                  className="chat-agent-picker__state"
+                                  data-testid="chat-panel-agent-group-picker-state"
+                                  data-variant={installedGroupOptions.length === 0 ? 'no-installed' : 'no-matches'}
+                                >
+                                  {installedGroupOptions.length === 0
+                                    ? t('chat.agentGroupNoInstalled')
+                                    : t('chat.agentGroupNoMatches')}
+                                </div>
+                              ) : (
+                                filteredGroupOptions.map((item) => {
+                                  const isSelected = selectedGroupId === item.name;
+                                  const groupAvatarUrl =
+                                    item.avatarUrl && !failedGroupAvatarIds.has(item.id) ? item.avatarUrl : null;
+                                  return (
+                                    <button
+                                      key={item.id}
+                                      type="button"
+                                      className={clsx(
+                                        'chat-agent-picker__item',
+                                        isSelected && 'is-selected',
+                                        agentGroupSelectionDisabled && 'is-locked',
+                                      )}
+                                      role="menuitemradio"
+                                      aria-checked={isSelected}
+                                      aria-disabled={agentGroupSelectionDisabled}
+                                      data-testid="chat-panel-agent-group-picker-item"
+                                      data-variant={item.id}
+                                      data-tooltip={
+                                        isAgentMode
+                                          ? t('chat.agentGroupOnlyInTeamMode')
+                                          : teamSkillSelectionActive
+                                            ? t('chat.teamSkillsGroupLocked')
+                                            : existingTeamGroupSelectionDisabled
+                                            ? t('chat.agentGroupFirstBuildOnly')
+                                            : item.description || t('chat.agentGroupBinding')
+                                      }
+                                      {...agentTooltipHandlers}
+                                      onClick={() => {
+                                        if (agentGroupSelectionDisabled || !activeSessionId) return;
+                                        useSessionStore.getState().setMode(activeSessionId, 'team');
+                                        setAgentGroupSelectionIntent(activeSessionId, { kind: 'select', id: item.name });
+                                        setAgentSelectionIntent(activeSessionId, { kind: 'clear' });
+                                        clearSelectedSkills(activeSessionId);
+                                        setAttachMenuOpen(false);
+                                      }}
+                                    >
+                                      <span className="chat-agent-picker__avatar" aria-hidden="true">
+                                        {groupAvatarUrl ? (
+                                          <img
+                                            src={groupAvatarUrl}
+                                            alt=""
+                                            onError={() =>
+                                              setFailedGroupAvatarIds((current) =>
+                                                current.has(item.id) ? current : new Set([...current, item.id]),
+                                              )
+                                            }
+                                          />
+                                        ) : (
+                                          item.displayName.trim().slice(0, 1).toUpperCase() || '?'
+                                        )}
+                                      </span>
+                                      <span className="chat-agent-picker__item-name">{item.displayName}</span>
+                                      {isSelected ? (
+                                        <svg
+                                          className="chat-mode-select__check"
+                                          viewBox="0 0 20 20"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          strokeWidth={2}
+                                          aria-hidden="true"
+                                        >
+                                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 10.5l3 3L15 6.5" />
+                                        </svg>
+                                      ) : null}
+                                    </button>
+                                  );
+                                })
                               )}
-                              {agentTooltipNode}
+                            </PickerPanel>
+                          )}
+                          {externalAgentSwitchNotice ? (
+                            <div className="app-toast-wrapper app-toast-wrapper--top-center">
+                              <div
+                                className="app-session-toast"
+                                role="status"
+                                aria-live="polite"
+                                data-testid="chat-panel-external-agent-switch-notice"
+                              >
+                                {externalAgentSwitchNotice}
+                              </div>
                             </div>
-                          </>
-                        )}
+                          ) : null}
+                          {agentTooltipNode}
+                        </div>
                         {/* 插件/MCP 装备目前后端在集群模式下不生效（JiuWenSwarmDeepAdapter
                     ._ensure_chat_extensions 对 team 模式直接短路，见
                     interface_deep.py），继续展示这个入口只会让用户以为选了插件/MCP 会生效，
@@ -3318,6 +4228,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                               panelRef={skillPanelRef}
                               direction={attachMenuDirection}
                               isTeamMode={isTeamMode}
+                              selectionLocked={Boolean(selectedGroupId)}
                               onClose={() => setSkillPanelOpen(false)}
                               onNavigateToSkills={onNavigateToSkills}
                               onInsertSkill={insertSkillChip}
@@ -3430,6 +4341,10 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                                 usePlanStore.getState().setActive(activeSessionId, false);
                               }
                               useSessionStore.getState().setSwarmflowActive(activeSessionId, next);
+                              // worktree 有效开启且未选项目目录时，等菜单关闭后再弹聚光灯引导
+                              if (next && swarmflowWorktreeEffective && !displayedProject) {
+                                setWorktreeGuidePending(true);
+                              }
                             };
                             return (
                               <div
@@ -3468,8 +4383,13 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       if (!swarmflowActive) return;
-                                      if (!swarmflowConfigPanelOpen && swarmflowConfigBtnRef.current) {
-                                        setSwarmflowConfigAnchor(swarmflowConfigBtnRef.current.getBoundingClientRect());
+                                      if (!swarmflowConfigPanelOpen) {
+                                        refreshSwarmflowWorktreeDefault();
+                                        if (swarmflowConfigBtnRef.current) {
+                                          setSwarmflowConfigAnchor(
+                                            swarmflowConfigBtnRef.current.getBoundingClientRect(),
+                                          );
+                                        }
                                       }
                                       setSwarmflowConfigPanelOpen((open) => !open);
                                     }}
@@ -3487,33 +4407,31 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                           })()}
                         {canUseGoalMenu &&
                           (() => {
-                            // Goal 和 Plan 互斥：已有真正生效的计划时不能再选目标；"打开"方向沿用原逻辑，
-                            // "关闭"方向不受限制（跟输入框旁边现有的目标 chip 关闭按钮一致，随时可关）。
+                            // Goal 和 Plan 互斥：已有真正生效的计划时不能再选目标。能否武装/解除武装统一走
+                            // goalModeGate（evaluateGoalArm/applyGoalArm）——`/goal` 斜杠命令选中即武装、
+                            // 目标 tag 关闭按钮也调同一套决策层，不再各自定制一份判断（bugfix 2026092201
+                            // bug001；第2轮补上关闭方向的会话忙态保护）。
                             const goalChecked = goalArmed || hasUnfinishedGoal;
-                            const goalDisabledOn = hasUnfinishedGoal || planCommitted;
-                            const goalDisabledOnTitle = hasUnfinishedGoal
-                              ? t('goal.toolbarUnavailable')
-                              : planCommitted
-                                ? t('goal.toolbarUnavailablePlan')
-                                : undefined;
-                            const goalDisabled = goalChecked ? false : goalDisabledOn;
-                            const goalTitle = goalChecked ? undefined : goalDisabledOnTitle;
+                            // bugfix 2026092201 bug001 第2轮：开、关两个方向分别求 evaluateGoalArm 的决策——
+                            // 之前"已勾选就永远不 disabled"会导致目标真正执行期间（goalChecked 恒为 true）
+                            // 这个开关完全没有保护，随手一点 `next=false` 就会把执行中的目标清掉、会话跟着
+                            // 停摆。现在关闭方向也要过 evaluateGoalArm 的忙态检查，跟"计划"开关关闭时受
+                            // planModeGate 保护的做法对齐。
+                            const goalOffDecision = evaluateGoalArm(activeSessionId, false);
+                            const goalOnDecision = evaluateGoalArm(activeSessionId, true);
+                            const goalDisabled = goalChecked ? !goalOffDecision.ok : !goalOnDecision.ok;
+                            const goalActiveDecision = goalChecked ? goalOffDecision : goalOnDecision;
+                            const goalTitle = goalActiveDecision.reason ? t(goalActiveDecision.reason) : undefined;
                             const toggleGoal = (next: boolean) => {
                               if (!activeSessionId) return;
                               if (next) {
-                                if (goalDisabledOn) return;
-                                // 走到这里 planCommitted 一定是 false（否则上面已 disabled），所以 planActive
-                                // 为 true 时只可能是"刚打开开关、还没发过消息"的未提交态，可以放心顶掉。
-                                // 内部互斥复位（非用户主动退出计划模式），直接 setActive、不过 planModeGate。
-                                if (planActive) {
-                                  usePlanStore.getState().setActive(activeSessionId, false);
-                                }
-                                useGoalStore.getState().setArmed(activeSessionId, true);
-                              } else {
-                                if (currentGoal) {
-                                  onClearGoal?.(activeSessionId);
-                                }
-                                useGoalStore.getState().setArmed(activeSessionId, false);
+                                applyGoalArm(activeSessionId, true);
+                                return;
+                              }
+                              const applied = applyGoalArm(activeSessionId, false);
+                              if (!applied) return;
+                              if (currentGoal) {
+                                onClearGoal?.(activeSessionId);
                               }
                               // 不关闭菜单：用户拨动开关后保持菜单打开，便于看到开关状态变化并继续操作。
                             };
@@ -3700,7 +4618,11 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                     )}
                 </div>
                 {!isTeamMode && (
-                  <PermissionSelector permissionsEnabled={permissionsEnabled} onSavePermission={onSavePermission} />
+                  <PermissionSelector
+                    mode={mode}
+                    permissionProfile={permissionProfile}
+                    onSavePermission={onSavePermission}
+                  />
                 )}
 
                 {selectedAgentId && (
@@ -3716,42 +4638,100 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                     <button
                       type="button"
                       className="chat-agent-tag__close"
-                      title={t('chat.agentRemove')}
                       aria-label={t('chat.agentRemove')}
                       onClick={() => {
                         if (activeSessionId) setAgentSelectionIntent(activeSessionId, { kind: 'clear' });
                       }}
                     >
-                      <X size={16} strokeWidth={2.5} aria-hidden="true" />
+                      <WorkIcon name="close" />
                     </button>
                   </div>
                 )}
-                {goalTagVisible && (
-                  <div className="chat-agent-tag" data-testid="chat-panel-goal-tag">
-                    <span className="chat-agent-tag__avatar chat-agent-tag__avatar--plain" aria-hidden="true">
-                      <GoalIcon aria-hidden="true" />
+                {displayedGroupId && isTeamMode && (
+                  <div
+                    className={clsx(
+                      'chat-agent-tag chat-agent-group-tag',
+                      (agentGroupLocked || existingTeamGroupSelectionDisabled) && 'chat-agent-tag--locked',
+                    )}
+                    data-testid="chat-panel-agent-group-tag"
+                    title={
+                      agentGroupLocked
+                        ? t('chat.agentGroupBinding')
+                        : existingTeamGroupSelectionDisabled
+                          ? t('chat.agentGroupFirstBuildOnly')
+                          : undefined
+                    }
+                  >
+                    <span className="chat-agent-tag__avatar" aria-hidden="true">
+                      {displayedGroup?.avatarUrl && !failedGroupAvatarIds.has(displayedGroup.id) ? (
+                        <img
+                          src={displayedGroup.avatarUrl}
+                          alt=""
+                          onError={() =>
+                            setFailedGroupAvatarIds((current) =>
+                              current.has(displayedGroup.id) ? current : new Set([...current, displayedGroup.id]),
+                            )
+                          }
+                        />
+                      ) : (
+                        (displayedGroup?.displayName || displayedGroupId).trim().slice(0, 1).toUpperCase() || '?'
+                      )}
                     </span>
-                    <span className="chat-agent-tag__label" data-testid="chat-panel-goal-tag-label">
-                      {t('goal.toolbarTag')}
+                    <span className="chat-agent-tag__label" data-testid="chat-panel-agent-group-tag-label">
+                      {displayedGroup?.displayName || displayedGroupId}
                     </span>
-                    <button
-                      type="button"
-                      className="chat-agent-tag__close"
-                      data-testid="chat-panel-goal-tag-close"
-                      title={t('goal.closeTag')}
-                      aria-label={t('goal.closeTag')}
-                      onClick={() => {
-                        if (!activeSessionId) return;
-                        if (currentGoal) {
-                          onClearGoal?.(activeSessionId);
-                        }
-                        useGoalStore.getState().setArmed(activeSessionId, false);
-                      }}
-                    >
-                      <X size={16} strokeWidth={2.5} aria-hidden="true" />
-                    </button>
+                    {agentGroupLocked || existingTeamGroupSelectionDisabled ? (
+                      <Lock className="chat-agent-tag__lock" size={12} strokeWidth={2} aria-hidden="true" />
+                    ) : null}
+                    {!(agentGroupLocked || existingTeamGroupSelectionDisabled) && (
+                      <button
+                        type="button"
+                        className="chat-agent-tag__close"
+                        aria-label={t('chat.agentGroupRemove')}
+                        data-testid="chat-panel-agent-group-tag-close"
+                          onClick={() => {
+                            if (activeSessionId) clearAgentGroupSelectionIntent(activeSessionId);
+                          }}
+                        >
+                          <WorkIcon name="close" />
+                        </button>
+                    )}
                   </div>
                 )}
+                {goalTagVisible &&
+                  (() => {
+                    // 关闭「目标」tag 与"+"菜单目标开关、evaluateGoalArm 共用同一套忙态保护
+                    // （bugfix 2026092201 bug001 第2轮）：目标真正执行期间不能被随手关掉/清除，
+                    // 跟「计划」chip 关闭按钮受 planModeGate 保护的做法对齐。
+                    const goalCloseBlocked = !evaluateGoalArm(activeSessionId, false).ok;
+                    return (
+                      <div className="chat-agent-tag" data-testid="chat-panel-goal-tag">
+                        <span className="chat-agent-tag__avatar chat-agent-tag__avatar--plain" aria-hidden="true">
+                          <GoalIcon aria-hidden="true" />
+                        </span>
+                        <span className="chat-agent-tag__label" data-testid="chat-panel-goal-tag-label">
+                          {t('goal.toolbarTag')}
+                        </span>
+                        <button
+                          type="button"
+                          className="chat-agent-tag__close"
+                          data-testid="chat-panel-goal-tag-close"
+                          disabled={goalCloseBlocked}
+                          aria-label={goalCloseBlocked ? t('goal.closeTagDisabled') : t('goal.closeTag')}
+                          onClick={() => {
+                            if (!activeSessionId) return;
+                            const applied = applyGoalArm(activeSessionId, false);
+                            if (!applied) return;
+                            if (currentGoal) {
+                              onClearGoal?.(activeSessionId);
+                            }
+                          }}
+                        >
+                          <WorkIcon name="close" />
+                        </button>
+                      </div>
+                    );
+                  })()}
 
                 {planTagVisible && (
                   <div className="chat-agent-tag" data-testid="chat-panel-plan-tag">
@@ -3771,13 +4751,12 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                           className="chat-agent-tag__close"
                           data-testid="chat-panel-plan-tag-close"
                           disabled={closeBlocked}
-                          title={closeBlocked ? t('plan.closeTagDisabled') : t('plan.closeTag')}
                           aria-label={closeBlocked ? t('plan.closeTagDisabled') : t('plan.closeTag')}
                           onClick={() => {
                             applyPlanToggle(activeSessionId, false);
                           }}
                         >
-                          <X size={16} strokeWidth={2.5} aria-hidden="true" />
+                          <WorkIcon name="close" />
                         </button>
                       );
                     })()}
@@ -3862,7 +4841,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                   }
                 />
 
-                <button
+                {taskAsrEnabled && <button
                   type="button"
                   onClick={toggleRecording}
                   disabled={composerDisabled || isTranscribing || !taskAsrSupported}
@@ -3871,7 +4850,9 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                     isListening && 'chat-input-btn--recording',
                     (composerDisabled || isTranscribing || !taskAsrSupported) && 'chat-input-btn--disabled',
                   )}
-                  title={
+                  aria-label={isListening ? t('chat.stopRecording') : t('chat.startRecording')}
+                  aria-pressed={isListening}
+                  data-tooltip={
                     isTranscribing
                       ? t('chat.transcribing')
                       : isListening
@@ -3880,8 +4861,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                           ? t('chat.startRecording')
                           : t('speech.recordingUnsupported')
                   }
-                  aria-label={isListening ? t('chat.stopRecording') : t('chat.startRecording')}
-                  aria-pressed={isListening}
+                  {...micTooltipHandlers}
                   data-testid="chat-panel-input-microphone"
                 >
                   {isTranscribing ? (
@@ -3893,10 +4873,11 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                   ) : (
                     <Mic className="chat-input-btn-icon" strokeWidth={1.8} aria-hidden="true" />
                   )}
-                </button>
+                </button>}
+                {micTooltipNode}
 
                 <ApplicationPluginTaskInputActions
-                  eligible={fullDuplexActionEligible}
+                  eligible={fullDuplexActionEligible && !isTeamMode}
                   sessionId={activeSessionId}
                   ensureSession={onEnsureSession}
                   labels={{
@@ -3905,35 +4886,39 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                     stop: t('chat.taskFullDuplexStop'),
                   }}
                   fallback={
-                    <button
-                      type="button"
-                      onClick={handleSendButtonClick}
-                      disabled={!canSubmit}
-                      className={cx(
-                        'chat-input-btn chat-input-btn--send',
-                        showStop && 'chat-input-btn--stop',
-                        canSubmit ? 'chat-input-btn--send-active' : 'chat-input-btn--disabled',
-                      )}
-                      title={showStop ? t('chat.stop') : t('chat.send')}
-                      data-testid="chat-panel-input-send"
-                      data-variant={showStop ? 'stop' : 'send'}
-                    >
-                      {showStop ? (
-                        <Square
-                          className="chat-input-btn-icon"
-                          fill="currentColor"
-                          strokeWidth={1.8}
-                          aria-hidden="true"
-                        />
-                      ) : (
-                        <img
-                          className="chat-input-btn-icon chat-input-btn-icon--image"
-                          src={canSubmit ? sendActiveIcon : sendIcon}
-                          alt=""
-                          aria-hidden="true"
-                        />
-                      )}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={handleSendButtonClick}
+                        disabled={!canSubmit}
+                        className={cx(
+                          'chat-input-btn chat-input-btn--send',
+                          showStop && 'chat-input-btn--stop',
+                          canSubmit ? 'chat-input-btn--send-active' : 'chat-input-btn--disabled',
+                        )}
+                        data-tooltip={showStop ? t('chat.stop') : t('chat.send')}
+                        {...sendTooltipHandlers}
+                        data-testid="chat-panel-input-send"
+                        data-variant={showStop ? 'stop' : 'send'}
+                      >
+                        {showStop ? (
+                          <Square
+                            className="chat-input-btn-icon"
+                            fill="currentColor"
+                            strokeWidth={1.8}
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <img
+                            className="chat-input-btn-icon chat-input-btn-icon--image"
+                            src={canSubmit ? sendActiveIcon : sendIcon}
+                            alt=""
+                            aria-hidden="true"
+                          />
+                        )}
+                      </button>
+                      {sendTooltipNode}
+                    </>
                   }
                 />
               </div>
@@ -3965,6 +4950,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                   data-testid="chat-panel-work-select"
                 >
                   <button
+                    ref={workTriggerRef}
                     type="button"
                     className={clsx(
                       'chat-work-select__trigger',
@@ -3975,12 +4961,13 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                       !isWorkContextLocked && setWorkMenuOpen((open) => (open === 'project' ? null : 'project'))
                     }
                     disabled={isWorkContextLocked}
-                    title={
+                    data-tooltip={
                       displayedProject?.project_dir ||
                       (isWorkContextLocked
                         ? t('multiSession.project.lockedProjectTitle')
                         : t('multiSession.project.chooseProjectDirectory'))
                     }
+                    {...workTriggerTooltipHandlers}
                   >
                     <WorkIcon name="folder" className="chat-work-select__root-icon" />
                     <span>{getProjectLabel(displayedProject, t('multiSession.project.chooseProjectDirectory'))}</span>
@@ -4004,6 +4991,17 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                           data-testid="chat-panel-work-select-clear"
                           aria-label={t('multiSession.project.clearProject')}
                           data-tooltip={t('multiSession.project.clearProject')}
+                          {...workClearTooltipHandlers}
+                          onMouseEnter={(event) => {
+                            workTriggerTooltipHandlers.onMouseLeave();
+                            workClearTooltipHandlers.onMouseEnter(event);
+                          }}
+                          onMouseLeave={() => {
+                            workClearTooltipHandlers.onMouseLeave();
+                            if (workTriggerRef.current) {
+                              workTriggerTooltipHandlers.onMouseEnter({ currentTarget: workTriggerRef.current });
+                            }
+                          }}
                           onClick={(e) => {
                             e.stopPropagation();
                             setSelectedProject(null);
@@ -4012,6 +5010,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                         >
                           <WorkIcon name="close" />
                         </button>
+                        {workClearTooltipNode}
                       </span>
                     ) : (
                       <svg
@@ -4028,6 +5027,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                       </svg>
                     )}
                   </button>
+                  {workTriggerTooltipNode}
                   {workMenuOpen === 'project' && !isWorkContextLocked ? (
                     <div
                       className={clsx(
@@ -4324,18 +5324,51 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                         </>
                       );
                     })()}
-                    {swarmflowToggleDisabled && (
-                      <span className="chat-swarmflow-config-panel__readonly-hint">
-                        {t('swarmflow.configReadonlyHint')}
-                      </span>
-                    )}
                   </div>
+                  <div className="chat-swarmflow-config-panel__field">
+                    <div
+                      className="chat-swarmflow-config-panel__worktree-row"
+                      data-testid="chat-panel-swarmflow-worktree-row"
+                    >
+                      <label className="chat-swarmflow-config-panel__label">
+                        {t('swarmflow.worktreeToggleLabel')}
+                      </label>
+                      <Switch
+                        checked={swarmflowWorktreeEffective}
+                        disabled={swarmflowToggleDisabled}
+                        onChange={toggleSwarmflowWorktree}
+                      />
+                    </div>
+                  </div>
+                  {swarmflowToggleDisabled && (
+                    <span className="chat-swarmflow-config-panel__readonly-hint">
+                      {t('swarmflow.configReadonlyHint')}
+                    </span>
+                  )}
                 </div>,
                 document.body,
               );
             })()}
+          {worktreeGuideOpen && (
+            <WorktreeProjectGuide onAcknowledge={() => setWorktreeGuideOpen(false)} />
+          )}
         </div>
       </div>
+
+      {goalOverwriteRequest && (
+        <OverwriteGoalConfirmModal
+          currentObjective={goalOverwriteRequest.currentObjective}
+          requestedObjective={goalOverwriteRequest.requestedObjective}
+          onConfirm={() => {
+            goalOverwriteRequest.resolve(true);
+            setGoalOverwriteRequest(null);
+          }}
+          onCancel={() => {
+            goalOverwriteRequest.resolve(false);
+            setGoalOverwriteRequest(null);
+          }}
+        />
+      )}
     </>
   );
 });
@@ -4367,6 +5400,65 @@ function ProjectAddSubmenu({ onCreate }: { onCreate: (mode: ProjectCreateMode) =
   );
 }
 
+/**
+ * @ 素材候选里的缩略图。
+ *
+ * - 图片：直接显示真图；
+ * - 视频：没有现成缩略图，用 `<video preload="metadata">` + `#t=` 让浏览器解出第一帧。
+ *   先摆类型图标占位，解出帧再换成真帧——服务端不支持 Range，拿不到帧时会一直是图标，
+ *   不会出现一个黑方块。
+ * - 其余情况（读不到图、不是媒体）退回文件图标；图标按**路径**判类型，因为素材名常常
+ *   没有扩展名，只看名字会退成灰向号。
+ */
+function AssetSuggestionThumb({ src, label, kind, path }: {
+  src?: string;
+  label: string;
+  kind?: string;
+  path?: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  const [frameReady, setFrameReady] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+    setFrameReady(false);
+  }, [src]);
+
+  const fallback = <FileIcon fileName={path || label} size={18} />;
+
+  if (!src || failed) return fallback;
+
+  if (kind === 'video') {
+    return (
+      <>
+        <video
+          className="chat-composer-suggestion__asset-thumb"
+          src={`${src}#t=0.1`}
+          preload="metadata"
+          muted
+          playsInline
+          onLoadedData={() => setFrameReady(true)}
+          onError={() => setFailed(true)}
+          style={frameReady ? undefined : { display: 'none' }}
+        />
+        {frameReady ? null : fallback}
+      </>
+    );
+  }
+
+  if (kind === 'image') {
+    return (
+      <img
+        src={src}
+        alt=""
+        className="chat-composer-suggestion__asset-thumb"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+
+  return fallback;
+}
+
 function ComposerSuggestionMenu({
   suggestion,
   items,
@@ -4389,7 +5481,7 @@ function ComposerSuggestionMenu({
     kind: ComposerSuggestionKind,
     value: string,
     label: string,
-    slashItemKind?: 'command' | 'skill',
+    slashItemKind?: 'command' | 'skill' | 'asset',
     slashTakesArgs?: boolean,
   ) => void;
   loading: boolean;
@@ -4458,7 +5550,7 @@ function ComposerSuggestionMenu({
       {!isSlash && (
         <div className="chat-composer-suggestion__header" data-testid="chat-panel-composer-suggestion-header">
           <AtSign size={14} />
-          <span>{t('chat.selectTeamMembers')}</span>
+          <span>{items.length > 0 && items.every((item) => item.itemKind === 'asset') ? t('sessionAssets.pickTitle') : t('chat.selectTeamMembers')}</span>
         </div>
       )}
       <div
@@ -4472,11 +5564,11 @@ function ComposerSuggestionMenu({
             {isSlash
               ? loading
                 ? slashSkillsOnly
-                  ? '正在加载技能…'
-                  : '正在加载指令与技能…'
+                  ? t('chat.slashPicker.loadingSkills')
+                  : t('chat.slashPicker.loadingCommandsAndSkills')
                 : slashSkillsOnly
-                  ? '没有匹配的技能'
-                  : '没有匹配的指令或技能'
+                  ? t('chat.slashPicker.noMatchingSkills')
+                  : t('chat.slashPicker.noMatchingCommandsOrSkills')
               : t('chat.noTeamMembersAvailable')}
           </div>
         ) : (
@@ -4487,7 +5579,9 @@ function ComposerSuggestionMenu({
               <Fragment key={`${suggestion.kind}:${item.itemKind}:${item.id}`}>
                 {showSectionTitle && (
                   <div className="chat-composer-suggestion__section-title">
-                    <span>{item.itemKind === 'command' ? '指令' : '技能'}</span>
+                    <span data-testid="chat-panel-composer-suggestion-section-label" data-variant={item.itemKind}>
+                      {item.itemKind === 'command' ? t('chat.slashPicker.commands') : t('chat.slashPicker.skills')}
+                    </span>
                     <span>({sectionCount})</span>
                   </div>
                 )}
@@ -4525,13 +5619,35 @@ function ComposerSuggestionMenu({
                         )}
                         aria-hidden="true"
                       >
-                        {item.itemKind === 'command' ? '/' : null}
+                        {item.itemKind === 'command' ? <CommandIcon /> : null}
                       </span>
                       <span className="chat-composer-suggestion__text">
                         <span className="chat-composer-suggestion__label">{item.label}</span>
                         {item.description ? (
-                          <span className="chat-composer-suggestion__meta">{item.description}</span>
+                          <span
+                            className="chat-composer-suggestion__meta"
+                            title={item.description}
+                            data-testid="chat-panel-composer-suggestion-description"
+                            data-variant={item.id}
+                          >
+                            {item.description}
+                          </span>
                         ) : null}
+                      </span>
+                    </>
+                  ) : item.itemKind === 'asset' ? (
+                    <>
+                      <span className="chat-composer-suggestion__avatar" aria-hidden="true">
+                        <AssetSuggestionThumb
+                          src={item.previewUrl}
+                          label={item.label}
+                          kind={item.status}
+                          path={item.assetPath}
+                        />
+                      </span>
+                      <span className="chat-composer-suggestion__text">
+                        <span className="chat-composer-suggestion__label">{item.label}</span>
+                        <span className="chat-composer-suggestion__meta">{`${tokenPrefix}${item.id}`}</span>
                       </span>
                     </>
                   ) : (
@@ -4557,16 +5673,18 @@ function ComposerSuggestionMenu({
 
 function PermissionSelector({
   disabled = false,
-  permissionsEnabled,
+  mode,
+  permissionProfile,
   onSavePermission,
 }: {
   disabled?: boolean;
-  permissionsEnabled: boolean;
+  mode: AgentMode;
+  permissionProfile: Permission;
   onSavePermission: (updates: Record<string, string>) => Promise<void>;
 }) {
   const { t } = useTranslation();
-
-  const permission: Permission = permissionsEnabled ? 'default' : 'full_access';
+  const permission = effectivePermissionProfile(permissionProfile, mode);
+  const permissionOptions = permissionOptionsForMode(mode);
 
   const [isOpen, setIsOpen] = useState(false);
   const [menuDirection, setMenuDirection] = useState<'up' | 'down'>('up');
@@ -4592,7 +5710,7 @@ function PermissionSelector({
       if (value === 'full_access') {
         setPendingPermission('full_access');
       } else {
-        onSavePermission({ permissions_enabled: 'true' });
+        onSavePermission({ permissions_profile: value });
       }
     },
     [permission, onSavePermission],
@@ -4600,7 +5718,7 @@ function PermissionSelector({
 
   const handleConfirm = useCallback(() => {
     if (pendingPermission) {
-      onSavePermission({ permissions_enabled: 'false' });
+      onSavePermission({ permissions_profile: pendingPermission });
     }
     setPendingPermission(null);
   }, [pendingPermission, onSavePermission]);
@@ -4673,7 +5791,7 @@ function PermissionSelector({
                   : { position: 'fixed', top: menuAnchor.bottom + 10, left: menuAnchor.left, zIndex: 9999 }
               }
             >
-              {PERMISSION_OPTIONS.map((opt) => (
+              {PERMISSION_OPTIONS.filter((opt) => permissionOptions.includes(opt.value)).map((opt) => (
                 <button
                   type="button"
                   key={opt.value}

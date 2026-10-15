@@ -5,14 +5,23 @@
 import type { SkillTreePath } from './skillTree';
 import type { BeamSearchProgress } from './beamSearch';
 import type { HeartbeatAutomationMetadata } from './heartbeat';
+import type { CrossSessionMessageMetadata } from '../utils/crossSessionMessage';
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
+
+export interface OutputOrder {
+  requestId: string;
+  sequence: number;
+}
 
 export interface MediaItem {
   type: 'image' | 'audio' | 'video' | 'document';
   mimeType: string;
   mime_type?: string;
   filename: string;
+  /** 展示用的名字（比如任务素材被改过名）；不影响 filename 承担的扩展名识别/下载文件名。
+   *  没有的话渲染时回退到 filename。 */
+  displayName?: string;
   base64Data?: string;
   base64_data?: string;
   url?: string;
@@ -42,6 +51,28 @@ export interface FileDownloadItem {
   is_skill_package?: boolean;
 }
 
+export type AutoReviewerStatus =
+  | 'in_progress'
+  | 'approved'
+  | 'deterministic_allow'
+  | 'manual'
+  | 'denied'
+  | 'blocked'
+  | 'fallback'
+  | 'host_revalidation_failed'
+  | 'timed_out'
+  | 'aborted';
+
+export interface AutoReviewerMetadata {
+  reviewer_status?: AutoReviewerStatus;
+  final_reviewer_status?: AutoReviewerStatus;
+  decision_source?: string;
+  risk_level?: string;
+  evidence_summary?: string;
+  manual_reason_summary?: string;
+  user_review_hint?: string;
+}
+
 export interface ContextCompressionRuntime {
   status: 'running' | 'completed' | 'unchanged' | 'failed';
   summary: string;
@@ -65,6 +96,15 @@ export interface Message {
   role: MessageRole;
   content: string;
   timestamp: string;
+  /** A displayed supplement belongs to the existing execution, not a new user turn. */
+  supplementalInput?: {
+    executionId: string;
+    requestId?: string;
+    streamMessageId?: string;
+    streamOffset: number;
+  };
+  outputPhaseId?: string;
+  outputOrder?: OutputOrder;
   /** Full answer delivered by a delegated agent, distinct from spoken replies. */
   presentation?: 'tool_result';
   /** User-facing conversation output that must remain outside collapsed work. */
@@ -76,6 +116,10 @@ export interface Message {
   completedAt?: string;
   /** 前端渲染身份，避免业务 id 重复或历史 prepend 导致 React key 抖动 */
   renderKey?: string;
+  /** 仅用于大历史渐进发布；实时消息没有该标记。 */
+  historyBatchSeq?: number;
+  /** Fork 后从直接父会话继承的历史消息；用于定位分支开始边界。 */
+  forkedFromSessionId?: string;
   audioBase64?: string;
   audioMime?: string;
   mediaItems?: MediaItem[];
@@ -85,6 +129,8 @@ export interface Message {
   toolResult?: ToolResult;
   // 是否正在流式输出
   isStreaming?: boolean;
+  /** 未收到工具/final 分段边界的集群输出；暂停只关闭光标，不移除此关联。 */
+  teamStream?: { requestId?: string };
   usageSummary?: UsageSummary;
   // Harness message flag for special styling
   isHarnessMessage?: boolean;
@@ -97,6 +143,8 @@ export interface Message {
   agentTemplateName?: string;
   proactiveRecId?: string;  // 推荐唯一ID，用于反馈关联
   proactiveTarget?: string;  // 推荐目标（skill名/待办/探索方向），点赞请求带回后端兜底
+  /** Team-attributed history is restored into this Team's conversation runtime. */
+  teamId?: string;
   /**
    * 这条用户消息是否曾经用于设置/修改持续目标（"设为目标"徽章）。发送那一刻本地回显消息
    * 直接置 true；历史消息刷新后重新加载时，优先读后端 history 字段
@@ -107,6 +155,12 @@ export interface Message {
    */
   isGoalObjectiveMessage?: boolean;
   isCommandOutput?: boolean;
+  /**
+   * 该用户消息被 before_chat_request 钩子改写（如敏感内容替换），由
+   * chat.message_updated 事件原地替换内容时置位（issue #2792）。气泡可据此
+   * 渲染「已按安全策略改写」之类的角标；刷新后从历史加载的消息无此标记。
+   */
+  hookRewritten?: boolean;
   /** 斜杠命令结果的结构化元数据；避免渲染层依赖 content 的换行分隔。 */
   commandName?: string;
   commandInput?: string;
@@ -118,16 +172,35 @@ export interface Message {
    * 字段重新盖章，保证实时与历史共用同一识别逻辑。对齐「心跳任务前端开发与接口规格说明2」§7-§9。
    */
   automation?: HeartbeatAutomationMetadata;
+  /** 来自同一用户其他会话中 Agent 的后台请求。 */
+  crossSession?: CrossSessionMessageMetadata;
+}
+
+/** Selected queued message sent by the existing non-interrupting send button. */
+export interface ChatSendOptions {
+  queuedTaskId: string;
+}
+
+export interface MessageForkPoint {
+  messageId: string;
+  role: MessageRole;
+  content: string;
+  timestamp: string;
 }
 
 export interface ToolCall {
+  outputOrder?: OutputOrder;
   id: string;
   name: string;
   arguments: Record<string, unknown>;
-  description?: string;  // 操作描述，如 "创建 3 个任务"
-  formatted_args?: string;  // 格式化参数摘要
-  display_name?: string;  // 后端下发的可读展示名，前端优先直接展示
+  description?: string; // 操作描述，如 "创建 3 个任务"
+  formatted_args?: string; // 格式化参数摘要
+  /** 模型生成的自然语言目标，原样展示，不走 i18n */
+  call_goal?: string;
+  /** @deprecated 仅用于兼容旧事件，不参与标题渲染 */
+  display_name?: string;
   memberName?: string;
+  reviewer?: AutoReviewerMetadata;
 }
 
 export interface ToolResult {
@@ -145,11 +218,13 @@ export interface ToolResult {
   beamSearch?: BeamSearchProgress;
   /** 仅 symphony_compose_graph 的合法 planned_graph Mermaid 展示投影。 */
   mermaid?: string;
+  reviewer?: AutoReviewerMetadata;
 }
 
 export type ToolExecutionStatus = 'pending' | 'timeout' | 'completed' | 'error';
 
 export interface ToolExecution {
+  outputOrder?: OutputOrder;
   toolCallId: string;
   toolCall: ToolCall;
   result?: ToolResult;
@@ -162,6 +237,8 @@ export interface ToolExecution {
   requestId?: string;
   /** Web 单 Agent 工具调用所属的专家；Team 工具不设置。 */
   agentTemplateName?: string;
+  /** 仅用于大历史渐进发布；实时工具没有该标记。 */
+  historyBatchSeq?: number;
 }
 
 export interface Conversation {
