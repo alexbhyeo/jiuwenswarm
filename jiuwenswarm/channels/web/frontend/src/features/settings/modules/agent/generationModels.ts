@@ -74,22 +74,11 @@ const MINIMAX_MODELS: Record<GenerationSlot, readonly string[]> = {
   visual_gen: ['image-01'],
 };
 
+// 仅保留这两个已在 Ark 控制台确认可用、命名正确（doubao- 前缀）的模型——此前目录
+// 里的 dola-/dreamina- 前缀是错的，选中也会在真实调用时报 ModelNotOpen / 404。
 const MODELARK_MODELS: Record<GenerationSlot, readonly string[]> = {
-  video_gen: [
-    'dreamina-seedance-2-5-260628',
-    'dreamina-seedance-2-0-260128',
-    'dreamina-seedance-2-0-fast-260128',
-    'dreamina-seedance-2-0-mini-260615',
-    'seedance-1-0-pro-250528',
-    'seedance-1-0-pro-fast-251015',
-  ],
-  visual_gen: [
-    'dola-seedream-5-0-pro-260628',
-    'dola-seedream-5-0-flash-260915',
-    'seedream-5-0-260128',
-    'seedream-4-5-251128',
-    'seedream-4-0-250828',
-  ],
+  video_gen: ['doubao-seedance-2-5-260628'],
+  visual_gen: ['doubao-seedream-5-0-flash-260915'],
 };
 
 function openRouterModelProtocol(modelId: string): string {
@@ -117,7 +106,7 @@ export type GenerationVendor = keyof typeof CATALOG;
 export const DEFAULT_GENERATION_MODEL: Record<GenerationVendor, Record<GenerationSlot, string>> = {
   openrouter: { video_gen: 'bytedance/seedance-2.0-fast', visual_gen: 'google/gemini-3.1-flash-image' },
   minimax: { video_gen: 'MiniMax-H3', visual_gen: 'image-01' },
-  modelark: { video_gen: 'dreamina-seedance-2-5-260628', visual_gen: 'dola-seedream-5-0-pro-260628' },
+  modelark: { video_gen: 'doubao-seedance-2-5-260628', visual_gen: 'doubao-seedream-5-0-flash-260915' },
 };
 
 /** 这些厂商的密钥分区域，API 地址需要能改（选完厂商后填入预设地址，用户可改成另一区域）。 */
