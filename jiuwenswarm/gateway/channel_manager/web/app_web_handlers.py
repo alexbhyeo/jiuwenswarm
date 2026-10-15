@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 import importlib.util
 import json
 import logging
@@ -84,7 +85,6 @@ from jiuwenswarm.common.config_panel.config_set_handlers import (  # noqa: F401 
     team_item_requests_codex as _team_item_requests_codex,
     team_payload_requests_codex as _team_payload_requests_codex,
 )
-from jiuwenswarm.common.model_catalog import ModelCatalog
 from jiuwenswarm.common.config_panel.models_handlers import (  # noqa: F401  — 兼容别名
     reasoning_level_display as _reasoning_level_display,
     normalize_provider_value as _normalize_provider_value,
@@ -114,8 +114,7 @@ for _jiuwen_log in LogManager.get_all_loggers().values():
 logger = logging.getLogger(__name__)
 
 
-_CODEX_DEPENDENCY_INSTALL_LOCK = threading.Lock()
-_CODEX_DEPENDENCY_INSTALL_STATUS: dict[str, Any] = {
+_EXTERNAL_CLI_DEPENDENCY_INSTALL_IDLE_STATUS: dict[str, Any] = {
     "status": "idle",
     "phase": "idle",
     "progress_kind": "",
@@ -137,18 +136,23 @@ _CODEX_DEPENDENCY_INSTALL_STATUS: dict[str, Any] = {
     "download_max_attempts": 0,
     "switching_source": False,
 }
+_CODEX_DEPENDENCY_INSTALL_LOCK = threading.Lock()
+_CODEX_DEPENDENCY_INSTALL_STATUS: dict[str, Any] = dict(_EXTERNAL_CLI_DEPENDENCY_INSTALL_IDLE_STATUS)
 _CODEX_DEPENDENCY_INSTALL_LOG_TAIL_LIMIT = 8
 _OPTIONAL_DEPENDENCY_INSTALL_TIMEOUT_SECONDS = 60 * 60
 _CLAUDE_DEPENDENCY_INSTALL_LOCK = threading.Lock()
-_CLAUDE_DEPENDENCY_INSTALL_STATUS: dict[str, Any] = dict(_CODEX_DEPENDENCY_INSTALL_STATUS)
-_EXTERNAL_CLI_DEPENDENCY_INSTALL_LOCKS = {
+_CLAUDE_DEPENDENCY_INSTALL_STATUS: dict[str, Any] = dict(_EXTERNAL_CLI_DEPENDENCY_INSTALL_IDLE_STATUS)
+# Claude and Codex are always present; other managed runtimes (third-party
+# harness providers) get their lock and status the first time they are used.
+_EXTERNAL_CLI_DEPENDENCY_INSTALL_LOCKS: dict[str, threading.Lock] = {
     "claude": _CLAUDE_DEPENDENCY_INSTALL_LOCK,
     "codex": _CODEX_DEPENDENCY_INSTALL_LOCK,
 }
-_EXTERNAL_CLI_DEPENDENCY_INSTALL_STATUSES = {
+_EXTERNAL_CLI_DEPENDENCY_INSTALL_STATUSES: dict[str, dict[str, Any]] = {
     "claude": _CLAUDE_DEPENDENCY_INSTALL_STATUS,
     "codex": _CODEX_DEPENDENCY_INSTALL_STATUS,
 }
+_EXTERNAL_CLI_DEPENDENCY_INSTALL_REGISTRY_LOCK = threading.Lock()
 
 
 _PROJECT_ROOT = get_root_dir()
@@ -409,6 +413,7 @@ _FORWARD_REQ_METHODS = frozenset({
     "command.goal",
     "command.btw",
     "command.compact",
+    "command.mcp",
     "chat.send",
     "chat.interrupt",
     "chat.resume",
@@ -478,6 +483,9 @@ _FORWARD_REQ_METHODS = frozenset({
     "skills.graph.cancel",
     "skills.experience.list",
     "skills.experience.request",
+    "session.assets.list",
+    "session.assets.register",
+    "session.assets.rename",
     "personal_context.runtime.status",
     "personal_context.runtime.start_collection",
     "personal_context.runtime.stop_collection",
@@ -557,6 +565,8 @@ _FORWARD_REQ_METHODS = frozenset({
     "team.snapshot",
     "team.history.get",
     "team.mq.publish",
+    "team.list",
+    "org.snapshot",
     # Agent configuration
     "agents.list",
     "agents.get",
@@ -599,6 +609,7 @@ _FORWARD_NO_LOCAL_HANDLER_METHODS = frozenset({
     "command.goal",
     "command.btw",
     "command.compact",
+    "command.mcp",
     "team.snapshot",
     "team.history.get",
     "team.mq.publish",
@@ -606,6 +617,8 @@ _FORWARD_NO_LOCAL_HANDLER_METHODS = frozenset({
     "swarmflow.pause",
     "swarmflow.resume",
     "swarmflow.stop",
+    "team.list",
+    "org.snapshot",
     "skills.marketplace.list",
     "skills.list",
     "skills.installed",
@@ -664,6 +677,9 @@ _FORWARD_NO_LOCAL_HANDLER_METHODS = frozenset({
     "skills.graph.cancel",
     "skills.experience.list",
     "skills.experience.request",
+    "session.assets.list",
+    "session.assets.register",
+    "session.assets.rename",
     "personal_context.runtime.status",
     "personal_context.runtime.start_collection",
     "personal_context.runtime.stop_collection",
@@ -793,9 +809,21 @@ def _validate_wechat_numeric_params(params: dict) -> str | None:
     return None
 
 
+def _external_cli_dependency_install_state(cli_agent: str) -> tuple[threading.Lock, dict[str, Any]]:
+    """Return the install lock and status of ``cli_agent``, creating idle ones on first use."""
+    with _EXTERNAL_CLI_DEPENDENCY_INSTALL_REGISTRY_LOCK:
+        lock = _EXTERNAL_CLI_DEPENDENCY_INSTALL_LOCKS.get(cli_agent)
+        status = _EXTERNAL_CLI_DEPENDENCY_INSTALL_STATUSES.get(cli_agent)
+        if lock is None or status is None:
+            lock = threading.Lock()
+            status = dict(_EXTERNAL_CLI_DEPENDENCY_INSTALL_IDLE_STATUS)
+            _EXTERNAL_CLI_DEPENDENCY_INSTALL_LOCKS[cli_agent] = lock
+            _EXTERNAL_CLI_DEPENDENCY_INSTALL_STATUSES[cli_agent] = status
+        return lock, status
+
+
 def _snapshot_external_cli_dependency_install_status(cli_agent: str) -> dict[str, Any]:
-    lock = _EXTERNAL_CLI_DEPENDENCY_INSTALL_LOCKS[cli_agent]
-    status = _EXTERNAL_CLI_DEPENDENCY_INSTALL_STATUSES[cli_agent]
+    lock, status = _external_cli_dependency_install_state(cli_agent)
     with lock:
         result = dict(status)
         result["cli_agent"] = cli_agent
@@ -804,8 +832,7 @@ def _snapshot_external_cli_dependency_install_status(cli_agent: str) -> dict[str
 
 
 def _update_external_cli_dependency_install_status(cli_agent: str, updates: dict[str, Any]) -> None:
-    lock = _EXTERNAL_CLI_DEPENDENCY_INSTALL_LOCKS[cli_agent]
-    status = _EXTERNAL_CLI_DEPENDENCY_INSTALL_STATUSES[cli_agent]
+    lock, status = _external_cli_dependency_install_state(cli_agent)
     with lock:
         status.update(updates)
         status["updated_at"] = time.time()
@@ -836,8 +863,7 @@ def _append_external_cli_dependency_install_log(cli_agent: str, line: str) -> No
     stripped = line.strip()
     if not stripped:
         return
-    lock = _EXTERNAL_CLI_DEPENDENCY_INSTALL_LOCKS[cli_agent]
-    status = _EXTERNAL_CLI_DEPENDENCY_INSTALL_STATUSES[cli_agent]
+    lock, status = _external_cli_dependency_install_state(cli_agent)
     with lock:
         log_tail = list(status.get("log_tail") or [])
         log_tail.append(stripped)
@@ -927,7 +953,7 @@ def _is_frozen_runtime() -> bool:
 
 
 def _snapshot_external_cli_dependency_install_status_unlocked(cli_agent: str) -> dict[str, Any]:
-    status = _EXTERNAL_CLI_DEPENDENCY_INSTALL_STATUSES[cli_agent]
+    _lock, status = _external_cli_dependency_install_state(cli_agent)
     result = dict(status)
     result["cli_agent"] = cli_agent
     result["log_tail"] = list(result.get("log_tail") or [])
@@ -935,8 +961,7 @@ def _snapshot_external_cli_dependency_install_status_unlocked(cli_agent: str) ->
 
 
 def _ensure_managed_external_cli_runtime_or_start_install(cli_agent: str) -> dict[str, Any]:
-    lock = _EXTERNAL_CLI_DEPENDENCY_INSTALL_LOCKS[cli_agent]
-    status = _EXTERNAL_CLI_DEPENDENCY_INSTALL_STATUSES[cli_agent]
+    lock, status = _external_cli_dependency_install_state(cli_agent)
     with lock:
         if status.get("status") == "running":
             return _snapshot_external_cli_dependency_install_status_unlocked(cli_agent)
@@ -983,11 +1008,9 @@ def _run_managed_external_cli_runtime_install(cli_agent: str) -> None:
             log_callback=lambda line: _append_external_cli_dependency_install_log(cli_agent, line),
             progress_callback=lambda progress: _update_external_cli_dependency_install_status(cli_agent, progress),
         )
+        # The installer already verified the runtime's modules and provider
+        # entry point against the activated paths.
         activate_external_cli_runtime_paths()
-        importlib.invalidate_caches()
-        required_module = "claude_agent_sdk" if cli_agent == "claude" else "openai_codex"
-        if importlib.util.find_spec(required_module) is None:
-            raise RuntimeError(f"{required_module} is still unavailable after installation")
     except Exception as exc:  # noqa: BLE001
         logger.warning("[config.set] %s managed runtime installation failed: %s", cli_agent, exc)
         _append_external_cli_dependency_install_log(cli_agent, str(exc))
@@ -1008,6 +1031,70 @@ def _run_managed_external_cli_runtime_install(cli_agent: str) -> None:
         cli_agent,
         _external_cli_dependency_install_succeeded_updates(),
     )
+
+
+def _known_external_cli_agents() -> tuple[str, ...]:
+    """Return Claude, Codex and every runtime the managed-runtime manifest describes."""
+    from jiuwenswarm.common.external_cli_runtime import external_cli_runtime_names
+
+    try:
+        managed = external_cli_runtime_names()
+    except RuntimeError as exc:
+        logger.warning("[external-cli] managed runtime manifest is unavailable: %s", exc)
+        managed = ()
+    return tuple(dict.fromkeys(("claude", "codex", *managed)))
+
+
+def _managed_external_cli_runtime_status(cli_agent: str) -> dict[str, Any]:
+    """Describe the installed managed runtime; failures become an ``unavailable`` state."""
+    from jiuwenswarm.common.external_cli_runtime import get_external_cli_runtime_status
+
+    try:
+        return get_external_cli_runtime_status(cli_agent)
+    except (RuntimeError, ValueError) as exc:
+        return {"runtime_state": "unavailable", "managed": True, "error": str(exc)}
+
+
+def _install_managed_external_cli_runtime_if_needed(cli_agent: str) -> dict[str, Any]:
+    """Start a managed runtime install unless the current one is already installed.
+
+    Returns:
+        The install status snapshot, with the managed runtime state under ``runtime``.
+    """
+    runtime = _managed_external_cli_runtime_status(cli_agent)
+    if runtime.get("runtime_state") == "current":
+        _update_external_cli_dependency_install_status(cli_agent, _external_cli_dependency_install_succeeded_updates())
+        payload = _snapshot_external_cli_dependency_install_status(cli_agent)
+    else:
+        payload = _ensure_managed_external_cli_runtime_or_start_install(cli_agent)
+    payload["runtime"] = runtime
+    return payload
+
+
+def _remove_custom_external_cli_agent(cli_agent: str) -> None:
+    """Drop a custom agent from the team configuration, then uninstall it.
+
+    The configuration goes first: it may only name installed agents.
+
+    Raises:
+        ValueError: When ``cli_agent`` is not an installed custom agent.
+    """
+    from jiuwenswarm.common.config import EXTERNAL_CLI_AGENTS_CONFIG_PATH, update_external_cli_agents_in_config
+    from jiuwenswarm.common.config_panel.config_set_handlers import get_nested_config_value
+    from jiuwenswarm.common.custom_agent_runtime import get_custom_agent, remove_custom_agent
+
+    if get_custom_agent(cli_agent) is None:
+        raise ValueError(f"custom agent not found: {cli_agent}")
+    configured = get_nested_config_value(get_config_raw(), EXTERNAL_CLI_AGENTS_CONFIG_PATH, [])
+    if isinstance(configured, list):
+        remaining = [
+            item
+            for item in configured
+            if not (isinstance(item, dict) and item.get("cli_agent") == cli_agent) and item != cli_agent
+        ]
+        if len(remaining) != len(configured):
+            update_external_cli_agents_in_config(remaining, _build_external_cli_publish_url())
+    remove_custom_agent(cli_agent)
 
 
 def _snapshot_codex_dependency_install_status() -> dict[str, Any]:
@@ -1243,6 +1330,29 @@ _OPTIONAL_DEPENDENCY_INDEX_URL = os.getenv("PIP_INDEX_URL") or os.getenv("UV_IND
 )
 
 
+def _openjiuwen_url_requirements(extra: str) -> list[str]:
+    """URL-pinned requirements of the installed openjiuwen, restated as direct ones.
+
+    uv pip rejects a URL dependency that only appears transitively (openjiuwen
+    pins protocol packages to git), so the extra install must name them itself.
+    Requirements gated on a different extra are left out.
+    """
+    try:
+        requires = importlib.metadata.requires("openjiuwen") or []
+    except importlib.metadata.PackageNotFoundError:
+        return []
+    forwarded: list[str] = []
+    for raw in requires:
+        spec, _, marker = raw.partition(";")
+        spec = spec.strip()
+        if " @ " not in spec:
+            continue
+        if "extra" in marker and f'"{extra}"' not in marker and f"'{extra}'" not in marker:
+            continue
+        forwarded.append(spec)
+    return forwarded
+
+
 def _build_optional_dependency_install_args(package: str, cli_agent: str) -> list[str]:
     """Build the pip/uv command that installs an optional CLI agent SDK.
 
@@ -1255,6 +1365,7 @@ def _build_optional_dependency_install_args(package: str, cli_agent: str) -> lis
     from jiuwenswarm.common.external_cli_runtime import pinned_sdk_requirements
 
     pinned = pinned_sdk_requirements(cli_agent)
+    requirements = [package, *_openjiuwen_url_requirements(cli_agent), *pinned]
     uv_cmd = shutil.which("uv")
     if uv_cmd and sys.prefix != sys.base_prefix:
         # Pin the target interpreter: without --python, uv resolves its own
@@ -1269,8 +1380,7 @@ def _build_optional_dependency_install_args(package: str, cli_agent: str) -> lis
             sys.executable,
             "--index-url",
             _OPTIONAL_DEPENDENCY_INDEX_URL,
-            package,
-            *pinned,
+            *requirements,
         ]
     return [
         sys.executable,
@@ -1279,8 +1389,7 @@ def _build_optional_dependency_install_args(package: str, cli_agent: str) -> lis
         "install",
         "--index-url",
         _OPTIONAL_DEPENDENCY_INDEX_URL,
-        package,
-        *pinned,
+        *requirements,
     ]
 
 
@@ -1631,7 +1740,7 @@ def _persist_media_locally(
     AgentServer-side ``_persisted`` passthrough recognizes the file.
     """
     from jiuwenswarm.common.utils import get_agent_sessions_dir
-    from jiuwenswarm.server.runtime.attachments.upload_storage import atomic_write_unique
+    from jiuwenswarm.gateway.embedded.runtime.attachments.upload_storage import atomic_write_unique
 
     try:
         upload_dir = get_agent_sessions_dir() / safe_session_id / "uploads"
@@ -1659,10 +1768,10 @@ async def _upload_document_item_via_http(
     """
     from jiuwenswarm.gateway.routing.agent_http_bridge import upload_file_bytes_via_e2a
     from jiuwenswarm.gateway.routing.e2a_proxy import is_agentos_routing_client
-    from jiuwenswarm.server.runtime.attachments.document_attachments import (
+    from jiuwenswarm.gateway.embedded.runtime.attachments.document_attachments import (
         is_forbidden_document,
     )
-    from jiuwenswarm.server.runtime.attachments.upload_storage import (
+    from jiuwenswarm.gateway.embedded.runtime.attachments.upload_storage import (
         safe_session_dirname,
         safe_upload_filename,
     )
@@ -1722,7 +1831,7 @@ async def _pre_persist_large_documents(
     可能超内部 WS 帧限制。
     """
     from jiuwenswarm.gateway.routing.agent_http_bridge import E2A_PAYLOAD_MAX_BYTES
-    from jiuwenswarm.server.runtime.attachments.document_attachments import (
+    from jiuwenswarm.gateway.embedded.runtime.attachments.document_attachments import (
         _strip_data_uri_prefix,
     )
 
@@ -1800,8 +1909,8 @@ async def _upload_media_item_via_http(
     """
     from jiuwenswarm.gateway.routing.agent_http_bridge import upload_file_bytes_via_e2a
     from jiuwenswarm.gateway.routing.e2a_proxy import is_agentos_routing_client
-    from jiuwenswarm.server.runtime.attachments import media_attachments as _ma
-    from jiuwenswarm.server.runtime.attachments.upload_storage import (
+    from jiuwenswarm.gateway.embedded.runtime.attachments import media_attachments as _ma
+    from jiuwenswarm.gateway.embedded.runtime.attachments.upload_storage import (
         safe_session_dirname,
         safe_upload_filename,
     )
@@ -1864,7 +1973,7 @@ async def _pre_persist_large_media(
     import json as _json
 
     from jiuwenswarm.gateway.routing.agent_http_bridge import E2A_PAYLOAD_MAX_BYTES
-    from jiuwenswarm.server.runtime.attachments.document_attachments import (
+    from jiuwenswarm.gateway.embedded.runtime.attachments.document_attachments import (
         _strip_data_uri_prefix,
     )
 
@@ -1947,7 +2056,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
 
     def _schedule_agent_prewarm_sync(name: str) -> None:
         """Reconcile project-derived warm keys without delaying the Web RPC."""
-        from jiuwenswarm.server.runtime.agent_warm_pool import prewarm_enabled_by_env
+        from jiuwenswarm.gateway.embedded.runtime.agent_prewarm import prewarm_enabled_by_env
 
         if not prewarm_enabled_by_env():
             return
@@ -2071,17 +2180,48 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
 
     async def _external_cli_install_status(ws, req_id, params, session_id):
         cli_agent = str((params or {}).get("cli_agent") or "").strip().lower()
-        if cli_agent == "claude":
-            payload = _snapshot_claude_dependency_install_status()
-        elif cli_agent == "codex":
-            payload = _snapshot_codex_dependency_install_status()
-            payload["cli_agent"] = "codex"
-        else:
+        if cli_agent not in _known_external_cli_agents():
             await channel.send_response(
                 ws, req_id, ok=False, error="unsupported external cli agent", code="BAD_REQUEST"
             )
             return
+        payload = _snapshot_external_cli_dependency_install_status(cli_agent)
+        if _is_frozen_runtime():
+            payload["runtime"] = _managed_external_cli_runtime_status(cli_agent)
         await channel.send_response(ws, req_id, ok=True, payload=payload)
+
+    async def _external_cli_install(ws, req_id, params, session_id):
+        cli_agent = str((params or {}).get("cli_agent") or "").strip().lower()
+        if cli_agent not in _known_external_cli_agents():
+            await channel.send_response(
+                ws, req_id, ok=False, error="unsupported external cli agent", code="BAD_REQUEST"
+            )
+            return
+        if not _is_frozen_runtime():
+            await channel.send_response(
+                ws,
+                req_id,
+                ok=False,
+                error="managed external CLI runtimes are installed by the desktop app only",
+                code="UNSUPPORTED",
+            )
+            return
+        payload = _install_managed_external_cli_runtime_if_needed(cli_agent)
+        await channel.send_response(ws, req_id, ok=True, payload=payload)
+
+    async def _external_cli_custom_agent_remove(ws, req_id, params, session_id):
+        cli_agent = str((params or {}).get("cli_agent") or "").strip().lower()
+        try:
+            await asyncio.to_thread(_remove_custom_external_cli_agent, cli_agent)
+        except ValueError as exc:
+            await channel.send_response(ws, req_id, ok=False, error=str(exc), code="BAD_REQUEST")
+            return
+        await channel.send_response(ws, req_id, ok=True, payload={"cli_agent": cli_agent})
+
+    async def _request_zen_warmup() -> None:
+        from jiuwenswarm.gateway.zen_query import request_zen_warmup
+
+        await request_zen_warmup(_resolve(agent_client))
 
     async def _config_set(ws, req_id, params, session_id):
         """config.set 实现已下沉 ``common.config_panel.config_set_handlers``。"""
@@ -2091,6 +2231,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             agent_client=_resolve(agent_client),
             ensure_codex_dependency=_ensure_codex_dependency_available_or_start_install,
             ensure_claude_dependency=_ensure_claude_dependency_available_or_start_install,
+            on_free_models_toggled=_request_zen_warmup,
         )
 
     async def _config_validate_model(ws, req_id, params, session_id, max_tokens_bounds=None):
@@ -2102,7 +2243,12 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
     # ── models.* handlers ────────────────────────────────────────
 
     async def _models_list(ws, req_id, params, session_id):
-        await models_handlers.models_list_handler(channel, ws, req_id, params, session_id)
+        from jiuwenswarm.gateway.zen_query import fetch_zen_free_model_rows
+
+        zen_rows = await fetch_zen_free_model_rows(_resolve(agent_client))
+        await models_handlers.models_list_handler(
+            channel, ws, req_id, params, session_id, zen_rows=zen_rows,
+        )
 
     async def _models_replace_all(ws, req_id, params, session_id):
         """原子地用提交的列表整体替换 models.defaults（实现见下沉模块）。"""
@@ -2121,6 +2267,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             agent_client=_resolve(agent_client),
             ensure_codex_dependency=_ensure_codex_dependency_available_or_start_install,
             ensure_claude_dependency=_ensure_claude_dependency_available_or_start_install,
+            on_free_models_toggled=_request_zen_warmup,
         )
 
     async def _models_validate(ws, req_id, params, session_id):
@@ -2128,50 +2275,17 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
         await _config_validate_model(ws, req_id, params, session_id)
 
     async def _model_resource_rpc(ws, req_id, params, session_id, operation):
-        from jiuwenswarm.common.config import (
-            delete_model_resource, upsert_model_group_resource, upsert_model_resource,
+        from jiuwenswarm.common.config_panel.model_resource_handlers import model_resource_handler
+
+        await model_resource_handler(
+            channel, ws, req_id, params, session_id, operation=operation,
+            on_config_saved=on_config_saved, agent_client=_resolve(agent_client),
         )
-        from jiuwenswarm.common.model_errors import (
-            MODEL_SELECTION_NOT_FOUND, MODEL_SELECTION_REFERENCED, ModelSelectionError,
-        )
-        from jiuwenswarm.common.model_selection import ModelSelection
-        try:
-            catalog = ModelCatalog()
-            if operation == "groups.list":
-                payload = {"groups": catalog.list_public_groups()}
-            elif operation == "models.get":
-                model_id = str((params or {}).get("model_id") or "").strip()
-                payload = {"model": catalog.get_public_model_detail(model_id)}
-            elif operation == "models.references":
-                selection = ModelSelection.model_validate(params)
-                payload = {"references": [r.__dict__ for r in catalog.find_references(selection)]}
-            elif operation in {"models.delete", "groups.delete"}:
-                resource_type = "model_group" if operation.startswith("groups") else "model"
-                key = "model_group_id" if resource_type == "model_group" else "model_id"
-                resource_id = str((params or {}).get(key) or "").strip()
-                selection = ModelSelection(type=resource_type, id=resource_id)
-                references = catalog.find_references(selection)
-                if references:
-                    raise ModelSelectionError(MODEL_SELECTION_REFERENCED, "resource is still referenced",
-                        references=[r.__dict__ for r in references])
-                if not delete_model_resource(resource_type, resource_id):
-                    raise ModelSelectionError(MODEL_SELECTION_NOT_FOUND, "resource does not exist")
-                payload = {key: resource_id, "deleted": True}
-            elif operation == "models.upsert":
-                saved = upsert_model_resource((params or {}).get("model") or {})
-                payload = {"model": ModelCatalog().get_public_model_detail(saved["model_id"])}
-            else:
-                payload = {"group": upsert_model_group_resource((params or {}).get("group") or {})}
-            await channel.send_response(ws, req_id, ok=True, payload=payload)
-        except ModelSelectionError as exc:
-            await channel.send_response(ws, req_id, ok=False, error=str(exc), code=exc.code, payload=exc.to_payload())
-        except Exception as exc:
-            await channel.send_response(ws, req_id, ok=False, error=str(exc), code="BAD_REQUEST")
 
     async def _session_selection_set(ws, req_id, params, session_id):
         from jiuwenswarm.common.model_selection import ModelSelection
-        from jiuwenswarm.server.runtime.model_routing_registry import ModelSelectionResolver
-        from jiuwenswarm.server.runtime.session.model_selection_store import set_session_model_selection
+        from jiuwenswarm.gateway.embedded.runtime.model_routing_registry import ModelSelectionResolver
+        from jiuwenswarm.gateway.embedded.runtime.session.model_selection_store import set_session_model_selection
         try:
             target = str((params or {}).get("session_id") or session_id or "")
             selection = ModelSelection.model_validate((params or {}).get("model_selection"))
@@ -2619,9 +2733,9 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             is_legacy_shared_directory_client(real_client)
             and not getattr(real_client, "server_ready", True)
         ):
-            from jiuwenswarm.server.runtime.gateway_adapter.base import parse_int_param
-            from jiuwenswarm.server.runtime.session.session_info import to_session_info
-            from jiuwenswarm.server.runtime.session.session_metadata import get_all_sessions_metadata
+            from jiuwenswarm.gateway.embedded.runtime.parse_int import parse_int_param
+            from jiuwenswarm.gateway.embedded.runtime.session.session_info import to_session_info
+            from jiuwenswarm.gateway.embedded.runtime.session.session_metadata import get_all_sessions_metadata
 
             raw_params = params if isinstance(params, dict) else {}
             limit = parse_int_param(raw_params, "limit", 20, minimum=1, maximum=200)
@@ -2670,6 +2784,14 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
         def _attach_runtime_status(ok: bool, payload: dict[str, Any]) -> None:
             if ok:
                 payload["is_processing"] = channel.is_session_busy(target_session_id)
+                # The busy map drives the stop button on page reload; expose
+                # the value it served for that session's metadata request.
+                logger.info(
+                    "[WebHandlers] session.get_metadata runtime status: "
+                    "session_id=%s is_processing=%s",
+                    target_session_id,
+                    payload["is_processing"],
+                )
 
         await proxy_unary_request(
             channel=channel,
@@ -2780,7 +2902,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             is_legacy_shared_directory_client(real_client)
             and not getattr(real_client, "server_ready", True)
         ):
-            from jiuwenswarm.server.runtime.session.session_rename import apply_session_rename
+            from jiuwenswarm.gateway.embedded.runtime.session.session_rename import apply_session_rename
 
             ok, payload, error, code = apply_session_rename(
                 params if isinstance(params, dict) else {},
@@ -2832,7 +2954,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             if not isinstance(pinned, bool):
                 await channel.send_response(ws, req_id, ok=False, error="pinned must be boolean", code="BAD_REQUEST")
                 return
-            from jiuwenswarm.server.runtime.session.session_metadata import set_session_pinned
+            from jiuwenswarm.gateway.embedded.runtime.session.session_metadata import set_session_pinned
 
             result = await asyncio.to_thread(set_session_pinned, sid.strip(), pinned)
             if result is None:
@@ -3350,9 +3472,15 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             raw_headless = browser_cfg.get("headless", True)
             headless = bool(raw_headless) if isinstance(raw_headless, bool) else True
 
+        from jiuwenswarm.agents.harness.common.browser_config import browser_decision_state
+
         await channel.send_response(
             ws, req_id, ok=True,
-            payload={"chrome_path": chrome_path, "headless": headless},
+            payload={
+                "chrome_path": chrome_path,
+                "headless": headless,
+                **browser_decision_state(config),
+            },
         )
 
     async def _path_set(ws, req_id, params, session_id, user_id=None):
@@ -3369,6 +3497,11 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
 
         raw_headless = params.get("headless", True)
         headless = bool(raw_headless) if isinstance(raw_headless, bool) else True
+        # Older clients omit the decision fields; the saved values are then left untouched.
+        set_params = {"chrome_path": chrome_path, "headless": headless}
+        for decision_key in ("decision_mode", "decision_provider"):
+            if params.get(decision_key) is not None:
+                set_params[decision_key] = params[decision_key]
 
         from jiuwenswarm.gateway.routing.e2a_proxy import (
             fetch_agent_unary,
@@ -3422,7 +3555,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
 
             await proxy_unary_request(
                 channel=channel, agent_client=resolved_client, ws=ws, req_id=req_id,
-                params={"chrome_path": chrome_path, "headless": headless},
+                params=set_params,
                 session_id=session_id, user_id=user_id,
                 req_method=ReqMethod.PATH_SET, label="path.set",
                 on_done=_on_path_set_done,
@@ -3442,8 +3575,23 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             else True
         )
 
+        from jiuwenswarm.agents.harness.common.browser_config import (
+            browser_decision_state,
+            browser_decision_updates,
+        )
+        from jiuwenswarm.common.config import update_browser_decision_in_config
+
+        decision_updates, error = browser_decision_updates(
+            set_params.get("decision_mode"), set_params.get("decision_provider"), get_config()
+        )
+        if error:
+            await channel.send_response(ws, req_id, ok=False, error=error, code="BAD_REQUEST")
+            return
+
         try:
             update_browser_in_config({"chrome_path": chrome_path, "headless": headless})
+            if decision_updates:
+                update_browser_decision_in_config(decision_updates)
             resolved_agent_client = _resolve(agent_client)
             await _clear_agent_config_cache(resolved_agent_client)
         except Exception as e:  # noqa: BLE001
@@ -3465,7 +3613,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
 
         await channel.send_response(
             ws, req_id, ok=True,
-            payload={"chrome_path": chrome_path, "headless": headless},
+            payload={"chrome_path": chrome_path, "headless": headless, **browser_decision_state(get_config())},
         )
 
     async def _path_select_directory(ws, req_id, params, session_id, user_id=None):
@@ -4697,7 +4845,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
                 and session_id
             ):
                 try:
-                    from jiuwenswarm.server.runtime.session.session_metadata import get_session_metadata
+                    from jiuwenswarm.gateway.embedded.runtime.session.session_metadata import get_session_metadata
                     meta = get_session_metadata(session_id, cache_bust=True)
                     if isinstance(meta, dict):
                         pd = meta.get("project_dir")
@@ -4861,7 +5009,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
         try:
             deleted = await cc.delete_job(job_id)
         except Exception as exc:
-            from jiuwenswarm.server.runtime.session.lifecycle import LifecycleError
+            from jiuwenswarm.gateway.embedded.runtime.session.lifecycle import LifecycleError
             code = exc.code if isinstance(exc, LifecycleError) else (getattr(exc, "code", None) or "DELETE_FAILED")
             await channel.send_response(
                 ws, req_id, ok=False, error=str(exc), code=code
@@ -4967,6 +5115,8 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
     channel.register_method("external_cli.detect", _external_cli_detect)
     channel.register_method("external_cli.codex_install_status", _external_cli_codex_install_status)
     channel.register_method("external_cli.install_status", _external_cli_install_status)
+    channel.register_method("external_cli.install", _external_cli_install)
+    channel.register_method("external_cli.custom_agent.remove", _external_cli_custom_agent_remove)
 
     async def _proxy_config_request(ws, req_id, params, session_id, user_id=None, *, req_method):
         """经 E2A 在目标 AgentServer 注入目录执行配置请求（仅 AgentOS 多用户调用）。
@@ -5598,6 +5748,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
     _register_perm("permissions.tools.get", _PermReq.PERMISSIONS_TOOLS_GET)
     _register_perm("permissions.tools.set", _PermReq.PERMISSIONS_TOOLS_SET)
     _register_perm("permissions.tools.update", _PermReq.PERMISSIONS_TOOLS_UPDATE)
+    _register_perm("permissions.tools.update_user", _PermReq.PERMISSIONS_TOOLS_UPDATE_USER)
     _register_perm("permissions.tools.delete", _PermReq.PERMISSIONS_TOOLS_DELETE)
     _register_perm("permissions.rules.get", _PermReq.PERMISSIONS_RULES_GET)
     _register_perm("permissions.rules.create", _PermReq.PERMISSIONS_RULES_CREATE)
@@ -5605,6 +5756,97 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
     _register_perm("permissions.rules.delete", _PermReq.PERMISSIONS_RULES_DELETE)
     _register_perm("permissions.approval_overrides.get", _PermReq.PERMISSIONS_APPROVAL_OVERRIDES_GET)
     _register_perm("permissions.approval_overrides.delete", _PermReq.PERMISSIONS_APPROVAL_OVERRIDES_DELETE)
+
+    async def _forward_a4p_to_agent(ws, req_id, params, session_id, *, req_method):
+        """Forward an A4P User Authorizer RPC over the session's logical Web route."""
+        from jiuwenswarm.common.e2a.gateway_normalize import e2a_from_agent_fields
+        from jiuwenswarm.common.schema.message import ReqMethod
+
+        if not isinstance(req_method, ReqMethod):
+            await channel.send_response(ws, req_id, ok=False, error="invalid req_method", code="INTERNAL_ERROR")
+            return
+        ac = _resolve(agent_client)
+        if ac is None or not getattr(ac, "server_ready", False):
+            await channel.send_response(
+                ws, req_id, ok=False, error="Agent server is not ready", code="AGENT_NOT_READY"
+            )
+            return
+
+        route_metadata: dict[str, Any] = {
+            "ws_id": str(getattr(ws, "_jiuwen_ws_id", "") or ""),
+        }
+        route = None
+        try:
+            routes = await channel.routing_keys_for_ws(ws)
+            route = next(
+                (item for item in reversed(routes) if item.session_id == session_id),
+                None,
+            )
+            if route is not None:
+                route_metadata["app_id"] = route.app_id
+                route_metadata["agent_ref"] = {
+                    "mode": route.agent_ref.mode,
+                    "id": route.agent_ref.id,
+                }
+        except Exception:
+            logger.warning("[a4p] failed to resolve Web authorizer route", exc_info=True)
+        if route is None:
+            await channel.send_response(
+                ws,
+                req_id,
+                ok=False,
+                error="No Web authorizer route is registered for this session",
+                code="A4P_WEB_SESSION_REQUIRED",
+            )
+            return
+
+        env = e2a_from_agent_fields(
+            request_id=str(req_id) if req_id else "",
+            channel_id="web",
+            session_id=session_id,
+            req_method=req_method,
+            params=dict(params) if isinstance(params, dict) else {},
+            metadata=route_metadata,
+        )
+        try:
+            resp = await ac.send_request(env)
+        except Exception as exc:
+            logger.exception("[a4p] forward to agent failed: %s", exc)
+            await channel.send_response(ws, req_id, ok=False, error=str(exc), code="INTERNAL_ERROR")
+            return
+        if not resp.ok:
+            payload = resp.payload if isinstance(resp.payload, dict) else {}
+            await channel.send_response(
+                ws,
+                req_id,
+                ok=False,
+                error=str(payload.get("error") or "request failed"),
+                code=str(payload.get("code") or "BAD_REQUEST"),
+            )
+            return
+        await channel.send_response(
+            ws,
+            req_id,
+            ok=True,
+            payload=resp.payload if isinstance(resp.payload, dict) else {},
+        )
+
+    from jiuwenswarm.common.schema.message import ReqMethod as _A4PReq
+
+    def _register_a4p(method_name: str, req_method: Any) -> None:
+        async def _handler(ws, req_id, params, session_id):
+            await _forward_a4p_to_agent(
+                ws, req_id, params, session_id, req_method=req_method
+            )
+
+        channel.register_method(method_name, _handler)
+
+    _register_a4p("a4p.config.get", _A4PReq.A4P_CONFIG_GET)
+    _register_a4p("a4p.config.update", _A4PReq.A4P_CONFIG_UPDATE)
+    _register_a4p("a4p.authorization.reprepare", _A4PReq.A4P_AUTHORIZATION_REPREPARE)
+    _register_a4p("a4p.authorization.complete", _A4PReq.A4P_AUTHORIZATION_COMPLETE)
+    _register_a4p("a4p.authorization.reject", _A4PReq.A4P_AUTHORIZATION_REJECT)
+    _register_a4p("a4p.authorization.pending", _A4PReq.A4P_AUTHORIZATION_PENDING)
 
     async def _memory_forbidden_get(ws, req_id, params, session_id, user_id=None):
         from jiuwenswarm.gateway.routing.e2a_proxy import is_legacy_shared_directory_client, proxy_unary_request

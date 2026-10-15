@@ -11,8 +11,6 @@ import { AgentGroupEditor } from './AgentGroupEditor';
 import { AgentGroupDetailPage } from './AgentGroupDetailPage';
 import { DefinitionUploadDialog } from './AgentGroupUploadDialog';
 import { GroupCatalogPage } from './GroupCatalogPage';
-import { CliAuthModal } from '../ConnectorMarket/CliAuthModal';
-import { ConnectTokenModal } from '../ConnectorMarket/ConnectTokenModal';
 import { PendingConnectorModals, usePendingConnectorFlow } from '../ConnectorMarket/usePendingConnectorFlow';
 import { useConnectorStore } from '../../stores/connectorStore';
 import { seedAgentCatalog } from '../../stores/agentCatalogStore';
@@ -53,7 +51,6 @@ import { AGENT_TAG_OPTIONS } from '../../features/agentManagement/tagOptions';
 import { findDefaultDefinitionFile } from './DefinitionFilePreview';
 import './agentManagement.css';
 import { equipmentListFilter } from '../../features/equipmentMarketplace';
-import type { ConnectorConnectResponse } from '../../types/connector';
 import { CategoryTabs, PageHeader, PageToolbarSearch, Tabs, toast } from '../ui';
 
 type PanelView = 'catalog' | 'teams' | 'mine' | 'detail' | 'group-detail' | 'create' | 'group-create';
@@ -83,6 +80,8 @@ const EMPTY_DRAFT: AgentDraft = {
   skillRefs: [],
   mcpRefs: [],
   suggestedPrompts: [],
+  useExternalHarness: false,
+  externalHarnessProvider: 'claudecode',
 };
 
 const EMPTY_GROUP_DRAFT: AgentGroupDraft = {
@@ -101,10 +100,15 @@ const EMPTY_GROUP_DRAFT: AgentGroupDraft = {
 
 function detailToDraft(detail: AgentDetail): AgentDraft {
   const presetIds = new Set<string>(AGENT_TAG_OPTIONS.map((option) => option.id));
+  const harnessTagLabels = new Set(['三方Harness', 'External Harness']);
   const tagIds = detail.tags
     .map((tag) => tag.id)
     .filter((id): id is string => presetIds.has(id));
-  const customTags = detail.tags.filter((tag) => !presetIds.has(tag.id)).map((tag) => tag.label);
+  const customTags = detail.tags
+    .filter((tag) => !presetIds.has(tag.id) && !harnessTagLabels.has(tag.label) && !harnessTagLabels.has(tag.id))
+    .map((tag) => tag.label);
+  const provider = detail.runtime?.provider_name;
+  const useExternalHarness = provider === 'claudecode' || provider === 'codex';
   return {
     id: detail.id,
     name: detail.displayName,
@@ -113,8 +117,10 @@ function detailToDraft(detail: AgentDetail): AgentDraft {
     tagIds,
     customTags,
     skillRefs: detail.skills.map((skill) => skill.id),
-    mcpRefs: detail.mcps.map((mcp) => mcp.id),
+    mcpRefs: useExternalHarness ? [] : detail.mcps.map((mcp) => mcp.id),
     suggestedPrompts: detail.suggestedPrompts,
+    useExternalHarness,
+    externalHarnessProvider: provider === 'codex' ? 'codex' : 'claudecode',
   };
 }
 
@@ -259,7 +265,6 @@ export function AgentManagementPanel({
   const [groupMineQuery, setGroupMineQuery] = useState('');
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
   const [busySkillId, setBusySkillId] = useState<string | null>(null);
-  const [busyMcpId, setBusyMcpId] = useState<string | null>(null);
   const [detailOrigin, setDetailOrigin] = useState<'catalog' | 'mine'>('catalog');
   const [groupDetailOrigin, setGroupDetailOrigin] = useState<'teams' | 'mine'>('teams');
   const [actionNotice, setActionNotice] = useState<string | null>(null);
@@ -267,9 +272,6 @@ export function AgentManagementPanel({
   const [pendingInstallQueue, setPendingInstallQueue] = useState<PendingInstallQueue>(() =>
     createPendingInstallQueue(),
   );
-  const [mcpConnectId, setMcpConnectId] = useState<string | null>(null);
-  const [mcpTokenTarget, setMcpTokenTarget] = useState<{ name: string; response: ConnectorConnectResponse } | null>(null);
-  const [mcpAuthTarget, setMcpAuthTarget] = useState<{ name: string; response: ConnectorConnectResponse } | null>(null);
   const [draft, setDraft] = useState<AgentDraft>(EMPTY_DRAFT);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -324,7 +326,6 @@ export function AgentManagementPanel({
   const reconnectFlowTargetRef = useRef<string | null>(null);
   const connectorError = useConnectorStore((state) => state.error);
   const clearConnectorError = useConnectorStore((state) => state.clearError);
-  const installMcpPackage = useConnectorStore((state) => state.installPackage);
   useEffect(() => {
     const request = navigationRequest;
     if (!request || request.requestId === lastNavigationRequestIdRef.current) return;
@@ -444,8 +445,12 @@ export function AgentManagementPanel({
       ]);
       if (requestScope !== catalogScope()) return;
       const cache = scheduleCatalogRefresh('agent-catalog', marketplaceCatalog.cache, () => { void loadCatalog(options); }, () => catalogRevisionRef.current === revision);
+      const mineNames = new Map(mineCatalog.map(item => [item.id, item.searchNames]));
       const catalog = Array.from(
-        new Map([...mineCatalog, ...marketplaceCatalog].map((item) => [item.id, item])).values(),
+        new Map([...mineCatalog, ...marketplaceCatalog].map(item => [item.id, {
+          ...item,
+          searchNames: mineNames.get(item.id) ?? item.searchNames,
+        }])).values(),
       );
       if (revision !== catalogRevisionRef.current) return;
       withCatalogCache(catalog, cache);
@@ -546,73 +551,6 @@ export function AgentManagementPanel({
     },
     [client, formatActionError, loadSkills, t, view],
   );
-
-  const handleMcpFlowCompleted = useCallback(() => {
-    setMcpConnectId(null);
-    void loadMcps();
-  }, [loadMcps]);
-
-  const handleMcpFlowAborted = useCallback(
-    (reason: 'failed' | 'cancelled') => {
-      setMcpConnectId(null);
-      if (reason === 'failed') {
-        const error = useConnectorStore.getState().error;
-        showActionError(formatActionError(error, t('agentManagement.states.actionError')));
-      }
-    },
-    [formatActionError, showActionError, t],
-  );
-
-  const mcpConnectFlow = usePendingConnectorFlow(handleMcpFlowCompleted, handleMcpFlowAborted);
-
-  const handleConnectMcp = useCallback(
-    (mcp: McpOption) => {
-      const runtimeName = mcp.runtimePackageName || mcp.id;
-      clearConnectorError();
-      setMcpConnectId(mcp.id);
-      mcpConnectFlow.start([runtimeName]);
-    },
-    [clearConnectorError, mcpConnectFlow, mcpConnectFlow.start],
-  );
-
-  const handleInstallMcp = useCallback(
-    async (mcp: McpOption) => {
-      // 预置 MCP 随应用分发，不装包（后端会拒绝内置包冲突）；只允许走连接流程。
-      if (mcp.source === 'built_in') return;
-      const assetId = mcp.hubAssetId || mcp.id;
-      setBusyMcpId(mcp.id);
-      clearConnectorError();
-      try {
-        const response = await installMcpPackage(assetId);
-        await loadMcps();
-        const connectResult = response?.connect;
-        const runtimeName = connectResult?.name || mcp.runtimePackageName || mcp.id;
-        if (connectResult?.credentialsRequired) {
-          setMcpTokenTarget({ name: runtimeName, response: connectResult });
-        } else if (connectResult?.type === 'auth_required') {
-          setMcpAuthTarget({ name: runtimeName, response: connectResult });
-        } else if (!response) {
-          showActionError(
-            formatActionError(
-              useConnectorStore.getState().error,
-              t('agentManagement.states.actionError'),
-            ),
-          );
-        }
-      } catch (error) {
-        showActionError(formatActionError(error, t('agentManagement.states.actionError')));
-      } finally {
-        setBusyMcpId(null);
-      }
-    },
-    [clearConnectorError, formatActionError, installMcpPackage, loadMcps, showActionError, t],
-  );
-
-  const handleMcpConnected = useCallback(() => {
-    setMcpTokenTarget(null);
-    setMcpAuthTarget(null);
-    void loadMcps();
-  }, [loadMcps]);
 
   // 切换到专家页面时刷新目录（面板常驻挂载、切走仅隐藏，聊天里新建的专家
   // 不会主动通知前端），沿用 SkillPanel 的激活转换检测；首次挂载也走此入口，
@@ -1266,25 +1204,6 @@ export function AgentManagementPanel({
     <>
       <PendingConnectorModals flow={installFlow} />
       <PendingConnectorModals flow={reconnectFlow} />
-      <PendingConnectorModals flow={mcpConnectFlow} />
-      {mcpTokenTarget ? (
-        <ConnectTokenModal
-          name={mcpTokenTarget.name}
-          displayName={mcpOptions.find((item) => item.id === mcpTokenTarget.name)?.name || mcpTokenTarget.name}
-          iconUrl={mcpOptions.find((item) => item.id === mcpTokenTarget.name)?.icon || undefined}
-          response={mcpTokenTarget.response}
-          onCancel={() => setMcpTokenTarget(null)}
-          onConnected={handleMcpConnected}
-        />
-      ) : null}
-      {mcpAuthTarget ? (
-        <CliAuthModal
-          name={mcpAuthTarget.name}
-          initial={mcpAuthTarget.response}
-          onCancel={() => setMcpAuthTarget(null)}
-          onConnected={handleMcpConnected}
-        />
-      ) : null}
     </>
   );
 
@@ -1379,7 +1298,7 @@ export function AgentManagementPanel({
                 wrapperTestId="agent-management-search"
                 inputTestId="agent-management-search-input"
                 name="agent-management-search"
-                aria-label={t(view === 'teams' ? 'agentManagement.searchTeams' : isGroupView ? 'agentManagement.searchMineGroup' : isMine ? 'agentManagement.searchMine' : 'agentManagement.searchCatalog')}
+                aria-label={t(view === 'teams' ? 'agentManagement.searchTeams' : isGroupView || isMine ? 'common.searchName' : 'agentManagement.searchCatalog')}
                 autoComplete="off"
                 disabled={connectorFlowId !== null}
                 value={view === 'teams' ? groupCatalogQuery : isGroupView ? groupMineQuery : isMine ? mineQuery : query}
@@ -1406,7 +1325,7 @@ export function AgentManagementPanel({
                     setQuery('');
                   }
                 }}
-                placeholder={t(view === 'teams' ? 'agentManagement.searchTeams' : isGroupView ? 'agentManagement.searchMineGroup' : isMine ? 'agentManagement.searchMine' : 'agentManagement.searchCatalog')}
+                placeholder={t(view === 'teams' ? 'agentManagement.searchTeams' : isGroupView || isMine ? 'common.searchName' : 'agentManagement.searchCatalog')}
               />
               {isMine ? (
                 <div className="agent-management-create-menu" data-testid="agent-management-create-menu">
@@ -1562,10 +1481,6 @@ export function AgentManagementPanel({
           onReloadMcps={loadMcps}
           onInstallSkill={(skill) => handleInstallSkill(skill, showActionError)}
           installingSkillId={busySkillId}
-          onConnectMcp={handleConnectMcp}
-          connectingMcpId={mcpConnectId}
-          onInstallMcp={handleInstallMcp}
-          installingMcpId={busyMcpId}
           onCreateGroup={openGroupCreate}
           onCancel={() => {
             setEditingId(null);

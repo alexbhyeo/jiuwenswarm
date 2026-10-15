@@ -4,10 +4,12 @@ import {
   A2UISetting,
   ExternalCliSettingsItem,
   ProactiveLimitsSetting,
+  RSISetting,
   TaskAsrSetting,
   TaskFullDuplexSetting,
   TrajectoryUiSetting,
 } from './ExperimentalSettings';
+import { A4PSettings } from './A4PSettings';
 
 export const experimentalModule: SettingsModuleDefinition = {
   id: 'experimental',
@@ -31,14 +33,36 @@ export const experimentalModule: SettingsModuleDefinition = {
       items: [{ id: 'external-cli-agents', component: 'custom', render: ExternalCliSettingsItem }],
     },
     {
+      id: 'rsi',
+      titleKey: 'settingsPanel.experimental.rsi',
+      items: [{ id: 'rsi-enabled', component: 'custom', render: RSISetting }],
+    },
+    {
       id: 'a2ui',
       titleKey: 'settingsPanel.experimental.a2ui',
       items: [{ id: 'a2ui', component: 'custom', render: A2UISetting }],
     },
     {
+      id: 'a4p',
+      titleKey: 'a4pSettings.title',
+      separatedRows: true,
+      items: [{ id: 'a4p-settings', component: 'custom', render: A4PSettings }],
+    },
+    {
       id: 'trajectory-ui',
       titleKey: 'settingsPanel.experimental.trajectoryUi',
       items: [{ id: 'trajectory-ui-enabled', component: 'custom', render: TrajectoryUiSetting }],
+    },
+    {
+      id: 'skill-pack',
+      titleKey: 'settingsPanel.experimental.skillPack',
+      items: [
+        {
+          id: 'discover-skill-pack-enabled',
+          component: 'switch',
+          key: 'symphony_evolution_enabled',
+        },
+      ],
     },
     {
       id: 'kv-cache-affinity',
@@ -48,6 +72,30 @@ export const experimentalModule: SettingsModuleDefinition = {
           id: 'kv-cache-affinity-enabled',
           component: 'switch',
           key: 'kv_cache_affinity_enabled',
+        },
+      ],
+    },
+    {
+      id: 'team-organization',
+      titleKey: 'settingsPanel.experimental.teamOrganization',
+      items: [{ id: 'team-organization-ui-enabled', component: 'switch', key: 'team_organization_ui_enabled' }],
+    },
+    {
+      id: 'team-scheduled-dispatch',
+      titleKey: 'settingsPanel.experimental.teamScheduledDispatch',
+      items: [
+        {
+          id: 'team-scheduled-dispatch-enabled',
+          component: 'switch',
+          key: 'team_scheduled_dispatch_enabled',
+          subItems: {
+            show: 'always',
+            disabled: 'when-parent-unchecked',
+            uncheckWithParent: true,
+            items: [
+              { id: 'team-task-verification-enabled', component: 'switch', key: 'team_task_verification_enabled' },
+            ],
+          },
         },
       ],
     },

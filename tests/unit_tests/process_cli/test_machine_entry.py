@@ -59,7 +59,7 @@ import types
 
 from jiuwenswarm.channels.process_cli.protocol import OneShotRunResult
 
-async def run_with_signals(run_input, writer):
+async def run_with_signals(run_input, writer, *, control=None):
     writer.session_id = 'resolved-session'
     if os.environ.get('MACHINE_TEST_DIAGNOSTICS') == '1':
         print('PYTHON_DIAGNOSTIC', flush=True)
@@ -178,7 +178,6 @@ def test_machine_option_dispatches_directly_without_legacy_execution(
         ["--project-dir", "."],
         ["--trusted-dir", "."],
         ["--mode", "code.normal"],
-        ["--work-mode", "code"],
         ["--output", "human"],
         ["--timeout", "10"],
         ["--show-tools"],
@@ -219,6 +218,7 @@ def test_machine_option_does_not_change_legacy_parser_defaults_or_help() -> None
     for option in ("--run-json", "--session", "--cwd", "--output", "--show-tools"):
         assert option in help_text
     assert "--_interactive-worker" not in help_text
+    assert "--work-mode" not in help_text
 
 
 def test_help_exits_without_machine_or_runtime_imports() -> None:
@@ -282,7 +282,7 @@ def test_execute_source_reads_one_request_and_runs_once(
     requests: list[OneShotRunInput] = []
 
     async def run(
-        run_input: OneShotRunInput, writer: OneShotWriter
+        run_input: OneShotRunInput, writer: OneShotWriter, *, control: Any = None
     ) -> OneShotRunResult:
         requests.append(run_input)
         return _success(writer)
@@ -385,7 +385,7 @@ def test_cwd_is_applied_before_importing_or_starting_runtime(
     expected_cwd = tmp_path / "working"
 
     async def run(
-        run_input: OneShotRunInput, writer: OneShotWriter
+        run_input: OneShotRunInput, writer: OneShotWriter, *, control: Any = None
     ) -> OneShotRunResult:
         calls.append("run")
         assert Path.cwd() == expected_cwd
@@ -453,7 +453,7 @@ def test_final_result_is_written_after_asyncio_shutdown(
             lifecycle.append("generator-closed")
 
     async def run(
-        run_input: OneShotRunInput, writer: OneShotWriter
+        run_input: OneShotRunInput, writer: OneShotWriter, *, control: Any = None
     ) -> OneShotRunResult:
         asyncio.create_task(background())
         await asyncio.sleep(0)

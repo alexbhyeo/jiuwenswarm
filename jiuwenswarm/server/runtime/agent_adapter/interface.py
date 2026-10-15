@@ -50,7 +50,12 @@ from jiuwenswarm.server.runtime.agent_adapter.statusline_setup_agent import (
     build_statusline_setup_dispatch,
 )
 from jiuwenswarm.server.runtime.session.session_manager import SessionManager
+from jiuwenswarm.runtime.session.model import (
+    TEAM_ATTACH_ONLY_PARAM,
+    TEAM_EXECUTION_CONTEXT_METADATA_KEY,
+)
 from jiuwenswarm.server.runtime.skill.skill_manager import SkillManager, SkillRpcError
+from jiuwenswarm.server.runtime.session_assets import get_session_asset_manager
 from jiuwenswarm.server.runtime.skill.archive_store import ARCHIVE_DIRNAME
 from jiuwenswarm.server.utils.utils import is_team_params
 from jiuwenswarm.common.config import get_config
@@ -338,6 +343,10 @@ def _should_record_user_history(params: Any) -> bool:
         return False
     # Second-step goal attach is host control traffic, not a user utterance.
     if params.get("attach_goal") is True:
+        return False
+    # An attach-only subscription submits no input at all; a record here would
+    # leave a dangling user turn that makes the frontend wait forever.
+    if params.get(TEAM_ATTACH_ONLY_PARAM) is True:
         return False
     if is_interrupt_resume_payload(params):
         return False
@@ -991,6 +1000,18 @@ _SKILL_ROUTES: dict[ReqMethod, str] = {
     ReqMethod.SKILLS_VISIBILITY_GET: "handle_skills_visibility_get",
     ReqMethod.SKILLS_VISIBILITY_SET: "handle_skills_visibility_set",
     ReqMethod.SKILLS_VISIBILITY_UPDATE: "handle_skills_visibility_update",
+    # skills.sync.* 仅保留 reload：web 进程 HTTP apply 落盘后的进程间通知，
+    # 不落盘、只触发重建。diff / package / apply 不进 WS 路由——它们的
+    # token 鉴权只在 HTTP 层（/skill-sync/*），经 WS 调用会绕过鉴权；
+    # 且 WS package 无人清理临时目录、WS apply 的 zip_bytes 无法过 JSON
+    # 序列化，均不可用。外部统一走 HTTP，进程内测试直调 SkillManager。
+    ReqMethod.SKILL_SYNC_RELOAD: "handle_skill_sync_reload",
+}
+
+_SESSION_ASSET_ROUTES: dict[ReqMethod, str] = {
+    ReqMethod.SESSION_ASSETS_LIST: "handle_session_assets_list",
+    ReqMethod.SESSION_ASSETS_REGISTER: "handle_session_assets_register",
+    ReqMethod.SESSION_ASSETS_RENAME: "handle_session_assets_rename",
 }
 
 # Handlers that persist a Skill visibility document; every one of them must
@@ -1000,6 +1021,26 @@ _SKILL_VISIBILITY_WRITE_HANDLERS: frozenset[str] = frozenset(
     {
         "handle_skills_visibility_set",
         "handle_skills_visibility_update",
+    }
+)
+
+# 同步 handler 涉及技能目录与 local_skills，处理前须重载磁盘 state，
+# 保证 AgentServer 长生命周期 _skill_manager 实例看到最新状态
+# （handle_skill_sync_reload：web 进程刚落盘，state 必须重读）。
+_SKILL_SYNC_HANDLERS: frozenset[str] = frozenset(
+    {
+        "handle_skill_sync_reload",
+    }
+)
+
+# 已收缩出 WS 路由的同步方法：合法枚举值不会被入口解析拦截，须在
+# _handle_skills_request 显式拒绝，否则落入聊天路径触发空 query 的
+# LLM 调用。
+_SKILL_SYNC_WS_REJECTED: frozenset[ReqMethod] = frozenset(
+    {
+        ReqMethod.SKILL_SYNC_DIFF,
+        ReqMethod.SKILL_SYNC_PACKAGE,
+        ReqMethod.SKILL_SYNC_APPLY,
     }
 )
 
@@ -1159,7 +1200,6 @@ def build_user_prompt(content: str | dict, files: dict, channel: str, language: 
     ).render()
 
 
-
 class JiuWenSwarm:
     """JiuWenSwarm 统一门面.
 
@@ -1175,6 +1215,16 @@ class JiuWenSwarm:
     # chunks, which raises the process RSS across short-lived TUI sessions.
     STREAM_QUEUE_MAXSIZE = 64
 
+    async def configure_process_cli_run(
+        self, *, max_turns: int | None, host_tools: tuple[Any, ...]
+    ) -> None:
+        """Apply a transient machine invocation to the ready single-Agent adapter."""
+        adapter = self._ensure_adapter()
+        configure = getattr(adapter, "configure_process_cli_run", None)
+        if not callable(configure):
+            raise ValueError("process CLI run options require a single-Agent adapter")
+        await configure(max_turns=max_turns, host_tools=host_tools)
+
     def __init__(self) -> None:
         self._prepare_skill_library()
         self._adapter: AgentAdapter | None = None
@@ -1184,6 +1234,7 @@ class JiuWenSwarm:
         self._personal_context_runtime_enabled: bool = False
         self._sdk_name: str | None = None
         self._skill_manager = SkillManager(workspace_dir=str(get_agent_workspace_dir()))
+        self._session_asset_manager = get_session_asset_manager()
         self._session_manager = SessionManager()
         self._heartbeat_service: Any | None = None
         self._permissions_changed_notifier: Callable[[], None] | None = None
@@ -1576,6 +1627,7 @@ class JiuWenSwarm:
         param_metadata = params.get("metadata") if isinstance(params, dict) else None
         if isinstance(param_metadata, dict):
             metadata = {**metadata, **param_metadata}
+        metadata.pop(TEAM_EXECUTION_CONTEXT_METADATA_KEY, None)
         origin_kind = (
             HOST_USER_ORIGIN_EXTERNAL
             if is_external_user_authored_dispatch(
@@ -2075,6 +2127,26 @@ class JiuWenSwarm:
 
     async def _handle_skills_request(self, request: AgentRequest) -> AgentResponse | None:
         """处理 Skills 相关请求，返回 None 表示不是 Skills 请求."""
+        # skills.sync.diff/package/apply 已收缩出 WS 路由（经 WS 调用会绕过
+        # HTTP 层 token 鉴权），但它们仍是合法 ReqMethod——若不在此显式
+        # 拒绝，请求会沿 facade 链路落入聊天处理路径，空 query 触发一次
+        # 无意义的 LLM 调用（收缩前是干净的 handler 报错）。
+        if request.req_method in _SKILL_SYNC_WS_REJECTED:
+            message = (
+                "skills.sync.diff/package/apply 未开放 WS 调用，"
+                "请使用带鉴权的 HTTP /skill-sync/* 接口"
+            )
+            return AgentResponse(
+                request_id=request.request_id,
+                channel_id=request.channel_id,
+                ok=False,
+                payload={
+                    "code": "SKILL_SYNC_WS_UNSUPPORTED",
+                    "error": message,
+                    "message": message,
+                },
+                metadata=request.metadata,
+            )
         if request.req_method not in _SKILL_ROUTES:
             return None
 
@@ -2082,6 +2154,13 @@ class JiuWenSwarm:
         handler = getattr(self._skill_manager, handler_name)
         try:
             params = dict(request.params) if isinstance(request.params, dict) else {}
+            if handler_name in _SKILL_SYNC_HANDLERS:
+                # 长生命周期实例先重载磁盘 state（外部流程可能已写
+                # local_skills / skill_configs），同步结果才与磁盘一致
+                try:
+                    self._skill_manager.reload_state()
+                except Exception:  # noqa: BLE001
+                    logger.warning("[skills] reload state before sync failed")
             if handler_name in (
                 "handle_skills_import_local",
                 "handle_skills_get",
@@ -2118,7 +2197,15 @@ class JiuWenSwarm:
                 "handle_skills_online_search_install",
                 "handle_skills_clawhub_download",
                 "handle_skills_team_skills_hub_install",
+                "handle_skill_sync_reload",
             ]
+            if handler_name == "handle_skill_sync_reload" and not (
+                payload.get("applied") or []
+            ):
+                # 仅当无任何技能实际落盘（web 进程 apply 全部 skipped /
+                # 全部安装失败）时才不重建；通知方只在 applied 非空时
+                # 发送，此处为防御性兜底。
+                _reload_after_skills = False
             if (
                 handler_name
                 in {
@@ -2175,6 +2262,37 @@ class JiuWenSwarm:
             logger.error("[JiuWenSwarm] skills 请求处理失败: %s", exc)
             err_payload: dict = {"error": str(exc), "message": str(exc)}
             code = getattr(exc, "code", None)
+            if isinstance(code, str) and code.strip():
+                err_payload["code"] = code.strip()
+            return AgentResponse(
+                request_id=request.request_id,
+                channel_id=request.channel_id,
+                ok=False,
+                payload=err_payload,
+                metadata=request.metadata,
+            )
+        return AgentResponse(
+            request_id=request.request_id,
+            channel_id=request.channel_id,
+            ok=True,
+            payload=payload,
+            metadata=request.metadata,
+        )
+
+    async def _handle_session_asset_request(self, request: AgentRequest) -> AgentResponse | None:
+        """Handle task-asset requests (session.assets.*); None means not one of them."""
+        if request.req_method not in _SESSION_ASSET_ROUTES:
+            return None
+        handler = getattr(self._session_asset_manager, _SESSION_ASSET_ROUTES[request.req_method])
+        params = dict(request.params) if isinstance(request.params, dict) else {}
+        params.setdefault("session_id", request.session_id or "")
+        try:
+            payload = await handler(params)
+        except Exception as exc:
+            code = getattr(exc, "code", None)
+            if not isinstance(code, str):
+                logger.error("[JiuWenSwarm] session.assets request failed: method=%s error=%s", request.req_method, exc)
+            err_payload: dict = {"error": str(exc), "message": str(exc)}
             if isinstance(code, str) and code.strip():
                 err_payload["code"] = code.strip()
             return AgentResponse(
@@ -2671,6 +2789,15 @@ class JiuWenSwarm:
             )
 
         adapter = self._ensure_adapter(mode=self._adapter_mode_for_request(request))
+        external_session_checker = getattr(
+            adapter,
+            "is_external_harness_session",
+            None,
+        )
+        is_external_session = bool(
+            callable(external_session_checker)
+            and external_session_checker(request.session_id)
+        )
 
         if intent == "pause":
             # 暂停：不取消任务，只暂停 ReAct 循环
@@ -2683,6 +2810,8 @@ class JiuWenSwarm:
         if intent == "supplement":
             # 取消当前 session 的任务
             response = await adapter.process_interrupt(request)
+            if is_external_session:
+                return response
             await self._session_manager.cancel_session_task(session_id, "interrupt(supplement): ")
             return response
 
@@ -2690,6 +2819,8 @@ class JiuWenSwarm:
         # guard 能通过），再 cancel_session_task（其 finally 会把 session 从 _active_session_ids 移除）。
         # 顺序不能反，否则 process_interrupt 的 session guard 会误判为 "not active" 而跳过 abort。
         response = await adapter.process_interrupt(request)
+        if is_external_session:
+            return response
         await self._cancel_team_work_for_session(
             session_id,
             request.channel_id,
@@ -2978,6 +3109,10 @@ class JiuWenSwarm:
         if skills_response is not None:
             return skills_response
 
+        session_asset_response = await self._handle_session_asset_request(request)
+        if session_asset_response is not None:
+            return session_asset_response
+
         plugins_response = await self._handle_plugins_request(request)
         if plugins_response is not None:
             return plugins_response
@@ -3037,11 +3172,30 @@ class JiuWenSwarm:
         # connectors before the agent runs. Always pass a list (never None):
         # empty clears selection when neither side contributes names.
         params = request.params if isinstance(request.params, dict) else {}
+        try:
+            runtime_binding = self._resolve_runtime_binding_for_request(
+                adapter,
+                request,
+                session_id,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            return AgentResponse(
+                request_id=request.request_id,
+                channel_id=request.channel_id,
+                ok=False,
+                payload={"error": str(exc)},
+                metadata=request.metadata,
+            )
+        reconcile_kwargs: dict[str, Any] = {
+            "model_name": params.get("model_name"),
+            "history_before_request_id": request.request_id,
+        }
+        if runtime_binding is not None:
+            reconcile_kwargs["runtime_binding"] = runtime_binding
         await self.reconcile_session_mcp(
             request.session_id,
             compute_chat_send_mcp_needed(params),
-            model_name=params.get("model_name"),
-            history_before_request_id=request.request_id,
+            **reconcile_kwargs,
         )
 
         # cloud memory: before chat hook
@@ -3574,6 +3728,16 @@ class JiuWenSwarm:
         # command.goal set history is written only after a successful set inside
         # the DeepAdapter stream path (same success gate as unary process_message).
         params_for_history = request.params if isinstance(request.params, dict) else {}
+        history_channel_metadata = (
+            dict(request.metadata)
+            if isinstance(request.metadata, dict)
+            else None
+        )
+        if history_channel_metadata is not None:
+            history_channel_metadata.pop(
+                TEAM_EXECUTION_CONTEXT_METADATA_KEY,
+                None,
+            )
         if (
             request.req_method != ReqMethod.COMMAND_GOAL
             and _should_record_user_history(params_for_history)
@@ -3587,7 +3751,7 @@ class JiuWenSwarm:
                 content=_history_user_content(params_for_history, query),
                 timestamp=time.time(),
                 extra=_history_user_extra(params_for_history),
-                channel_metadata=request.metadata,
+                channel_metadata=history_channel_metadata,
                 mode=params_for_history.get("mode", "unknown"),
             )
         logger.info(
@@ -3619,11 +3783,30 @@ class JiuWenSwarm:
         # connectors before the agent runs. Always pass a list (never None):
         # empty clears selection when neither side contributes names.
         params = request.params if isinstance(request.params, dict) else {}
+        try:
+            runtime_binding = self._resolve_runtime_binding_for_request(
+                adapter,
+                request,
+                session_id,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            yield AgentResponseChunk(
+                request_id=rid,
+                channel_id=cid,
+                payload={"event_type": "chat.error", "error": str(exc)},
+                is_complete=True,
+            )
+            return
+        reconcile_kwargs: dict[str, Any] = {
+            "model_name": params.get("model_name"),
+            "history_before_request_id": request.request_id,
+        }
+        if runtime_binding is not None:
+            reconcile_kwargs["runtime_binding"] = runtime_binding
         await self.reconcile_session_mcp(
             request.session_id,
             compute_chat_send_mcp_needed(params),
-            model_name=params.get("model_name"),
-            history_before_request_id=request.request_id,
+            **reconcile_kwargs,
         )
         # Team 的交互回答走普通流式路径，不经过 deliver_control_input。
         # 与单 Agent 使用同一落盘格式，按原问题的 params.request_id 配对。
@@ -4912,6 +5095,7 @@ class JiuWenSwarm:
         *,
         model_name: str | None = None,
         history_before_request_id: str | None = None,
+        runtime_binding: dict[str, Any] | None = None,
     ) -> None:
         """Reconcile this session's MCP set to ``needed`` (idempotent diff).
 
@@ -4949,7 +5133,26 @@ class JiuWenSwarm:
                 supported_kwargs["history_before_request_id"] = (
                     history_before_request_id
                 )
+            if "runtime_binding" in parameters or accepts_kwargs:
+                supported_kwargs["runtime_binding"] = runtime_binding
         await reconcile(session_id, needed, **supported_kwargs)
+
+    @staticmethod
+    def _resolve_runtime_binding_for_request(
+        adapter: AgentAdapter,
+        request: AgentRequest,
+        session_id: str,
+    ) -> dict[str, Any] | None:
+        """Resolve one chat's runtime before any session-child side effects."""
+        if request.req_method is not ReqMethod.CHAT_SEND:
+            return None
+        resolver = getattr(adapter, "resolve_runtime_binding", None)
+        if not callable(resolver):
+            return None
+        params = request.params if isinstance(request.params, dict) else {}
+        runtime_binding = resolver(session_id, params)
+        request.trusted_runtime_binding = runtime_binding
+        return runtime_binding
 
     def sync_mcp_credentials(self) -> bool:
         """Sync connected MCPs' tokens into os.environ (skill scripts).

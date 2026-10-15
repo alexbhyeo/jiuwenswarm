@@ -28,7 +28,10 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from jiuwenswarm.agents.swarm.agent_group import LoadedAgentGroupPackage
 
 from openjiuwen.agent_teams.paths import (
     SKILL_VISIBILITY_FILENAME,
@@ -46,7 +49,10 @@ from openjiuwen.core.foundation.tool import McpServerConfig
 from openjiuwen.extensions.observability.demand import get_trajectory_span_processor
 from openjiuwen.harness.schema.extension_spec import AgentTemplateSpec
 
-from jiuwenswarm.agents.swarm.config_specs import build_member_deep_agent_spec
+from jiuwenswarm.agents.swarm.config_specs import (
+    build_member_deep_agent_spec,
+    build_reviewer_deep_agent_spec,
+)
 from jiuwenswarm.agents.swarm.context import (
     SwarmBuildContext,
     get_heartbeat_job_service,
@@ -206,16 +212,33 @@ def _with_agent_template(member_spec: Any, template: AgentTemplateSpec) -> Any:
     )
 
 
-def _apply_agent_group(spec: Any, agent_group_name: str) -> None:
+def _apply_agent_group(
+    spec: Any,
+    agent_group_name: str,
+    package: LoadedAgentGroupPackage | None = None,
+) -> None:
     """Seed a hybrid roster from one resolved AgentGroup package."""
-    from jiuwenswarm.agents.swarm.agent_group import load_agent_group_package
     from jiuwenswarm.server.runtime.extension_package_manager import (
-        resolve_agent_group_dir,
         resolve_agent_group_member_display_name,
     )
+    if package is None:
+        from jiuwenswarm.agents.swarm.agent_group import (
+            load_agent_group_package_bundle,
+        )
+        from jiuwenswarm.server.runtime.extension_package_manager import (
+            resolve_agent_group_dir,
+        )
 
-    package_dir = resolve_agent_group_dir(agent_group_name)
-    templates = load_agent_group_package(package_dir)
+        package = load_agent_group_package_bundle(
+            resolve_agent_group_dir(agent_group_name)
+        )
+    templates = package.templates
+    package_dir = package.package_dir
+    spec.metadata = {
+        **(spec.metadata or {}),
+        "agent_group_name": agent_group_name,
+        "capabilities": list(package.capabilities),
+    }
 
     leader_base = spec.agents.get("leader")
     teammate_base = spec.agents.get("teammate")
@@ -288,6 +311,7 @@ def enrich_team_spec_for_swarm(
     channel_id: str | None = None,
     request_metadata: dict[str, Any] | None = None,
     agent_group_name: str | None = None,
+    agent_group_package: LoadedAgentGroupPackage | None = None,
 ) -> None:
     """Enrich *spec* in place for provider-based swarm assembly.
 
@@ -306,6 +330,7 @@ def enrich_team_spec_for_swarm(
         channel_id: Raw channel id from the request, if any.
         request_metadata: Request metadata mapping (carries ``mode`` etc.).
         agent_group_name: Optional AgentGroup package selected for this Team.
+        agent_group_package: Optional preloaded package for this AgentGroup.
     """
     register_swarm_providers()
     _ensure_external_team_transport(spec, channel_id)
@@ -410,9 +435,11 @@ def enrich_team_spec_for_swarm(
             )
             member_spec = _with_project_cwd(member_spec, project_dir)
             spec.agents[role] = member_spec
+    if "teammate" in spec.agents:
+        spec.reviewer_agent = build_reviewer_deep_agent_spec(mode, spec.agents["teammate"])
 
     if agent_group_name:
-        _apply_agent_group(spec, agent_group_name)
+        _apply_agent_group(spec, agent_group_name, agent_group_package)
 
     spec.build_context = base
     # Carry a serializable seed alongside the live context so members rebuilt

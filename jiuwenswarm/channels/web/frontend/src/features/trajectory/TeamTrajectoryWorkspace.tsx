@@ -1,5 +1,3 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-
 /** Team member navigation using the native trajectory overview and ledger. */
 
 import { memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -49,7 +47,7 @@ function MemberToolbarControl({
       onClick={onClick}
     >
       <span className={`${css.statusDot} ${css[`status_${lane.status}`]}`} aria-hidden="true" />
-      <span className={css.memberName}>{lane.label}</span>
+      <span className={css.memberName} title={lane.label}>{lane.label}</span>
       <span className={css.chevron} aria-hidden="true">{expanded ? '▾' : '▸'}</span>
     </button>
   );

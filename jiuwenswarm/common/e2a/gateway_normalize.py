@@ -58,7 +58,20 @@ _CHAT_DELTA_PASSTHROUGH_KEYS = (
     "proactive_rec_id",
 )
 
-# 与 E2A-AgentRequest-log-migration.md §7.4 一致；通道业务勿占用此前缀。
+# Team Organization delta 身份键：chat.delta 线上往返需保留团队路由标识。
+_TEAM_DELTA_IDENTITY_KEYS = ("team_name", "team_id")
+
+
+def _copy_team_delta_identity(source: dict[str, Any], target: dict[str, Any]) -> None:
+    """Preserve Team routing and the shared organization reply ID on text deltas."""
+    for key in _TEAM_DELTA_IDENTITY_KEYS:
+        value = source.get(key)
+        if value is not None:
+            target[key] = value
+    if str(source.get("source", "")).startswith("org_") and "request_id" in source:
+        target["request_id"] = source["request_id"]
+
+# 通道业务勿占用此前缀。
 E2A_INTERNAL_CONTEXT_KEY = "_jiuwenswarm"
 E2A_FALLBACK_FAILED_KEY = "normalize_failed"
 E2A_LEGACY_AGENT_REQUEST_KEY = "legacy_agent_request"
@@ -423,6 +436,8 @@ def e2a_response_from_agent_chunk(
             _val = pl.get(_key)
             if _val is not None:
                 body_chunk[_key] = _val
+        # Team Organization delta 身份：线上保留团队路由与组织回复关联。
+        _copy_team_delta_identity(pl, body_chunk)
     else:
         body_chunk = {
             "delta_kind": "custom",
@@ -569,7 +584,9 @@ def e2a_response_to_agent_chunk(e2a: E2AResponse) -> "AgentResponseChunk":
                 _val = body.get(_key)
                 if _val is not None:
                     pl[_key] = _val
-            return AgentResponseChunk(agent_ref=_agent_ref, metadata=_meta, 
+            # Team Organization delta 身份：从 body 恢复团队路由与组织回复关联。
+            _copy_team_delta_identity(body, pl)
+            return AgentResponseChunk(agent_ref=_agent_ref, metadata=_meta,
                 request_id=rid,
                 channel_id=ch,
                 payload=pl,

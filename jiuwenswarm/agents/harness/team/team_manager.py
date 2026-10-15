@@ -23,6 +23,8 @@ from openjiuwen.core.runner import Runner
 from openjiuwen.core.common.logging import server_logger
 from openjiuwen.harness import DeepAgent
 from openjiuwen.harness_protocol.state import HarnessState
+from openjiuwen.core.foundation.llm import CompiledModelSelection
+from openjiuwen.agent_teams.models.pool import materialize_model_group
 from openjiuwen.harness.rails import (
     EvolutionInterruptRail,
     SkillEvolutionRail,
@@ -37,6 +39,7 @@ from jiuwenswarm.common.cron_team_completion import (
     new_cron_team_round_state,
 )
 from jiuwenswarm.common.log_preview import preview_text
+from jiuwenswarm.common.model_selection import ModelSelection as SwarmModelSelection
 from jiuwenswarm.common.utils import get_user_workspace_dir
 
 configure_agent_teams_home()
@@ -242,6 +245,7 @@ class _ActiveTeamRound:
     """Process-local ownership for one submitted Team interaction round."""
 
     request_id: str
+    generation: int = 0
     release_admission: Callable[[], Awaitable[None]] | None = None
     defer_terminal_release: bool = False
     terminal_armed: bool = False
@@ -337,6 +341,14 @@ class TeamManager:
         self._runner_team_agents: dict[str, TeamAgent] = {}
         self._team_monitors: dict[str, TeamMonitorHandler] = {}
         self._stream_tasks: dict[str, asyncio.Task] = {}
+        self._stream_task_generations: dict[str, int] = {}
+        self._session_generations: dict[str, int] = {}
+        self._request_generations: dict[tuple[str, str], int] = {}
+        self._waiter_generations: dict[tuple[str, str], int] = {}
+        # session_id → request_ids registered as attach-only observation
+        # waiters; they receive broadcasts but do not own the Team stream.
+        self._attach_waiter_ids: dict[str, set[str]] = {}
+        self._round_state_reporter: Callable[[str, int, bool], None] | None = None
         # session_id → request_ids of Team turns that entered the adapter but
         # have not reached a released round yet.  Covers the preparation window
         # (spec assembly, runtime activation) that precedes the round marker.
@@ -410,32 +422,116 @@ class TeamManager:
             Callable[[str], Awaitable[None]] | None
         ) = None
 
-    def has_stream_task(self, session_id: str) -> bool:
+    def bind_generation(self, session_id: str, generation: int) -> None:
+        """Bind future process-local Team handles to one Session generation."""
+        current = self._session_generations.get(session_id)
+        if current is not None and generation < current:
+            raise RuntimeError(
+                f"stale Team generation: session={session_id} "
+                f"expected={current} actual={generation}"
+            )
+        self._session_generations[session_id] = generation
+
+    def set_round_state_reporter(
+        self,
+        reporter: Callable[[str, int, bool], None] | None,
+    ) -> None:
+        """Attach the Runtime observer for active versus parked Team rounds."""
+        self._round_state_reporter = reporter
+
+    def report_round_state(
+        self,
+        session_id: str,
+        generation: int | None,
+        *,
+        running: bool,
+    ) -> None:
+        """Report the currently observed round activity to the Runtime observer.
+
+        Used when an execution attaches while the Team stream is already
+        idle: no round transition will fire the reporter on its own, so the
+        attach path aligns its execution state to what it observes —
+        otherwise a RUNNING execution keeps the Session busy (undeletable)
+        forever. A missing generation means no Runtime execution owns the
+        caller, so there is nothing to align.
+        """
+        if self._round_state_reporter is None or generation is None:
+            return
+        if not self.generation_matches(session_id, generation):
+            return
+        self._round_state_reporter(session_id, generation, running)
+
+    def generation_matches(self, session_id: str, generation: int | None) -> bool:
+        """Return whether a callback belongs to the current Session generation."""
+        if generation is None:
+            return True
+        return self._session_generations.get(session_id) == generation
+
+    def has_stream_task(
+        self,
+        session_id: str,
+        *,
+        generation: int | None = None,
+    ) -> bool:
+        if not self.generation_matches(session_id, generation):
+            return False
         return session_id in self._stream_tasks
 
-    def pop_stream_task(self, session_id: str) -> asyncio.Task | None:
+    def pop_stream_task(
+        self,
+        session_id: str,
+        *,
+        generation: int | None = None,
+    ) -> asyncio.Task | None:
+        if not self.generation_matches(session_id, generation):
+            return None
+        if generation is not None and self._stream_task_generations.get(session_id) != generation:
+            return None
         # Stream end releases every handler parked on it; their ended-round
         # markers die with the stream instead of accumulating per round.
         self._round_ended_requests.pop(session_id, None)
+        self._stream_task_generations.pop(session_id, None)
         return self._stream_tasks.pop(session_id, None)
 
-    def begin_request(self, session_id: str, request_id: str) -> None:
+    def begin_request(
+        self,
+        session_id: str,
+        request_id: str,
+        *,
+        generation: int | None = None,
+    ) -> None:
         """Mark a Team turn as in flight before its round exists.
 
         The adapter admits a Team request long before ``begin_round`` runs
         (spec assembly, MCP preflight, runtime activation).  Without this
         marker the Session looks idle for that whole window.
         """
-        self._inflight_requests.setdefault(session_id, set()).add(
-            str(request_id or "")
-        )
+        if generation is not None:
+            self.bind_generation(session_id, generation)
+        normalized_request_id = str(request_id or "")
+        self._inflight_requests.setdefault(session_id, set()).add(normalized_request_id)
+        if generation is not None:
+            self._request_generations[(session_id, normalized_request_id)] = generation
 
-    def end_request(self, session_id: str, request_id: str) -> None:
+    def end_request(
+        self,
+        session_id: str,
+        request_id: str,
+        *,
+        generation: int | None = None,
+    ) -> None:
         """Release one in-flight Team turn.  Idempotent."""
+        normalized_request_id = str(request_id or "")
+        expected_generation = self._request_generations.get(
+            (session_id, normalized_request_id)
+        )
+        if generation is not None and expected_generation != generation:
+            return
         requests = self._inflight_requests.get(session_id)
         if requests is None:
             return
-        requests.discard(str(request_id or ""))
+        requests.discard(normalized_request_id)
+        self._request_generations.pop((session_id, normalized_request_id), None)
         if not requests:
             self._inflight_requests.pop(session_id, None)
 
@@ -469,16 +565,43 @@ class TeamManager:
         queue: asyncio.Queue,
         *,
         exclusive: bool = False,
+        generation: int | None = None,
+        attach_only: bool = False,
     ) -> None:
-        """Register a waiter queue for a session's event stream."""
+        """Register a waiter queue for a session's event stream.
+
+        ``attach_only`` marks a pure observation subscription: it receives
+        broadcasts like any waiter but never implies the Team stream is
+        alive or accepting input (see ``has_input_waiters``).
+        """
+        if generation is not None:
+            self.bind_generation(session_id, generation)
+            self._waiter_generations[(session_id, request_id)] = generation
         self._pending_waiters.setdefault(session_id, []).append((request_id, queue))
         if exclusive:
             self._exclusive_waiters[session_id] = request_id
+        if attach_only:
+            self._attach_waiter_ids.setdefault(session_id, set()).add(request_id)
 
-    def remove_waiter(self, session_id: str, request_id: str) -> None:
+    def remove_waiter(
+        self,
+        session_id: str,
+        request_id: str,
+        *,
+        generation: int | None = None,
+    ) -> None:
         """Remove a waiter by request_id; clean up empty lists."""
+        expected_generation = self._waiter_generations.get((session_id, request_id))
+        if generation is not None and expected_generation != generation:
+            return
+        self._waiter_generations.pop((session_id, request_id), None)
         if self._exclusive_waiters.get(session_id) == request_id:
             self._exclusive_waiters.pop(session_id, None)
+        attach_ids = self._attach_waiter_ids.get(session_id)
+        if attach_ids is not None:
+            attach_ids.discard(request_id)
+            if not attach_ids:
+                self._attach_waiter_ids.pop(session_id, None)
         waiters = self._pending_waiters.get(session_id)
         if waiters is None:
             return
@@ -487,6 +610,57 @@ class TeamManager:
             self._pending_waiters[session_id] = remaining
         else:
             self._pending_waiters.pop(session_id, None)
+
+    def has_input_waiters(self, session_id: str) -> bool:
+        """Return whether any waiter belongs to an input-owning stream.
+
+        Attach-only subscriptions observe events without owning the Team
+        stream; their presence must not flip a fresh user turn into a
+        follow-up (the follow-up path would deliver into a stopped runtime
+        and stall on ``gate_closed``).
+        """
+        attach_ids = self._attach_waiter_ids.get(session_id)
+        if not attach_ids:
+            return bool(self._pending_waiters.get(session_id))
+        return any(
+            request_id not in attach_ids
+            for request_id, _queue in self._pending_waiters.get(session_id, ())
+        )
+
+    def _select_broadcast_waiters(
+        self,
+        session_id: str,
+    ) -> list[tuple[str, asyncio.Queue]]:
+        """Select event consumers without duplicating attach delivery.
+
+        A Team event forwarded by one interactive waiter is routed by the
+        Gateway to every client subscribed to the Session. Attach-only waiters
+        are therefore fallback upstream observers, not additional fan-out
+        destinations. Keeping all of them registered preserves reconnect and
+        multi-window liveness, while selecting one prevents every observer
+        stream from persisting the same event again.
+
+        Returns:
+            Waiters that should receive the next event.
+        """
+        waiters = list(self._pending_waiters.get(session_id, ()))
+        exclusive_request_id = self._exclusive_waiters.get(session_id)
+        if exclusive_request_id is not None:
+            return [
+                (request_id, queue)
+                for request_id, queue in waiters
+                if request_id == exclusive_request_id
+            ]
+
+        attach_ids = self._attach_waiter_ids.get(session_id, set())
+        input_waiters = [
+            (request_id, queue)
+            for request_id, queue in waiters
+            if request_id not in attach_ids
+        ]
+        if input_waiters:
+            return input_waiters
+        return waiters[:1]
 
     async def broadcast_event(
         self,
@@ -547,25 +721,27 @@ class TeamManager:
             }:
                 current_round.continued_after_flow = True
 
-        waiters = list(self._pending_waiters.get(session_id, ()))
-        exclusive_request_id = self._exclusive_waiters.get(session_id)
-        if exclusive_request_id is not None:
-            waiters = [
-                (request_id, queue)
-                for request_id, queue in waiters
-                if request_id == exclusive_request_id
-            ]
+        waiters = self._select_broadcast_waiters(session_id)
 
-        if not waiters and self._is_workflow_terminal_event(event):
-            # A cancel/stop kills the chat stream (and with it the waiters)
-            # before the engine unwinds and emits the terminal workflow
-            # status ~1s later; the normal broadcast has nowhere to land and
-            # the frontend keeps showing the previous status until the user
-            # opens the workflows view. Fall back to the gateway server-push
-            # side channel, which delivers events without a chat stream.
-            await self._push_workflow_event_without_waiter(
-                session_id, event, channel_id=channel_id
-            )
+        if not waiters:
+            if self._is_workflow_terminal_event(event):
+                # A cancel/stop kills the chat stream (and with it the waiters)
+                # before the engine unwinds and emits the terminal workflow
+                # status ~1s later; the normal broadcast has nowhere to land and
+                # the frontend keeps showing the previous status until the user
+                # opens the workflows view. Fall back to the gateway server-push
+                # side channel, which delivers events without a chat stream.
+                await self._push_event_without_waiter(
+                    session_id, event, channel_id=channel_id
+                )
+            elif terminal:
+                # A mailbox-driven Team round runs with no interactive waiter:
+                # its terminal frame would land nowhere and the frontend would
+                # keep showing the Session as running. Mirror the workflow
+                # fallback and deliver it through the server-push side channel.
+                await self._push_event_without_waiter(
+                    session_id, event, channel_id=channel_id
+                )
 
         async def _put_to_waiter(
             request_id: str,
@@ -621,21 +797,21 @@ class TeamManager:
         )
         return str(status or "") in {"stopped", "paused", "completed", "failed"}
 
-    async def _push_workflow_event_without_waiter(
+    async def _push_event_without_waiter(
         self,
         session_id: str,
         event: dict[str, Any],
         *,
         channel_id: str | None = None,
     ) -> None:
-        """Deliver a waiter-less terminal workflow event via gateway server push."""
+        """Deliver a waiter-less terminal event via gateway server push."""
         try:
             from jiuwenswarm.server.agent_ws_server import AgentWebSocketServer
 
             server = AgentWebSocketServer.get_instance()
         except Exception:
             logger.debug(
-                "[TeamManager] workflow push fallback: server unavailable: session_id=%s",
+                "[TeamManager] waiter-less push fallback: server unavailable: session_id=%s",
                 session_id,
                 exc_info=True,
             )
@@ -658,9 +834,10 @@ class TeamManager:
                 else payload.get("status", "")
             )
             logger.info(
-                "[TeamManager] workflow terminal pushed without waiter: "
-                "session_id=%s status=%s",
+                "[TeamManager] terminal event pushed without waiter: "
+                "session_id=%s event_type=%s status=%s",
                 session_id,
+                str(payload.get("event_type") or ""),
                 status,
             )
 
@@ -731,9 +908,12 @@ class TeamManager:
         release_admission: Callable[[], Awaitable[None]] | None = None,
         defer_terminal_release: bool = False,
         terminal_armed: bool = False,
+        generation: int | None = None,
     ) -> None:
         """Bind the one admitted interaction round to its request."""
         self._assert_session_not_deleting(session_id)
+        if generation is not None:
+            self.bind_generation(session_id, generation)
         current = self._active_rounds.get(session_id)
         if current is not None:
             raise RuntimeError(
@@ -742,10 +922,17 @@ class TeamManager:
             )
         self._active_rounds[session_id] = _ActiveTeamRound(
             request_id=request_id,
+            generation=generation or self._session_generations.get(session_id, 0),
             release_admission=release_admission,
             defer_terminal_release=defer_terminal_release,
             terminal_armed=terminal_armed,
         )
+        if self._round_state_reporter is not None:
+            self._round_state_reporter(
+                session_id,
+                self._active_rounds[session_id].generation,
+                True,
+            )
 
     async def finish_round(self, session_id: str) -> None:
         """Finish the current round on a runtime terminal event."""
@@ -754,15 +941,28 @@ class TeamManager:
             return
         await self.release_round(session_id, current.request_id)
 
-    async def release_round(self, session_id: str, request_id: str) -> bool:
+    async def release_round(
+        self,
+        session_id: str,
+        request_id: str,
+        *,
+        generation: int | None = None,
+    ) -> bool:
         """Idempotently release one round and its admission lease."""
         current = self._active_rounds.get(session_id)
-        if current is None or current.request_id != request_id:
+        generation_matches = (
+            generation is None or current is None or current.generation == generation
+        )
+        if (
+            current is None
+            or current.request_id != request_id
+            or not generation_matches
+        ):
             return False
         self._active_rounds.pop(session_id, None)
         # The round terminal ends the turn's in-flight window as well, so the
         # archive guard stops treating a finished Team Session as running.
-        self.end_request(session_id, request_id)
+        self.end_request(session_id, request_id, generation=generation)
         # This marker only describes a handler parked on an existing persistent
         # stream.  Failed startup and stop paths can release a round after the
         # stream has already gone away; retaining their request ids would leak
@@ -780,6 +980,12 @@ class TeamManager:
             completion_task.cancel()
         if current.release_admission is not None:
             await current.release_admission()
+        if self._round_state_reporter is not None:
+            self._round_state_reporter(
+                session_id,
+                current.generation,
+                False,
+            )
         return True
 
     async def release_current_round(self, session_id: str) -> bool:
@@ -1082,6 +1288,159 @@ class TeamManager:
         )
 
     @staticmethod
+    def _resolve_and_compile_team_selection(
+        selection: SwarmModelSelection,
+    ) -> CompiledModelSelection:
+        """Resolve a stable Team selection through the server-side boundary."""
+        from jiuwenswarm.common.model_errors import (
+            TEAM_MODEL_SELECTION_STALE,
+            ModelSelectionError,
+        )
+        from jiuwenswarm.server.runtime.model_compiler_adapter import (
+            compile_model_selection,
+        )
+        from jiuwenswarm.server.runtime.model_routing_registry import (
+            ModelSelectionResolver,
+        )
+
+        try:
+            resolved = ModelSelectionResolver().resolve(
+                SwarmModelSelection(
+                    type=selection.type,
+                    id=selection.id,
+                    route_id=selection.route_id,
+                )
+            )
+            compiled = compile_model_selection(resolved)
+        except ModelSelectionError:
+            # Stable catalog / permission failures are meaningful to callers.
+            raise
+        except Exception as exc:
+            # Foundation errors also expose a numeric ``code`` attribute, but
+            # those values are implementation details rather than Team's
+            # stable external contract.
+            raise ModelSelectionError(
+                TEAM_MODEL_SELECTION_STALE,
+                "Team model selection cannot be restored; choose a model again",
+                selection_type=selection.type,
+            ) from exc
+
+        return compiled
+
+    @staticmethod
+    def _apply_compiled_team_selection(
+        spec_dict: dict[str, Any],
+        selection: SwarmModelSelection,
+        compiled: CompiledModelSelection,
+    ) -> None:
+        """Materialize one compiled selection into the Team model pool."""
+        from jiuwenswarm.common.model_errors import (
+            MODEL_REQUEST_CONFIG_INVALID,
+            TEAM_MODEL_SELECTION_STALE,
+            ModelSelectionError,
+        )
+
+        if (
+            compiled.selected_type != selection.type
+            or compiled.selected_id != selection.id
+        ):
+            raise ModelSelectionError(
+                TEAM_MODEL_SELECTION_STALE,
+                "model selection does not match compiled selection",
+            )
+
+        # ``load_team_spec_dict`` normally supplies the leader object, but
+        # callers may provide a minimal/template snapshot without one.  Keep
+        # model selection authoritative in that case too; Pydantic will fill
+        # the remaining LeaderSpec defaults when the spec is validated.
+        leader = spec_dict.get("leader")
+        if not isinstance(leader, dict):
+            leader = {}
+            spec_dict["leader"] = leader
+        # The compiled selection is the sole authoritative model source for
+        # this build. Remove stale convenience router declarations from an
+        # older template before TeamAgentSpec validates mutual exclusion.
+        spec_dict["model_router"] = None
+        spec_dict["model_intelli_router"] = None
+        client = compiled.model_client_config
+        provider = getattr(client, "client_provider", "")
+        provider = getattr(provider, "value", provider)
+        if selection.type == "model_group" and str(provider) == "intelli_router":
+            spec_dict["model_pool"] = [
+                entry.model_dump(exclude_none=True)
+                for entry in materialize_model_group(compiled, selection)
+            ]
+            spec_dict["model_pool_strategy"] = "intelli_router"
+            # The compiled selection is authoritative. Clear convenience
+            # sources from a legacy template and normalize every predefined
+            # member to the sole logical Team entry; physical deployment names
+            # stay inside the Foundation router.
+            spec_dict["model_router"] = None
+            spec_dict["model_intelli_router"] = None
+            if isinstance(leader, dict):
+                leader["model_name"] = "*"
+            predefined_members = spec_dict.get("predefined_members")
+            if isinstance(predefined_members, list):
+                for member in predefined_members:
+                    # External CLI members must keep their physical
+                    # deployment hint; the CLI path resolves it through the
+                    # IntelliRouter deployment catalog. Ordinary Team
+                    # members use the single logical wildcard entry.
+                    if (
+                        isinstance(member, dict)
+                        and member.get("role_type") != "external_cli"
+                    ):
+                        member["model_name"] = "*"
+            return
+
+        client = client.model_dump(exclude_none=True)
+        request = (
+            compiled.model_request_config.model_dump(
+                exclude_none=True,
+                by_alias=True,
+            )
+            if compiled.model_request_config
+            else {}
+        )
+        name = request.get("model") or request.get("model_name") or ""
+        if not name:
+            raise ModelSelectionError(
+                MODEL_REQUEST_CONFIG_INVALID,
+                "compiled model selection has an empty model name",
+            )
+        provider = client.get("client_provider", "")
+        provider = getattr(provider, "value", provider)
+        spec_dict["model_pool"] = [
+            {
+                "model_name": name,
+                "api_key": client.get("api_key", ""),
+                "api_base_url": client.get("api_base", ""),
+                "api_provider": str(provider),
+                "metadata": {
+                    "client": {
+                        key: value
+                        for key, value in client.items()
+                        if key not in {"client_provider", "api_key", "api_base"}
+                    },
+                    "request": {
+                        key: value
+                        for key, value in request.items()
+                        if key not in {"model", "model_name"}
+                    },
+                },
+            }
+        ]
+        spec_dict["model_pool_strategy"] = "by_model_name"
+        # The stable selection is authoritative over stale template hints.
+        if isinstance(leader, dict):
+            leader["model_name"] = name
+
+    @staticmethod
+    def load_default_team_spec(session_id: str) -> TeamAgentSpec:
+        """Load the default Team specification for host organization adapters."""
+        return TeamManager._load_team_spec(session_id)
+
+    @staticmethod
     def _load_team_spec(
         session_id: str,
         *,
@@ -1090,6 +1449,7 @@ class TeamManager:
         template_id: str | None = None,
         template_snapshot: dict[str, Any] | None = None,
         strict_template: bool = False,
+        model_selection: SwarmModelSelection | dict[str, Any] | None = None,
     ) -> TeamAgentSpec:
         config_base = get_config()
         # Keep dependency checks scoped to distributed mode to make the
@@ -1124,6 +1484,30 @@ class TeamManager:
         spec_dict = TeamManager._normalize_team_identity_fields(spec_dict)
         if TeamManager._is_distributed_mode(config_base):
             spec_dict = TeamManager._normalize_distributed_transport_fields(config_base, spec_dict)
+
+        if model_selection is not None:
+            # Normalize through the swarm DTO so ``route_id`` (a valid
+            # group-scope pin) survives; the foundation ``ModelSelection``
+            # would silently drop it.
+            raw_selection = (
+                model_selection
+                if isinstance(model_selection, dict)
+                else model_selection.model_dump(exclude_none=True)
+            )
+            selection = SwarmModelSelection.model_validate(
+                {
+                    key: raw_selection[key]
+                    for key in ("type", "id", "route_id")
+                    if key in raw_selection
+                }
+            )
+            compiled = TeamManager._resolve_and_compile_team_selection(selection)
+            TeamManager._apply_compiled_team_selection(
+                spec_dict,
+                selection,
+                compiled,
+            )
+            return TeamAgentSpec.model_validate(spec_dict)
 
         # Populate the pool from valid configured entries plus the effective
         # page-selected model. The latter may be an in-memory Zen model or a
@@ -1214,6 +1598,7 @@ class TeamManager:
         *,
         requested_model_name: str | None = None,
         login_model_entry: dict[str, Any] | None = None,
+        model_selection: SwarmModelSelection | dict[str, Any] | None = None,
     ) -> tuple[TeamAgentSpec, bool]:
         team_name, template_id, template_snapshot = self._lookup_bound_team_identity(session_id)
         load_kwargs: dict[str, Any] = {}
@@ -1226,6 +1611,37 @@ class TeamManager:
             load_kwargs["strict_template"] = template_snapshot is None
         if template_snapshot is not None:
             load_kwargs["template_snapshot"] = template_snapshot
+        # A persisted selection is a business reference, not a runtime
+        # snapshot.  Re-resolve it on every cold build so config/credentials
+        # and permissions are current.
+        if model_selection is None:
+            metadata = get_session_metadata(session_id, cache_bust=True)
+            # Team bindings own the long-lived business selection.  Keep the
+            # session field as a read-only compatibility fallback for legacy
+            # sessions/checkpoints that predate Team-level persistence.
+            team_name = str(metadata.get("team_name") or "").strip()
+            if team_name:
+                try:
+                    from jiuwenswarm.server.runtime.team_binding_store import get_team_binding_store
+                    stored_team = get_team_binding_store().get_team_selection(team_name)
+                except Exception:
+                    stored_team = None
+                if isinstance(stored_team, dict) and stored_team.get("type") and stored_team.get("id"):
+                    model_selection = stored_team
+            if model_selection is None:
+                from jiuwenswarm.server.runtime.session.model_selection_store import (
+                    get_session_model_selection,
+                )
+
+                try:
+                    stored = get_session_model_selection(session_id)
+                except ValueError:
+                    stored = None
+                if stored is not None:
+                    model_selection = stored.model_dump(exclude_none=True)
+
+        if model_selection is not None:
+            load_kwargs["model_selection"] = model_selection
         spec = self._load_team_spec(session_id, **load_kwargs)
         if team_name:
             spec.team_name = team_name
@@ -1248,6 +1664,8 @@ class TeamManager:
         login_model_entry: dict[str, Any] | None = None,
         agent_group_name: str | None = None,
         swarmflow_config: dict | None = None,
+        dispatch_mode: str | None = None,
+        model_selection: SwarmModelSelection | dict[str, Any] | None = None,
     ) -> TeamAgentSpec:
         """Build a team spec via provider-based assembly (no parent DeepAgent).
 
@@ -1267,6 +1685,10 @@ class TeamManager:
             login_model_entry: Model entry for a page-selected login model,
                 built from the request's forwarded credentials (placeholder
                 api_key; the real token is swapped in per HTTP request).
+            dispatch_mode: Session-level task dispatch mode (``"autonomous"`` /
+                ``"scheduled"``); None keeps the team config's ``dispatch_mode``.
+                Task verification only applies to scheduled dispatch, so it is
+                switched off when the session picks autonomous dispatch.
 
         Returns:
             The enriched ``TeamAgentSpec`` ready to build (``build_context`` set;
@@ -1281,6 +1703,7 @@ class TeamManager:
             session_id,
             requested_model_name=requested_model_name,
             login_model_entry=login_model_entry,
+            model_selection=model_selection,
         )
         if not has_binding:
             self._apply_session_scoped_team_name(spec, session_id=session_id)
@@ -1304,6 +1727,22 @@ class TeamManager:
                 spec.swarmflow_budget = budget
             else:
                 spec.swarmflow_budget = None
+            # Session-level worktree gate: True arms the manager, False withholds
+            # it, None (not specified) keeps the team config's worktree section.
+            worktree_flag = swarmflow_config.get("swarmflow_worktree")
+            if worktree_flag is True:
+                if spec.worktree is None:
+                    from openjiuwen.harness.tools.worktree import WorktreeConfig
+
+                    spec.worktree = WorktreeConfig(enabled=True)
+                elif not spec.worktree.enabled:
+                    spec.worktree = spec.worktree.model_copy(update={"enabled": True})
+            elif worktree_flag is False:
+                spec.worktree = None
+        if dispatch_mode is not None:
+            spec.dispatch_mode = dispatch_mode
+            if dispatch_mode != "scheduled":
+                spec.enable_task_verification = False
         return spec
 
     @staticmethod
@@ -1394,6 +1833,7 @@ class TeamManager:
         single-session behavior because their bootstrap resources are scoped to
         one active session per channel.
         """
+        distributed = self._is_distributed_mode(get_config())
         normalized_previous = str(previous_session_id or "").strip()
         if normalized_previous and normalized_previous != target_session_id:
             # Product foreground/task facts own KVC offload.  A navigation
@@ -1402,9 +1842,10 @@ class TeamManager:
                 normalized_previous,
                 reason=f"{reason}session-switch: ",
                 offload=False,
+                preserve_organization=not distributed,
             )
 
-        if not self._is_distributed_mode(get_config()):
+        if not distributed:
             logger.info(
                 "[TeamManager] %sprepare_session_switch skipped for local runtime target=%s",
                 reason,
@@ -1760,11 +2201,19 @@ class TeamManager:
                 request_metadata,
             )
 
-    async def interact(self, session_id: str, user_input: Any) -> tuple[bool, str | None]:
+    async def interact(
+        self,
+        session_id: str,
+        user_input: Any,
+        *,
+        run_context: object | None = None,
+    ) -> tuple[bool, str | None]:
+        restored_this_call = False
         try:
             if not self.is_runtime_active(session_id):
                 restored = await self.wait_for_resumable_runtime(session_id)
                 if restored:
+                    restored_this_call = True
                     logger.info(
                         "[TeamManager] interact restored paused runtime before delivery: session_id=%s",
                         session_id,
@@ -1787,10 +2236,15 @@ class TeamManager:
                 team_name,
                 _safe_payload_preview(user_input),
             )
+            interact_kwargs: dict[str, Any] = {
+                "team_name": team_name,
+                "session_id": session_id,
+            }
+            if run_context is not None:
+                interact_kwargs["run_context"] = run_context
             result = await Runner.interact_agent_team(
                 user_input,
-                team_name=team_name,
-                session_id=session_id,
+                **interact_kwargs,
             )
             if not result:
                 reason = getattr(result, "reason", None) or "runner_failed"
@@ -1800,6 +2254,22 @@ class TeamManager:
                     team_name,
                     reason,
                 )
+                if restored_this_call and reason == "gate_closed":
+                    # The restored bookkeeping does not describe a usable
+                    # runtime (the input gate is closed while the pool entry
+                    # still reads RUNNING/PAUSED). Roll it back so follow-up
+                    # boundary retries can observe a stopped Session and
+                    # degrade to a cold start instead of looping on
+                    # gate_closed until the timeout, and so the Session stays
+                    # deletable (no half-restored active marker).
+                    self._active_team_names.pop(session_id, None)
+                    logger.info(
+                        "[TeamManager] rolled back restored runtime after rejected interact: "
+                        "session_id=%s team=%s reason=%s",
+                        session_id,
+                        team_name,
+                        reason,
+                    )
                 return False, reason
             return True, None
         except Exception as exc:
@@ -2195,8 +2665,23 @@ class TeamManager:
     def pop_workflow_handler(self, session_id: str) -> Any | None:
         return self._workflow_handlers.pop(session_id, None)
 
-    def register_stream_task(self, session_id: str, task: asyncio.Task) -> None:
+    def register_stream_task(
+        self,
+        session_id: str,
+        task: asyncio.Task,
+        *,
+        generation: int | None = None,
+    ) -> None:
+        if generation is not None:
+            self.bind_generation(session_id, generation)
+            self._stream_task_generations[session_id] = generation
         self._stream_tasks[session_id] = task
+
+    def is_generation_running(self, session_id: str, generation: int) -> bool:
+        """Return whether the current generation owns active Team work."""
+        if not self.generation_matches(session_id, generation):
+            return False
+        return is_team_session_running(session_id)
 
     def _has_local_team_runtime(self, session_id: str) -> bool:
         """Return whether the session should use the legacy in-memory TeamAgent path."""
@@ -2670,6 +3155,7 @@ class TeamManager:
         reason: str = "",
         *,
         workflow_disposition: Literal["stop", "pause"] = "stop",
+        generation: int | None = None,
     ) -> bool:
         """Cancel the current team session runtime, removing it from Runner pool.
 
@@ -2679,6 +3165,8 @@ class TeamManager:
 
         Used for team cancel intent where the session should not be resumed.
         """
+        if not self.generation_matches(session_id, generation):
+            return False
         logger.info(
             "[TeamManager] cancel_session_runtime 入口: session_id=%s reason=%s",
             session_id, reason,
@@ -2785,6 +3273,7 @@ class TeamManager:
         reason: str = "",
         *,
         stop_runner: bool = True,
+        generation: int | None = None,
     ) -> bool:
         """Stop local runtime resources and, by default, the Runner runtime.
 
@@ -2792,6 +3281,8 @@ class TeamManager:
         ``Runner.delete_agent_team(force=True)`` so agent-core can snapshot its
         member bindings before performing the equivalent stop itself.
         """
+        if not self.generation_matches(session_id, generation):
+            return False
         async with self._get_lifecycle_lock(session_id):
             has_stream_task = session_id in self._stream_tasks
             has_local_team_runtime = self._has_local_team_runtime(session_id)
@@ -2960,8 +3451,9 @@ class TeamManager:
         reason: str = "",
         *,
         offload: bool = True,
+        preserve_organization: bool = False,
     ) -> bool:
-        """Stop a parked Runner team runtime without touching active streams."""
+        """Stop a parked runtime; local navigation may preserve organization Teams."""
         async with self._get_lifecycle_lock(session_id):
             if self.has_stream_task(session_id):
                 logger.debug(
@@ -2977,6 +3469,25 @@ class TeamManager:
                     session_id,
                 )
                 return False
+
+            if preserve_organization:
+                from openjiuwen.core.runner.runner import GLOBAL_RUNNER
+
+                runtime_mgr = _runner_team_runtime_manager(GLOBAL_RUNNER)
+                entry = await runtime_mgr.pool.get(team_name)
+                if entry is not None and entry.current_session_id == session_id:
+                    backend = entry.agent.team_backend
+                    org_manager = getattr(backend, "org_task_manager", None)
+                    if getattr(org_manager, "organization_id", None):
+                        # A parked organization leader still receives task reviews
+                        # and final-report delivery while another session is visible.
+                        logger.info(
+                            "[TeamManager] preserve organization runtime during session switch: "
+                            "session_id=%s team_name=%s",
+                            session_id,
+                            team_name,
+                        )
+                        return False
 
             if offload:
                 await self._report_session_inactive(session_id)
@@ -3029,13 +3540,21 @@ class TeamManager:
                 stopped_count += 1
         return stopped_count
 
-    async def pause_session_runtime(self, session_id: str, reason: str = "") -> bool:
+    async def pause_session_runtime(
+        self,
+        session_id: str,
+        reason: str = "",
+        *,
+        generation: int | None = None,
+    ) -> bool:
         """Pause the current team runtime for this session.
 
         Team runtimes are persistent. The current implementation pauses by
         tearing down the foreground stream task and parking the Runner-owned
         runtime in paused state so a later `chat.send` can resume it.
         """
+        if not self.generation_matches(session_id, generation):
+            return False
         async with self._get_lifecycle_lock(session_id):
             has_stream_task = session_id in self._stream_tasks
             has_local_team_runtime = self._has_local_team_runtime(session_id)
