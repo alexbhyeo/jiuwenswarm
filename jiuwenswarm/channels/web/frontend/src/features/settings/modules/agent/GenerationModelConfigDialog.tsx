@@ -349,7 +349,7 @@ export function GenerationModelConfigDialog({
         <ModelNameField
           id={id}
           value={String(value ?? '')}
-          mode="options"
+          mode={custom ? 'manual' : 'options'}
           allowCustomValue
           options={modelOptions}
           disabled={fieldDisabled || !values.vendor_selection}
