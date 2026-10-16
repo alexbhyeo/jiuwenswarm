@@ -4,6 +4,7 @@
 import { create } from 'zustand';
 import i18n from '../../i18n';
 import { DEFAULT_AUDIO_VOICE } from './audioVoices';
+import { DEFAULT_AUDIO_STYLE } from './audioStyles';
 import type { DirectorSkillOption, TimelineClipPayload } from './directorApi';
 import type {
   ComposerMode,
@@ -20,6 +21,7 @@ const DEFAULT_COMPOSER_PARAMS: ComposerParams = {
   durationSeconds: 15,
   generateAudio: false,
   voice: DEFAULT_AUDIO_VOICE,
+  audioStyle: DEFAULT_AUDIO_STYLE,
   characterStyle: '写实摄影',
 };
 
@@ -284,6 +286,7 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
         durationSeconds: state.composerParams.durationSeconds,
         generateAudio: state.composerParams.generateAudio,
         voice: state.composerParams.voice,
+        style: state.composerParams.audioStyle,
       });
 
       set((s) => ({

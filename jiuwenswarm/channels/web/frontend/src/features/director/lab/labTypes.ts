@@ -195,6 +195,10 @@ export interface ProcessNodeData {
   /** 仅 text2audio（文生音频）使用：TTS 音色名。旧数据没有这个字段时按
    *  DEFAULT_AUDIO_VOICE 处理。 */
   voice?: string;
+  /** 仅音频类卡片（文生音频 / 视频生音频）使用：TTS 风格描述
+   *  （audioStyles.ts 的 instruction 文本）。旧数据没有这个字段时按"未指定"
+   *  处理，即请求里不带风格，与改造前完全一致。 */
+  style?: string;
   /** 视频类卡片（文生视频 / 图生视频 / 图音生视频 / 视频生视频）的"声音"选项：
  *  成片是否带音轨。各种卡片的音轨来源不同——
    *  * imageAudio2video：参考音频既是口型同步的依据、也是成片音轨的来源；

@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import logging
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Callable
 
@@ -561,3 +564,157 @@ def test_extension_for_response(content_type: str, response_format: str, expecte
 )
 def test_is_pcm_payload(content_type: str, response_format: str, expected: bool):
     assert ag._is_pcm_payload(content_type, response_format) is expected
+
+
+# ---------------------------------------------------------------------------
+# generate_audio - delivery style (OpenRouter `instructions`) and inline tags
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_sends_style_as_instructions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """风格走顶层 instructions：服务商把它映射成 Gemini 的
+    speech_metadata.style，所以这里必须是 `instructions` 这个字段名——
+    换个名字发出去就是个被静默忽略的未知字段，用户以为选了风格其实没有。"""
+    _set_audio_gen_config(monkeypatch)
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        return _audio_response()
+
+    _patch_async_client(monkeypatch, handler)
+
+    result = await generate_audio(
+        text="The vault door creaked open.",
+        voice="Kore",
+        style="whispered urgently, barely audible",
+        save_dir=str(tmp_path),
+    )
+
+    assert "Audio generated successfully!" in result
+    body = json.loads(requests_seen[0].content)
+    assert body["instructions"] == "whispered urgently, barely audible"
+    assert body["voice"] == "Kore"
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_omits_instructions_when_no_style(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """没选风格就不该带这个字段——带空串等于显式声明"空风格"，与"用户根本
+    没选"不是一回事；省掉它，未选风格的请求体与改造前逐字节一致。"""
+    _set_audio_gen_config(monkeypatch)
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        return _audio_response()
+
+    _patch_async_client(monkeypatch, handler)
+
+    await generate_audio(text="plain read", voice="Kore", save_dir=str(tmp_path))
+
+    body = json.loads(requests_seen[0].content)
+    assert "instructions" not in body
+    assert sorted(body) == ["input", "model", "response_format", "voice"]
+
+
+@pytest.mark.parametrize("blank", ["", "   ", None])
+@pytest.mark.asyncio
+async def test_generate_audio_blank_style_is_treated_as_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, blank: str | None
+):
+    _set_audio_gen_config(monkeypatch)
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        return _audio_response()
+
+    _patch_async_client(monkeypatch, handler)
+
+    await generate_audio(text="hi", voice="Kore", style=blank, save_dir=str(tmp_path))
+
+    assert "instructions" not in json.loads(requests_seen[0].content)
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_passes_inline_tags_through_verbatim(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """尖括号标记是"即时效果"，只有原样出现在朗读文本里才生效：工具层不能
+    清洗、转义或截断它们（转义成 &lt; 之后就变成了要朗读出来的一串字符）。"""
+    _set_audio_gen_config(monkeypatch)
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        return _audio_response()
+
+    _patch_async_client(monkeypatch, handler)
+
+    spoken = "Wait... <short pause> did you hear that? <sigh> Excuse me <cough> as I was saying."
+    await generate_audio(text=spoken, voice="Kore", style="whispered urgently", save_dir=str(tmp_path))
+
+    assert json.loads(requests_seen[0].content)["input"] == spoken
+
+
+@contextlib.contextmanager
+def _captured_log_records() -> Iterator[list[logging.LogRecord]]:
+    """Collect what audio_gen_tools itself logs.
+
+    caplog is unusable here: the package configures logging for jiuwenswarm.*
+    such that these records never reach the root logger pytest attaches its
+    handler to. Hanging the handler straight on the module's logger is both
+    reliable and the same stream an operator reads in the service log.
+    """
+    records: list[logging.LogRecord] = []
+
+    class _Collector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _Collector()
+    target = logging.getLogger(ag.__name__)
+    target.addHandler(handler)
+    try:
+        yield records
+    finally:
+        target.removeHandler(handler)
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_logs_the_style(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """日志里要能看出这次用了哪一档风格——排查"选了风格但听起来没变"时，
+    第一个要确认的就是请求里到底有没有发出 instructions。"""
+    _set_audio_gen_config(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _audio_response()
+
+    _patch_async_client(monkeypatch, handler)
+
+    with _captured_log_records() as records:
+        await generate_audio(text="hi", voice="Kore", style="calm and measured", save_dir=str(tmp_path))
+
+    assert any("style: calm and measured" in r.getMessage() for r in records)
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_logs_none_placeholder_for_absent_style(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    _set_audio_gen_config(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _audio_response()
+
+    _patch_async_client(monkeypatch, handler)
+
+    with _captured_log_records() as records:
+        await generate_audio(text="hi", voice="Kore", save_dir=str(tmp_path))
+
+    assert any("style: (none)" in r.getMessage() for r in records)

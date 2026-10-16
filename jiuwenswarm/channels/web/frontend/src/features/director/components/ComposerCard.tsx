@@ -4,6 +4,7 @@ import { useDirectorStore } from '../directorStore';
 import { ModeSegmentedControl } from './ModeSegmentedControl';
 import { ParamPillDropdown } from './ParamPillDropdown';
 import { AUDIO_VOICE_OPTIONS } from '../audioVoices';
+import { AUDIO_STYLE_OPTIONS, audioStyleLabelKey } from '../audioStyles';
 
 const attachIcon = (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
@@ -232,12 +233,25 @@ export function ComposerCard() {
             </>
           )}
           {composerMode === 'audio' && (
-            <ParamPillDropdown
-              value={composerParams.voice}
-              label={composerParams.voice}
-              options={AUDIO_VOICE_OPTIONS.map((v) => ({ value: v, label: v }))}
-              onChange={(v) => patchComposerParams({ voice: v })}
-            />
+            <>
+              <ParamPillDropdown
+                value={composerParams.voice}
+                label={composerParams.voice}
+                options={AUDIO_VOICE_OPTIONS.map((v) => ({ value: v, label: v }))}
+                onChange={(v) => patchComposerParams({ voice: v })}
+              />
+              {/* 风格与音色是两个正交的维度：音色决定"谁在说"，风格决定"怎么
+                  说"。留空即"默认"（请求里不发 instructions，与历史上完全一致）。 */}
+              <ParamPillDropdown
+                value={composerParams.audioStyle}
+                label={t(audioStyleLabelKey(composerParams.audioStyle))}
+                options={AUDIO_STYLE_OPTIONS.map((o) => ({
+                  value: o.instruction,
+                  label: t(audioStyleLabelKey(o.instruction)),
+                }))}
+                onChange={(v) => patchComposerParams({ audioStyle: v })}
+              />
+            </>
           )}
           {composerMode === 'video' && (
             <ParamPillDropdown

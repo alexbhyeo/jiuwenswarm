@@ -480,3 +480,39 @@ async def test_plain_audio_mode_without_an_input_video_is_untouched(
 
 def test_video2audio_is_a_supported_mode() -> None:
     assert "video2audio" in dm._SUPPORTED_MODES
+
+
+# ---------------------------------------------------------------------------
+# 风格（delivery style）——解说同样可指定整段语气
+# ---------------------------------------------------------------------------
+
+
+async def test_video2audio_forwards_style_to_the_tts_tool(
+    manager: DirectorManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """视频生音频的朗读文本是自动写出来的，用户能控制的只有音色与风格——
+    风格必须原样送到 TTS，并记进 params（否则重摆画布就还原不出当时的选择）。"""
+    _configure(monkeypatch)
+    project_id = await _create_project(manager)
+    _add_asset(manager, project_id)
+    _understanding, tts = _stub_tools(monkeypatch)
+
+    result = await _generate(manager, project_id, voice="Kore", style="documentary narration, neutral and clear")
+
+    assert tts.calls[0]["kwargs"]["style"] == "documentary narration, neutral and clear"
+    assert tts.calls[0]["kwargs"]["voice"] == "Kore"
+    assert _asset_of(result)["params"]["style"] == "documentary narration, neutral and clear"
+
+
+async def test_video2audio_without_style_leaves_params_without_it(
+    manager: DirectorManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _configure(monkeypatch)
+    project_id = await _create_project(manager)
+    _add_asset(manager, project_id)
+    _understanding, tts = _stub_tools(monkeypatch)
+
+    result = await _generate(manager, project_id)
+
+    assert tts.calls[0]["kwargs"]["style"] == ""
+    assert "style" not in _asset_of(result)["params"]

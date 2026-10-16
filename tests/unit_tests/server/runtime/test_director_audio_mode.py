@@ -113,8 +113,9 @@ async def test_audio_mode_saves_ready_audio_asset(
     assert asset["params"] == {"voice": "Kore"}
     assert result["asset_counts"]["audio"] == 1
 
+    # 没选风格时的调用形态：style 传空串，工具据此不发 instructions。
     assert tool.calls == [
-        {"text": "你好，世界", "voice": "Kore", "save_dir": str(assets_dir)}
+        {"text": "你好，世界", "voice": "Kore", "style": "", "save_dir": str(assets_dir)}
     ]
 
 
@@ -260,3 +261,86 @@ async def test_audio_mode_ignores_visual_params_sent_by_the_lab(
     # Only the voice is meaningful for TTS - no visual params leak into the asset.
     assert asset["params"] == {"voice": "Leda"}
     assert tool.calls[0]["text"] == "游过平静的海面"
+
+
+# ---------------------------------------------------------------------------
+# 风格（delivery style）
+# ---------------------------------------------------------------------------
+
+
+async def test_audio_mode_forwards_style_to_the_tool_and_records_it(
+    manager: DirectorManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """风格与音色正交：音色决定"谁在说"，风格决定"怎么说"。两者都要原样
+    交给 TTS 工具（工具再把它作为 instructions 发出去），并记进 params——
+    否则重摆画布/事后追溯就还原不出用户当时选的是哪一档。"""
+    _configure_audio(monkeypatch)
+    project_id = await _create_project(manager)
+    tool = _stub_tool(monkeypatch, "Audio generated successfully!\nSaved to: /tmp/x.wav")
+
+    result = await manager.handle_director_generate(
+        {
+            "project_id": project_id,
+            "mode": "audio",
+            "prompt": "The vault door creaked open behind me.",
+            "voice": "Kore",
+            "style": "whispered urgently, barely audible",
+        }
+    )
+
+    assert tool.calls[0]["style"] == "whispered urgently, barely audible"
+    assert tool.calls[0]["voice"] == "Kore"
+    assert _asset_of(result)["params"] == {
+        "voice": "Kore",
+        "style": "whispered urgently, barely audible",
+    }
+
+
+async def test_audio_mode_without_style_omits_it_from_params(
+    manager: DirectorManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """没选风格时 params 里不该出现 style，交给工具的是空串（工具据此不发
+    instructions）——历史素材与旧画布数据的行为因此完全不变。"""
+    _configure_audio(monkeypatch)
+    project_id = await _create_project(manager)
+    tool = _stub_tool(monkeypatch, "Audio generated successfully!\nSaved to: /tmp/x.wav")
+
+    result = await manager.handle_director_generate(
+        {"project_id": project_id, "mode": "audio", "prompt": "hi", "voice": "Kore"}
+    )
+
+    assert _asset_of(result)["params"] == {"voice": "Kore"}
+    assert tool.calls[0]["style"] == ""
+
+
+async def test_audio_mode_treats_blank_style_as_absent(
+    manager: DirectorManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """前端在"默认"档上发的就是空串，不能因此记一个空风格进 params。"""
+    _configure_audio(monkeypatch)
+    project_id = await _create_project(manager)
+    tool = _stub_tool(monkeypatch, "Audio generated successfully!\nSaved to: /tmp/x.wav")
+
+    result = await manager.handle_director_generate(
+        {"project_id": project_id, "mode": "audio", "prompt": "hi", "voice": "Kore", "style": "   "}
+    )
+
+    assert "style" not in _asset_of(result)["params"]
+    assert tool.calls[0]["style"] == ""
+
+
+async def test_audio_mode_passes_inline_tags_through_verbatim(
+    manager: DirectorManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """尖括号标记是"即时效果"，必须原样出现在朗读文本里：任何清洗/转义都会
+    让效果失效（或被一字不差地读出来）。"""
+    _configure_audio(monkeypatch)
+    project_id = await _create_project(manager)
+    tool = _stub_tool(monkeypatch, "Audio generated successfully!\nSaved to: /tmp/x.wav")
+
+    spoken = "Wait... <short pause> did you hear that? <sigh>"
+    await manager.handle_director_generate(
+        {"project_id": project_id, "mode": "audio", "prompt": spoken, "voice": "Kore"}
+    )
+
+    assert tool.calls[0]["text"] == spoken

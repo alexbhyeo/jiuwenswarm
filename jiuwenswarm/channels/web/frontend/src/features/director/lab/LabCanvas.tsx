@@ -26,6 +26,7 @@ import { AudioNode } from './nodes/AudioNode';
 import { TextNode } from './nodes/TextNode';
 import { ProcessNode } from './nodes/ProcessNode';
 import { DEFAULT_AUDIO_VOICE } from '../audioVoices';
+import { DEFAULT_AUDIO_STYLE } from '../audioStyles';
 import type { ImageNodeData, ProcessKind, ProcessMode, ProcessNodeData } from './labTypes';
 import {
   DEFAULT_VIDEO_BRIDGE_PROMPT,
@@ -302,6 +303,8 @@ function LabCanvasInner() {
         durationSeconds: 5,
         // 仅 text2audio（文生音频）会读取；图片/视频卡片忽略它。
         voice: DEFAULT_AUDIO_VOICE,
+        // 同理：新卡片默认不指定风格（请求里不发 instructions）。
+        style: DEFAULT_AUDIO_STYLE,
         // 视频类卡片的"有声音/无声音"：以音频为输入的卡片（图音生视频）默认
         // 开声，其余视频卡片沿用历史上的静音默认；非视频卡片恒为 false 且不
         // 参与生成参数。见 defaultGenerateAudio / supportsAudioOutput。
@@ -586,9 +589,13 @@ function LabCanvasInner() {
           durationSeconds: data.durationSeconds,
         };
         if (mode === 'audio') {
-          // 文生音频只吃文本 + 音色；视频生音频（连了 video1）在后端会先用
-          // 视频理解写解说文案再配音，这里只要把输入视频和音色带上。
+          // 文生音频只吃文本 + 音色 + 风格；视频生音频（连了 video1）在后端会
+          // 先用视频理解写解说文案再配音，这里只要把输入视频、音色和风格带上。
           params.voice = data.voice || DEFAULT_AUDIO_VOICE;
+          // 风格留空时不带上这个字段——请求体里就不会出现 instructions，
+          // 与改造前的行为逐字节一致（不能传空串，那会变成一个显式的空风格）。
+          const style = (data.style ?? '').trim();
+          if (style) params.style = style;
           if (resolved.video1?.assetId) params.inputVideoAssetId = resolved.video1.assetId;
         } else if (data.kind === 'imageAudio2video') {
           // 图音生视频：参考图 + 参考音频都是"多模态参考"，后端一次
@@ -1068,6 +1075,8 @@ function LabCanvasInner() {
         outputCount: 1,
         // 音频卡片重建后音色不能变回默认值——params 里存了当时用的 voice。
         voice: typeof params.voice === 'string' ? params.voice : DEFAULT_AUDIO_VOICE,
+        // 风格同理（没有这个字段的旧素材重建出来就是不指定风格）。
+        style: typeof params.style === 'string' ? params.style : DEFAULT_AUDIO_STYLE,
         // 视频类卡片重建后"有声音/无声音"要跟着素材走，否则重摆一遍流程就把
         // 用户当初的选择改回去了；音频链接同理（填了链接的素材 params 里存的
         // 是链接本身，没有可还原的素材连线）。

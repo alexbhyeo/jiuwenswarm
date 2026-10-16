@@ -155,8 +155,49 @@ Two fields exist specifically to avoid remount races:
 | `video` | ✅ `generate_video` | Optional first/last frame references. |
 | `image` | ✅ `generate_visual` | Optional multi-reference composition. |
 | `character` | ✅ `generate_visual` | Prompt is `"名称: 描述"`; the parsed name becomes the asset name so it can be referenced as `@名称`. |
-| `audio` | ✅ `generate_audio` | Text-to-speech. No aspect/resolution pills and no `@名称` references — the prompt is spoken verbatim and a voice is picked from the toolbar. |
+| `audio` | ✅ `generate_audio` | Text-to-speech. No aspect/resolution pills and no `@名称` references — the prompt is spoken verbatim and a voice is picked from the toolbar. The toolbar also carries a **风格** picker (`audioStyle`), which is orthogonal to the voice: the voice decides who speaks, the style how they speak. It travels as the request's `instructions` field, which OpenRouter maps onto Gemini's `speech_metadata.style`; leaving it empty omits the field entirely (see §3.3a). |
 | `world` | ❌ | Placeholder ("coming soon"); `ENABLED_COMPOSER_MODES` gates the UI and the backend rejects it with `NOT_SUPPORTED`. |
+
+### 3.4a Speech style and inline tags
+
+TTS delivery splits into two scopes, and the two must not be confused:
+
+| Scope | Where it goes | Example |
+|---|---|---|
+| Sustained, whole-clip delivery | The **风格** picker → request's `instructions` | `whispered urgently`, `warm and friendly` |
+| Point-in-time events | **Inside the spoken text**, in angle brackets | `Wait... <short pause> did you hear that? <sigh>` |
+
+The style list lives in `audioStyles.ts` (shared by the composer and the Lab's
+audio cards, for the same reason `audioVoices.ts` is shared — two copies drift
+into "the composer offers a style the Lab card can't"). Its values are the
+**English instruction strings themselves**, not an id: the backend forwards
+whatever it receives straight into `instructions`, so a custom style needs no
+new mapping table. `audioStyleLabelKey` is the only id↔label indirection, and
+it exists purely to look up the Chinese label.
+
+Verified live against `google/gemini-3.8-flash-lite-tts` via OpenRouter, same
+sentence and voice, one variable at a time:
+
+| Change | Measured effect |
+|---|---|
+| 默认 → `whispered urgently, barely audible` | mean volume **−17.5 dB → −32.1 dB** |
+| 默认 → `upbeat advertising voice-over` (Lab card) | mean volume **−17.5 dB → −13.9 dB** |
+| plain → `<short pause>` inserted mid-sentence | a **0.55 s silence** appears exactly at the tag; the plain take has **no** mid-sentence gap |
+
+Two details that are easy to get wrong:
+
+- **The tag must survive verbatim.** Angle-bracket tags only work because the
+  text reaches the model untouched — no escaping, trimming or stripping on any
+  hop. This is also why the style belongs in `instructions`: per OpenRouter's
+  Gemini TTS note, these models read the input *verbatim*, so a direction
+  written into the text ("say this in a gentle tone") is **spoken aloud**.
+  The hint string in the UI says so explicitly.
+- **An empty style omits `instructions` entirely** rather than sending `""`.
+  The field is optional, and an explicit empty string is not the same request
+  as "the user picked nothing" — omitting it keeps every pre-existing asset and
+  old canvas byte-identical on the wire. `AudioStyleOption.instruction` is the
+  empty string for exactly this reason, and both the Lab mapper and the manager
+  check `if (style)` / `if style:` before propagating it.
 
 ---
 
@@ -211,7 +252,7 @@ Plus one non-RPC endpoint:
 | `server/runtime/director/director_multipart_http.py` | Multipart upload handler for asset files. |
 | `agents/harness/common/tools/video_gen_tools.py` | `generate_video`, `check_video_status`, `video_gen_enabled/configured`. |
 | `agents/harness/common/tools/visual_gen_tools.py` | `generate_visual`, `visual_gen_enabled/configured`. |
-| `agents/harness/common/tools/audio_gen_tools.py` | `generate_audio`, `audio_gen_enabled/configured` (text-to-speech; PCM responses are wrapped into WAV). |
+| `agents/harness/common/tools/audio_gen_tools.py` | `generate_audio(text, voice, style, …)`, `audio_gen_enabled/configured` (text-to-speech; `style` → `instructions`; PCM responses are wrapped into WAV). |
 | `agents/harness/common/tools/edit_chat_tools.py` | `call_edit_chat_completion`, `build_multimodal_user_message`, `edit_chat_enabled/configured`. |
 
 ### 5.1 `@名称` reference resolution
@@ -310,7 +351,7 @@ Lab process card kinds (`labTypes.ts`):
 | `text2video` | video | 0 | 0 | 0 | Exposes the same 有声音/无声音 picker as `imageAudio2video`, because Seedance returns a silent clip unless the request asks for audio output — even for text-to-video, with no reference audio wired in. Unlike `imageAudio2video` it defaults to **无声音** (`generate_audio=false`), matching the pre-existing behaviour of every historical `mode="video"` caller. |
 | `image2video` | video | 2 | 0 | 0 | Distinct first/last-frame slots; one edge each. |
 | `imageRef` | image | 1 | 0 | 0 | The single port accepts **multiple** edges (multi-reference). |
-| `text2audio` | audio | 0 | 0 | 0 | Text-to-speech (`generate_audio`). Text-only: no reference ports, and the params popover swaps aspect/resolution/duration for a voice picker. Its output node is an `audio` node wrapping `<audio controls>`. |
+| `text2audio` | audio | 0 | 0 | 0 | Text-to-speech (`generate_audio`). Text-only: no reference ports, and the params popover swaps aspect/resolution/duration for a voice picker plus the same 风格 picker the composer has (one shared list, `audioStyles.ts`, for the same reason `audioVoices.ts` is shared). Its output node is an `audio` node wrapping `<audio controls>`. |
 | `video2audio` | audio | 0 | 1 | 0 | 视频生音频: chains two existing capabilities — `video_understanding` writes a narration script from the connected video, then `generate_audio` speaks it. The `video1` port accepts video nodes only, and the optional text node's content is appended to the narration prompt as extra requirements. Its persisted asset is an **`audio`** asset (not `video2audio`) whose `params` carry `script` / `input_video_path`; `buildFlowFromChat` uses `input_video_path` to redraw the dependency edge. Needs **both** the 语音生成 and 视频理解 slots configured. On the wire it is its **own `mode`**: the Lab sends `mode="video2audio"` explicitly (a plain `mode="audio"` would take the TTS-only branch and feed the empty prompt straight to `generate_audio`), and the backend also normalises `mode="audio"` + an input video to it so no client can land in the wrong branch. |
 | `imageAudio2video` | video | 1 | 0 | 1 | 图音生视频: one reference-to-video call with **both** references in `input_references` — the image as `image_url` (deliberately *not* a first frame: OpenRouter drops `input_references` when `frame_images` is also present) and the audio as `audio_url`, which the model lip-syncs to. The `audio1` port accepts audio nodes only. Its own `mode` on the wire (`image_audio2video`); the persisted asset is a **`video`** asset whose `params` carry `reference_image_path` / `input_audio_path` / `generate_audio`, and `buildFlowFromChat` redraws both dependency edges from those. The card exposes a 有声音/无声音 picker (`generateAudio`) because Seedance returns a silent clip unless the request asks for audio output, plus an 音频链接 text field: a public HTTPS audio URL can be typed directly as the reference instead of wiring an audio clip, in which case it wins (`input_audio_url` on the wire, `input_audio_path` in `params`) and the 参考音频 row shows 链接 instead of ✓. The field exists because the app can't host local files publicly — the provider must fetch the audio itself. Other provider constraints: OpenRouter only accepts an **HTTPS URL** for an audio reference (base64/data URIs are rejected), and BytePlus rejects reference images containing real people. |
 | `video2video` | video | 0 | 1 | 0 | 视频生视频: one reference-to-video call whose reference is **the source clip itself** (`video_url` in `input_references`, see `_resolve_video_reference`) — the model re-renders the clip per the prompt while keeping its subject and motion. The `video1` port accepts video nodes only, and the prompt is **required** (it is the whole description of the intended change). Its own `mode` on the wire (`video2video`); the persisted asset is a **`video`** asset whose `params` carry `input_video_path` / `generate_audio`, and `buildFlowFromChat` restores either the 视频链接 field (HTTPS input) or the dependency edge (local input). Audio defaults to **有声音** (`defaultGenerateAudio`) so re-rendering a picture doesn't silently mute the source clip, with a source-specific hint string. **Only a public HTTPS URL can actually be generated from**: the provider fetches reference videos itself and rejects local files / data: URIs, so a wired clip fails fast with an actionable 视频链接 message instead of a wasted upload. |
@@ -332,7 +373,8 @@ Note `directorApi.ts`'s `directorGenerate()` builds the **only** camelCase →
 snake_case map for this RPC. Every new `GenerateParams` field must be added there
 as well — a field that stays only on the `GenerateParams` interface is silently
 dropped on the wire (this is how `voice` and `input_video_asset_id` were lost: the
-Lab sent them, the backend never saw them).
+Lab sent them, the backend never saw them) — `style` is the newest tenant of that
+map, and the same trap awaits the next one.
 
 ---
 

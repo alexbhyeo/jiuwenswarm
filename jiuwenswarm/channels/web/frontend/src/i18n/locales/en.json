@@ -78,7 +78,7 @@
       "placeholderVideo": "What kind of video do you need? Describe the scene, camera movement, mood, or type @name to reference a named image as the first/last frame (up to 2)…",
       "placeholderImage": "What kind of image do you need? Describe the scene, style, composition, or type @name to reference a named image…",
       "placeholderCharacter": "Describe this character as \"name: description\" — e.g. \"Beauty Vlogger: a highly personable Asian female beauty influencer who narrates throughout\"…",
-      "placeholderAudio": "What should the voice say? Enter the exact text to be spoken aloud, and pick a voice from the toolbar…",
+      "placeholderAudio": "What should the voice say? Enter the exact text to be spoken aloud, pick a voice and a style from the toolbar. You can drop angle-bracket events like <short pause> or <laugh> straight into the text…",
       "durationLabel": "{{seconds}}s",
       "send": "Generate",
       "generating": "Generating…",
@@ -89,6 +89,23 @@
         "character": "Character",
         "world": "World"
       }
+    },
+    "audioStyle": {
+      "label": "Style",
+      "default": "Default",
+      "custom": "Custom",
+      "warm": "Warm & friendly",
+      "enthusiastic": "Enthusiastic",
+      "calm": "Calm & measured",
+      "cheerful": "Bright & cheerful",
+      "serious": "Serious & authoritative",
+      "soothing": "Gentle & soothing",
+      "urgentWhisper": "Whispered urgently",
+      "excited": "Excited & thrilled",
+      "sad": "Sad & subdued",
+      "narration": "Documentary narration",
+      "advertising": "Advertising voice-over",
+      "hint": "Style sets the delivery for the whole clip; voice decides who is speaking. Angle-bracket tags inside the text are momentary effects — <short pause>, <laugh>, <sigh>. Do not put whole-clip directions like \"say this in a gentle tone\" in the text; they would be read aloud verbatim."
     },
     "quickstart": {
       "textToVideo": "Text to Video",

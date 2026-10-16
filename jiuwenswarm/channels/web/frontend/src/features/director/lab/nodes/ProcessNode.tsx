@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLabActions } from '../LabActionsContext';
 import { AUDIO_VOICE_OPTIONS, DEFAULT_AUDIO_VOICE } from '../../audioVoices';
+import { AUDIO_STYLE_OPTIONS, DEFAULT_AUDIO_STYLE, audioStyleLabelKey } from '../../audioStyles';
 import type { AudioNodeData, ImageNodeData, ProcessNodeData, TextNodeData, VideoNodeData } from '../labTypes';
 import {
   OUTPUT_COUNT_OPTIONS,
@@ -167,6 +168,8 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   // 文生音频没有宽高比/分辨率/时长这些画面参数，改成音色选择。
   const isAudio = mode === 'audio';
   const voice = data.voice || DEFAULT_AUDIO_VOICE;
+  // 风格是"怎么说"（空串=未指定，请求里就不发这个字段），与音色正交。
+  const audioStyle = data.style ?? DEFAULT_AUDIO_STYLE;
   // 视频类卡片（文生视频/图生视频/图音生视频）都要能选"成片有没有声音"——
   // 判据是产物是不是视频，不是"有没有音频输入端口"，见 supportsAudioOutput。
   const hasAudioOption = supportsAudioOutput(data.kind);
@@ -350,6 +353,28 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
                     </button>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/* 风格与音色正交：音色决定"谁在说"，风格决定"怎么说"。与创意页
+                共用 audioStyles.ts 一份列表，避免两边选项分叉。 */}
+            {isAudio && (
+              <div className="lab-node-params-popover-section">
+                <div className="lab-node-params-popover-label">{t('director.audioStyle.label')}</div>
+                <div className="lab-node-params-popover-pills" data-testid="director-lab-audio-style-pills">
+                  {AUDIO_STYLE_OPTIONS.map((o) => (
+                    <button
+                      type="button"
+                      key={o.id}
+                      className={`lab-node-param-pill ${audioStyle === o.instruction ? 'lab-node-param-pill--active' : ''}`}
+                      onClick={() => actions.patchProcessNode(id, { style: o.instruction })}
+                      data-testid={`director-lab-audio-style-${o.id}`}
+                    >
+                      {t(audioStyleLabelKey(o.instruction))}
+                    </button>
+                  ))}
+                </div>
+                <div className="lab-node-params-popover-hint">{t('director.audioStyle.hint')}</div>
               </div>
             )}
 

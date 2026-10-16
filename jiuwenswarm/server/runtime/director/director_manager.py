@@ -311,6 +311,46 @@ _EDIT_CHAT_TOOLS_SCHEMA: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_video_bridge",
+            "description": (
+                "在两段已经生成的镜头视频之间生成一段 FLF2V 过渡衔接视频：自动"
+                "抓取片段一的最后一帧与片段二的第一帧作为首尾帧，真实调用视频"
+                "生成模型，保存为该项目的素材。只有在用户明确同意之后才调用——"
+                "相邻两镜的视频都生成完成后，先用一句话问用户要不要在它们之间"
+                "生成过渡衔接视频，用户确认了再调用这个工具，不要未经确认就自动"
+                "生成。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "这段过渡视频的名称，之后用 @名称 引用，建议体现衔接的是哪两镜，例如 Scene1 Shot1-1→1-2 过渡",
+                    },
+                    "clip1_name": {
+                        "type": "string",
+                        "description": "过渡起点：前一镜已生成的镜头视频名称（不带 @ 符号），取它的最后一帧",
+                    },
+                    "clip2_name": {
+                        "type": "string",
+                        "description": "过渡终点：后一镜已生成的镜头视频名称（不带 @ 符号），取它的第一帧",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "这段过渡应该怎么运镜/衔接，例如画面如何从一个场景自然过渡到下一个场景；不提供则使用通用的平滑过渡提示词",
+                    },
+                    "duration_seconds": {
+                        "type": "integer",
+                        "description": "过渡视频时长（秒），不确定时用 5",
+                    },
+                },
+                "required": ["name", "clip1_name", "clip2_name"],
+            },
+        },
+    },
 ]
 _EDIT_CHAT_MAX_TOOL_ITERATIONS = 6
 # 「基础技能」为这个技能时，剪辑助手改走 Co-Director **多智能体团队**
@@ -556,6 +596,62 @@ class DirectorManager:
             return asset.file_path
         return None
 
+    async def _run_video_bridge_flf2v(
+        self,
+        *,
+        clip1_path: str,
+        clip2_path: str,
+        prompt: str,
+        aspect_ratio: str,
+        resolution: str,
+        duration_seconds: int,
+        generate_audio: bool,
+        save_dir: str,
+    ) -> tuple[str, dict[str, Any]]:
+        """核心 FLF2V 桥接调用：抓片段一的最后一帧 + 片段二的第一帧，按
+        first_frame_path/last_frame_path 送给 generate_video。
+
+        实验室画布的 video_bridge RPC 分支（见上面 handle_director_generate）
+        与剪辑助手的 generate_video_bridge 工具（见下面
+        _execute_generate_video_bridge）共用这一个实现——两条入口只是
+        clip1_path/clip2_path 的来源不同（前者是连线的 asset_id，后者是
+        @名称/工具参数解析出的素材），FLF2V 调用本身完全一致，不应该维护
+        两份。抓帧失败统一抛 DirectorRpcError("GENERATION_FAILED", ...)，
+        调用方不需要分别处理 ComposeError。
+        """
+        with tempfile.TemporaryDirectory(prefix="video_bridge_") as tmp_dir:
+            try:
+                last_frame_png = await extract_frame(
+                    clip1_path, Path(tmp_dir) / "clip1_last.png", position="last"
+                )
+                first_frame_png = await extract_frame(
+                    clip2_path, Path(tmp_dir) / "clip2_first.png", position="first"
+                )
+            except ComposeError as exc:
+                raise DirectorRpcError("GENERATION_FAILED", exc.message) from exc
+            # 两段源片路径记进 params：供前端 buildFlowFromChat 把它们还原成
+            # 两条依赖连线（video1/video2 端口），与 input_video_path 的
+            # 还原套路相同，只是这里是两段而不是一段。
+            gen_params: dict[str, Any] = {
+                "aspect_ratio": aspect_ratio,
+                "resolution": resolution,
+                "duration_seconds": duration_seconds,
+                "generate_audio": generate_audio,
+                "bridge_clip1_path": clip1_path,
+                "bridge_clip2_path": clip2_path,
+            }
+            result_str = await generate_video._func(
+                prompt=prompt,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                duration_seconds=duration_seconds,
+                first_frame_path=str(last_frame_png),
+                last_frame_path=str(first_frame_png),
+                generate_audio=generate_audio,
+                save_dir=save_dir,
+            )
+            return result_str, gen_params
+
     async def handle_director_projects_create(self, params: dict) -> dict:
         name = str(params.get("name") or "").strip()
         if not name:
@@ -775,37 +871,16 @@ class DirectorManager:
                 )
             duration_seconds = int(params.get("duration_seconds") or 15)
             generate_audio_flag = bool(params.get("generate_audio") or False)
-            with tempfile.TemporaryDirectory(prefix="video_bridge_") as tmp_dir:
-                try:
-                    last_frame_png = await extract_frame(
-                        clip1_path, Path(tmp_dir) / "clip1_last.png", position="last"
-                    )
-                    first_frame_png = await extract_frame(
-                        clip2_path, Path(tmp_dir) / "clip2_first.png", position="first"
-                    )
-                except ComposeError as exc:
-                    raise DirectorRpcError("GENERATION_FAILED", exc.message) from exc
-                # 两段源片路径记进 params：供前端 buildFlowFromChat 把它们还原成
-                # 两条依赖连线（video1/video2 端口），与 input_video_path 的
-                # 还原套路相同，只是这里是两段而不是一段。
-                gen_params = {
-                    "aspect_ratio": aspect_ratio,
-                    "resolution": resolution,
-                    "duration_seconds": duration_seconds,
-                    "generate_audio": generate_audio_flag,
-                    "bridge_clip1_path": clip1_path,
-                    "bridge_clip2_path": clip2_path,
-                }
-                result_str = await generate_video._func(
-                    prompt=prompt,
-                    aspect_ratio=aspect_ratio,
-                    resolution=resolution,
-                    duration_seconds=duration_seconds,
-                    first_frame_path=str(last_frame_png),
-                    last_frame_path=str(first_frame_png),
-                    generate_audio=generate_audio_flag,
-                    save_dir=save_dir,
-                )
+            result_str, gen_params = await self._run_video_bridge_flf2v(
+                clip1_path=clip1_path,
+                clip2_path=clip2_path,
+                prompt=prompt,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                duration_seconds=duration_seconds,
+                generate_audio=generate_audio_flag,
+                save_dir=save_dir,
+            )
         elif mode == _MODE_IMAGE_AUDIO2VIDEO:
             # 图音生视频 = 一次 reference-to-video 调用：参考图 + 参考音频
             # 一起作为多模态参考交给模型，模型按参考音频做口型同步。参考图
@@ -896,11 +971,22 @@ class DirectorManager:
                 raise DirectorRpcError("NOT_CONFIGURED", "语音生成未配置，请先在设置中配置「语音生成」")
             # TTS 是纯文本→音频调用，没有参考图槽位，因此 composer 的
             # "@名称" 引用解析在这里不适用——提示词原样作为朗读文本。
+            # 这一点对正文里的尖括号标记（<short pause> / <laugh> 等）同样重要：
+            # 它们是"即时效果"，必须原样出现在朗读文本里才会生效，任何清洗
+            # （截断、转义、去标记）都会让效果消失，或者被一字不差地读出来。
             voice = str(params.get("voice") or "").strip()
-            gen_params = {"voice": voice} if voice else {}
+            style = str(params.get("style") or "").strip()
+            gen_params: dict[str, Any] = {}
+            if voice:
+                gen_params["voice"] = voice
+            # 风格也记进 params：它与文案一样是这次产物的输入，重摆画布/事后
+            # 追溯时要能还原用户当时选的是哪一档。
+            if style:
+                gen_params["style"] = style
             result_str = await generate_audio._func(
                 text=prompt,
                 voice=voice,
+                style=style,
                 save_dir=save_dir,
             )
         elif mode == "video2audio":
@@ -943,6 +1029,7 @@ class DirectorManager:
             if not script or script.startswith("[ERROR]:"):
                 raise DirectorRpcError("GENERATION_FAILED", script or "视频理解没有返回解说文案")
             voice = str(params.get("voice") or "").strip()
+            style = str(params.get("style") or "").strip()
             # 把生成的解说文案一并存进 params：文案与音频是一一对应的，
             # 事后想改文案重新配音时不必再理解一遍视频。input_video_path 同时
             # 供前端 buildFlowFromChat 还原依赖连线用（与 first_frame_path /
@@ -954,10 +1041,14 @@ class DirectorManager:
             }
             if voice:
                 gen_params["voice"] = voice
+            if style:
+                gen_params["style"] = style
             # 资产 prompt 字段的回退值（见下方 prompt or cleaned_prompt）：用户
             # 没写额外要求时，展示生成出来的解说文案比展示空字符串有用。
             cleaned_prompt = script
-            result_str = await generate_audio._func(text=script, voice=voice, save_dir=save_dir)
+            result_str = await generate_audio._func(
+                text=script, voice=voice, style=style, save_dir=save_dir
+            )
         else:
             if not (visual_gen_enabled() and visual_gen_configured()):
                 raise DirectorRpcError("NOT_CONFIGURED", "图片生成未配置，请先在设置中配置「图片处理」")
@@ -1130,6 +1221,10 @@ class DirectorManager:
             return await self._execute_generate_design_image(project, args)
         if function_name == "generate_shot_video":
             return await self._execute_generate_shot_video(
+                project, args, poll_max_attempts=poll_max_attempts
+            )
+        if function_name == "generate_video_bridge":
+            return await self._execute_generate_video_bridge(
                 project, args, poll_max_attempts=poll_max_attempts
             )
         return f"未知工具: {function_name}", None
@@ -1305,6 +1400,121 @@ class DirectorManager:
         )
         self._store.append_asset(project.project_id, asset)
         return f"已生成视频「{video_name}」。后续可以用 @{video_name} 引用这段视频。", asset.asset_id
+
+    async def _execute_generate_video_bridge(
+        self,
+        project: DirectorProject,
+        args: dict[str, Any],
+        poll_max_attempts: int | None = None,
+    ) -> tuple[str, str | None]:
+        """剪辑助手版「视频连视频」：按名称取两段已生成的镜头视频，用
+        _run_video_bridge_flf2v 生成衔接它们的 FLF2V 过渡视频。
+
+        与 _execute_generate_shot_video 同构（素材按名称解析、同样的轮询到底
+        逻辑、同样把结果落成一条新素材），区别只在于参考不是关键帧图片，而是
+        片段一/片段二两段已生成的视频素材本身。
+        """
+        bridge_name = str(args.get("name") or "").strip()
+        clip1_name = str(args.get("clip1_name") or "").strip()
+        clip2_name = str(args.get("clip2_name") or "").strip()
+        description = str(args.get("description") or "").strip()
+        try:
+            duration_seconds = int(args.get("duration_seconds") or 5)
+        except (TypeError, ValueError):
+            duration_seconds = 5
+
+        if not bridge_name or not clip1_name or not clip2_name:
+            return "缺少 name、clip1_name 或 clip2_name，生成失败。", None
+        if not (video_gen_enabled() and video_gen_configured()):
+            return "视频生成未配置，请先在设置中配置「视频处理」，暂时无法生成过渡视频。", None
+
+        clip1_asset = self._store.find_asset_by_name(project.project_id, clip1_name)
+        if not (
+            clip1_asset
+            and clip1_asset.type == "video"
+            and clip1_asset.status == "ready"
+            and clip1_asset.file_path
+        ):
+            return (
+                f"找不到名为「{clip1_name}」的已生成镜头视频，"
+                "请先用 generate_shot_video 生成它，或检查名称拼写。",
+                None,
+            )
+        clip2_asset = self._store.find_asset_by_name(project.project_id, clip2_name)
+        if not (
+            clip2_asset
+            and clip2_asset.type == "video"
+            and clip2_asset.status == "ready"
+            and clip2_asset.file_path
+        ):
+            return (
+                f"找不到名为「{clip2_name}」的已生成镜头视频，"
+                "请先用 generate_shot_video 生成它，或检查名称拼写。",
+                None,
+            )
+
+        save_dir = str(get_project_assets_dir(project.project_id))
+        # 没给 description 时回退到通用的平滑过渡提示词——FLF2V 只拿到两张
+        # 静态首尾帧，没有提示词模型无从得知该怎么从第一张动到第二张，不能
+        # 像纯文生视频那样留空。
+        prompt = description or (
+            "Generate a seamless cinematic transition that bridges two video clips. "
+            "Create continuous, natural motion that connects the start and end frames, "
+            "matching the source clips' visual style and motion continuity."
+        )
+        async with self._lock:
+            try:
+                result_str, gen_params = await self._run_video_bridge_flf2v(
+                    clip1_path=clip1_asset.file_path,
+                    clip2_path=clip2_asset.file_path,
+                    prompt=prompt,
+                    aspect_ratio="16:9",
+                    resolution="720p",
+                    duration_seconds=duration_seconds,
+                    generate_audio=False,
+                    save_dir=save_dir,
+                )
+            except DirectorRpcError as exc:
+                return f"抓取首尾帧失败：{exc.message}", None
+        parsed = _parse_generation_result(result_str)
+
+        # 与 _execute_generate_shot_video 同样的理由：generate_video 自身的
+        # 内部轮询预算只有 ~120s，这里接着轮询到真正完成为止，不把一个
+        # status=pending 的半成品素材扔给模型。
+        max_attempts = poll_max_attempts or _EDIT_CHAT_VIDEO_POLL_MAX_ATTEMPTS
+        attempts = 0
+        while parsed["status"] == "pending" and parsed.get("job_id") and attempts < max_attempts:
+            await asyncio.sleep(_EDIT_CHAT_VIDEO_POLL_INTERVAL_S)
+            async with self._lock:
+                result_str = await check_video_status._func(job_id=parsed["job_id"], save_dir=save_dir)
+            parsed = _parse_generation_result(result_str)
+            attempts += 1
+
+        if parsed["status"] == "failed":
+            return f"过渡视频生成失败：{parsed.get('error') or result_str}", None
+        if parsed["status"] == "pending":
+            return (
+                f"过渡视频「{bridge_name}」仍在生成中，超出了等待时间——可以稍后在素材面板里查看，"
+                "或者告诉我重新生成。",
+                None,
+            )
+
+        asset = DirectorAsset(
+            asset_id=f"asset_{secrets.token_hex(4)}",
+            type="video",
+            status=parsed["status"],
+            prompt=prompt,
+            params=gen_params,
+            file_path=parsed.get("file_path"),
+            job_id=parsed.get("job_id"),
+            name=bridge_name,
+        )
+        self._store.append_asset(project.project_id, asset)
+        return (
+            f"已生成过渡视频「{bridge_name}」，衔接「{clip1_name}」与「{clip2_name}」。"
+            f"后续可以用 @{bridge_name} 引用这段视频。",
+            asset.asset_id,
+        )
 
     async def _handle_team_edit_chat_turn(self, project: DirectorProject, text: str) -> dict:
         """用 Co-Director **多智能体团队**跑这一轮（基础技能是 ads-codirector 时）。

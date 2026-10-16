@@ -157,6 +157,7 @@ export function directorGenerate(params: GenerateParams): Promise<GenerateResult
     // 的 camelCase → snake_case 映射点，漏一个字段就等于前端选了也没用——
     // 音色会静默回落到后端默认值，输入视频缺失则被后端判成"提示词不能为空"。
     voice: params.voice,
+    style: params.style,
     first_frame_asset_id: params.firstFrameAssetId,
     last_frame_asset_id: params.lastFrameAssetId,
     reference_asset_ids: params.referenceAssetIds,

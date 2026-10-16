@@ -223,6 +223,7 @@ def _error_detail(resp: httpx.Response) -> str:
 async def generate_audio(
     text: str,
     voice: str = _DEFAULT_VOICE,
+    style: str = "",
     response_format: str = _DEFAULT_RESPONSE_FORMAT,
     sample_rate_hz: int = _DEFAULT_PCM_SAMPLE_RATE_HZ,
     save_dir: str | None = None,
@@ -232,9 +233,21 @@ async def generate_audio(
 
     Args:
         text: The text to speak. This is sent verbatim as the synthesis input.
+            Inline angle-bracket tags are momentary delivery events the model
+            performs instead of reading out - e.g. "Wait... <short pause> did
+            you hear that? <sigh>" or "Excuse me <cough> as I was saying".
+            Because it is a verbatim transcript, whole-clip directions written
+            here ("say this in a gentle tone") get spoken aloud; those belong
+            in `style`.
         voice: Voice name, e.g. "Zephyr", "Puck", "Charon", "Kore", "Fenrir",
             "Aoede". Available voices depend on the configured model; an
             unsupported one comes back as a clear provider error.
+        style: Delivery of the whole utterance - tone, pacing, emotion - e.g.
+            "warm and friendly", "whispered urgently", "calm and measured".
+            Sent as the request's `instructions`, which OpenRouter maps onto
+            Gemini's speech_metadata.style. Empty (the default) omits the field
+            entirely, i.e. the model's own default delivery. Orthogonal to
+            `voice`: the voice decides who speaks, the style how they speak.
         response_format: Output audio encoding. "pcm" is the only value the
             Gemini TTS family accepts; a model that also accepts "mp3" can be
             asked for it. A PCM response is wrapped into a WAV container before
@@ -258,6 +271,7 @@ async def generate_audio(
         return "[ERROR]: text is required."
 
     voice = (voice or "").strip() or _DEFAULT_VOICE
+    style = (style or "").strip()
     response_format = (response_format or "").strip().lower() or _DEFAULT_RESPONSE_FORMAT
 
     body = {
@@ -266,11 +280,17 @@ async def generate_audio(
         "voice": voice,
         "response_format": response_format,
     }
+    # 空风格**不写进请求体**：OpenRouter 的 instructions 是"可选"字段，带着
+    # 空串发出去等于显式声明了一个没有内容的风格，和"用户根本没选风格"不是一个
+    # 意思。省掉它，未选风格的请求就与改造前逐字节一致。
+    if style:
+        body["instructions"] = style
     headers = {"Authorization": f"Bearer {api_key}"}
     url = _speech_endpoint(api_base)
     logger.info(
-        "[generate_audio] using model: %s (api_base: %s, voice: %s, response_format: %s, chars: %d)",
-        model, api_base, voice, response_format, len(text),
+        "[generate_audio] using model: %s (api_base: %s, voice: %s, style: %s, "
+        "response_format: %s, chars: %d)",
+        model, api_base, voice, style or "(none)", response_format, len(text),
     )
 
     resp: httpx.Response | None = None

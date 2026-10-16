@@ -61,8 +61,11 @@ export interface ComposerParams {
   resolution: string;
   durationSeconds: number;
   generateAudio: boolean;
-  /** 仅 音频 模式使用：TTS 音色名（如 "Kore"）。 */
+  /** 仅 音频 模式使用：TTS 音色名（如 "Kore"）。决定"谁在说"。 */
   voice: string;
+  /** 仅 音频 模式使用：TTS 风格（audioStyles.ts 里的 instruction 文本，空串
+   *  表示不指定）。决定"怎么说"——语气、节奏、情绪。与 voice 正交。 */
+  audioStyle: string;
   /** 仅 角色 模式使用：拼进生成描述末尾的画风提示（如"写实摄影"），
    *  不改变 composer 里 "名称: 描述" 的原始文本。 */
   characterStyle: string;
@@ -92,6 +95,10 @@ export interface GenerateParams {
   generateAudio?: boolean;
   /** 仅 音频 模式使用：TTS 音色名。 */
   voice?: string;
+  /** 仅 音频 模式使用：TTS 风格描述（audioStyles.ts 的 instruction 文本）。
+   *  服务商把它作为 style / speech_metadata.style 发给模型；空串等于不指定，
+   *  与改造前的请求完全一致（不发 instructions 字段）。 */
+  style?: string;
   /** 仅 video2audio（视频生音频）使用：用作解说素材的输入视频素材 id。 */
   inputVideoAssetId?: string;
   /** 仅 image_audio2video（图音生视频）使用：作为口型同步依据的参考音频

@@ -78,7 +78,7 @@
       "placeholderVideo": "需要一段什么样的视频？描述画面、运镜、氛围，或输入 @名称 引用已命名的图片作为首帧/尾帧（最多 2 张）…",
       "placeholderImage": "需要一张什么样的图片？描述画面、风格、构图，或输入 @名称 引用已命名的图片作为参考…",
       "placeholderCharacter": "描述这个角色：名称: 外貌、气质、身份描述，例如「美妆博主: 一位亲和力极强的亚洲女性美妆博主，负责全程口播讲解」…",
-      "placeholderAudio": "需要一段什么样的语音？输入要朗读的文本，并在工具栏选择音色…",
+      "placeholderAudio": "需要一段什么样的语音？输入要朗读的文本，在工具栏选择音色与风格；文本里可以用 <short pause>、<laugh> 这样的尖括号标记做停顿、笑声…",
       "durationLabel": "{{seconds}} 秒",
       "send": "生成",
       "generating": "生成中…",
@@ -89,6 +89,23 @@
         "character": "角色",
         "world": "世界"
       }
+    },
+    "audioStyle": {
+      "label": "风格",
+      "default": "默认",
+      "custom": "自定义",
+      "warm": "温暖亲切",
+      "enthusiastic": "热情洋溢",
+      "calm": "平稳沉着",
+      "cheerful": "明快愉悦",
+      "serious": "严肃权威",
+      "soothing": "轻柔舒缓",
+      "urgentWhisper": "低声急促",
+      "excited": "兴奋激动",
+      "sad": "低沉感伤",
+      "narration": "纪录片旁白",
+      "advertising": "广告口播",
+      "hint": "「风格」决定整段的语气/节奏，「音色」决定由谁来说。正文里的尖括号标记是即时效果，例如 <short pause> 短暂停顿、<laugh> 笑声、<sigh> 叹气——不要在正文里写「用温柔的语气说」这类整段要求，那会被一字不差地读出来。"
     },
     "quickstart": {
       "textToVideo": "文生视频",
