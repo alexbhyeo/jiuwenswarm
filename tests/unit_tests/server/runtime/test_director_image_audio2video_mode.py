@@ -70,6 +70,11 @@ def manager(isolated_root: Path) -> DirectorManager:
 def _configure(monkeypatch: pytest.MonkeyPatch, *, video: bool = True) -> None:
     monkeypatch.setattr(dm, "video_gen_enabled", lambda: video)
     monkeypatch.setattr(dm, "video_gen_configured", lambda: video)
+    # 云存储默认按"未连接"处理，避免测试结果取决于跑测试这台机器上到底
+    # 连没连 azure-blob-storage（开发机上真连了的话，不 patch 这个就会在
+    # 跑测试时真的把素材传到真实 Azure 存储账户——这正是这组测试最初踩到
+    # 的坑）。要测"连了云存储"的分支，用 _configure_cloud_storage。
+    monkeypatch.setattr(dm, "get_mcp_server_config", lambda name: None)
 
 
 def _stub_video_tool(monkeypatch: pytest.MonkeyPatch, result: str) -> _StubVideoTool:
@@ -78,6 +83,37 @@ def _stub_video_tool(monkeypatch: pytest.MonkeyPatch, result: str) -> _StubVideo
     the exact tool-shaped text they want parsed."""
     stub = _StubVideoTool(result)
     monkeypatch.setattr(dm, "generate_video", stub)
+    return stub
+
+
+class _StubCloudUpload:
+    """Stands in for ``call_mcp_tool_via_temp_connection`` when a cloud-storage
+    connector is "connected" - records the (entry, tool_name, arguments) it was
+    called with and either returns ``url`` or raises ``error``."""
+
+    def __init__(self, *, url: str | None = None, error: Exception | None = None) -> None:
+        self.url = url
+        self.error = error
+        self.calls: list[dict[str, Any]] = []
+
+    async def __call__(self, entry: dict[str, Any], tool_name: str, arguments: dict[str, Any]) -> Any:
+        self.calls.append({"entry": entry, "tool_name": tool_name, "arguments": arguments})
+        if self.error is not None:
+            raise self.error
+        return self.url
+
+
+def _configure_cloud_storage(
+    monkeypatch: pytest.MonkeyPatch, *, url: str | None = None, error: Exception | None = None
+) -> _StubCloudUpload:
+    """Mark the azure-blob-storage connector as "connected" and stub its upload
+    call. Must run after ``_configure`` (which defaults it to not-connected)."""
+    monkeypatch.setattr(
+        dm, "get_mcp_server_config",
+        lambda name: {"name": name, "transport": "stdio"} if name == dm.DirectorManager._CLOUD_STORAGE_MCP_NAME else None,
+    )
+    stub = _StubCloudUpload(url=url, error=error)
+    monkeypatch.setattr(dm, "call_mcp_tool_via_temp_connection", stub)
     return stub
 
 
@@ -439,3 +475,105 @@ async def test_generate_with_an_audio_url_does_not_need_a_prompt(
 
     assert len(stub.calls) == 1
     assert _asset_of(result)["type"] == "video"
+
+
+@pytest.mark.asyncio
+async def test_connected_audio_asset_is_uploaded_to_cloud_storage_when_connected(
+    monkeypatch: pytest.MonkeyPatch, manager: DirectorManager, tmp_path: Path
+):
+    """云存储（azure-blob-storage）连上了的话，连线进来的音频素材要先传上去，
+    用换回来的公网直链替代本地文件路径——绕开 generate_video 内联 base64 的
+    体积上限，也省得用户自己再去对象存储里复制链接。"""
+    _configure(monkeypatch)
+    cloud_url = "https://examdatalake.blob.core.windows.net/examdatalake/audio/asset-audio-1.mp3"
+    cloud_stub = _configure_cloud_storage(monkeypatch, url=cloud_url)
+    project_id = await _create_project(manager)
+    _add_asset(manager, project_id, asset_id="asset-image-1", asset_type="image", suffix=".png")
+    audio_path = _add_asset(
+        manager, project_id, asset_id="asset-audio-1", asset_type="audio", suffix=".mp3"
+    )
+    stub = _stub_video_tool(monkeypatch, _SAVED.format(path=str(tmp_path / "out.mp4")))
+
+    result = await _generate(manager, project_id, prompt="p")
+
+    # The upload call targeted the audio/ folder with the local asset's real path.
+    assert len(cloud_stub.calls) == 1
+    call = cloud_stub.calls[0]
+    assert call["tool_name"] == "upload_file"
+    assert call["arguments"]["local_path"] == audio_path
+    assert call["arguments"]["blob_name"] == "audio/asset-audio-1.mp3"
+    # The uploaded URL replaces the local path end to end: the tool call, and
+    # the persisted asset's params (which the frontend rebuilds edges from).
+    assert stub.calls[0]["kwargs"]["reference_audio_path"] == cloud_url
+    asset = _asset_of(result)
+    assert asset["params"]["input_audio_path"] == cloud_url
+    # The asset id is still recorded - the uploaded URL doesn't erase which
+    # connected asset it came from.
+    assert asset["params"]["input_audio_asset_id"] == "asset-audio-1"
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_the_local_path_when_cloud_storage_is_not_connected(
+    monkeypatch: pytest.MonkeyPatch, manager: DirectorManager, tmp_path: Path
+):
+    """没连云存储就按老路子走本地文件路径——云存储是可选加速路径，不是
+    图音生视频的硬依赖。"""
+    _configure(monkeypatch)  # defaults get_mcp_server_config to "not connected"
+    project_id = await _create_project(manager)
+    _add_asset(manager, project_id, asset_id="asset-image-1", asset_type="image", suffix=".png")
+    audio_path = _add_asset(
+        manager, project_id, asset_id="asset-audio-1", asset_type="audio", suffix=".mp3"
+    )
+    stub = _stub_video_tool(monkeypatch, _SAVED.format(path=str(tmp_path / "out.mp4")))
+
+    await _generate(manager, project_id, prompt="p")
+
+    assert stub.calls[0]["kwargs"]["reference_audio_path"] == audio_path
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_the_local_path_when_the_cloud_upload_fails(
+    monkeypatch: pytest.MonkeyPatch, manager: DirectorManager, tmp_path: Path
+):
+    """云存储连上了，但这一次上传本身失败（网络错误/认证过期等）——不该让
+    整个生成跟着报错，退回本地文件路径照常生成。"""
+    _configure(monkeypatch)
+    _configure_cloud_storage(monkeypatch, error=RuntimeError("mcp upload failed: connection reset"))
+    project_id = await _create_project(manager)
+    _add_asset(manager, project_id, asset_id="asset-image-1", asset_type="image", suffix=".png")
+    audio_path = _add_asset(
+        manager, project_id, asset_id="asset-audio-1", asset_type="audio", suffix=".mp3"
+    )
+    stub = _stub_video_tool(monkeypatch, _SAVED.format(path=str(tmp_path / "out.mp4")))
+
+    result = await _generate(manager, project_id, prompt="p")
+
+    assert stub.calls[0]["kwargs"]["reference_audio_path"] == audio_path
+    assert _asset_of(result)["status"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_cloud_storage_upload_is_skipped_when_an_audio_url_is_given_directly(
+    monkeypatch: pytest.MonkeyPatch, manager: DirectorManager, tmp_path: Path
+):
+    """手填的公网链接已经是直链了，不该再绕一圈去走云存储上传——那条路径
+    只用于"连的是本地素材"的情况。"""
+    _configure(monkeypatch)
+    cloud_stub = _configure_cloud_storage(monkeypatch, url="https://unused.example/should-not-be-called.mp3")
+    project_id = await _create_project(manager)
+    _add_asset(manager, project_id, asset_id="asset-image-1", asset_type="image", suffix=".png")
+    stub = _stub_video_tool(monkeypatch, _SAVED.format(path=str(tmp_path / "out.mp4")))
+    url = "https://cdn.example/song.wav"
+
+    await manager.handle_director_generate(
+        {
+            "project_id": project_id,
+            "mode": "image_audio2video",
+            "reference_asset_ids": ["asset-image-1"],
+            "input_audio_url": url,
+            "prompt": "p",
+        }
+    )
+
+    assert cloud_stub.calls == []
+    assert stub.calls[0]["kwargs"]["reference_audio_path"] == url

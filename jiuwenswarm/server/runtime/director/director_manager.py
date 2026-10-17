@@ -31,7 +31,8 @@ from jiuwenswarm.agents.harness.common.tools.multimodal_config import (
     apply_video_model_config_from_yaml,
 )
 from jiuwenswarm.agents.harness.common.tools.video_tools import video_understanding
-from jiuwenswarm.common.config import get_config
+from jiuwenswarm.common.config import get_config, get_mcp_server_config
+from jiuwenswarm.common.mcp_config import call_mcp_tool_via_temp_connection
 from jiuwenswarm.agents.harness.common.tools.video_gen_tools import (
     check_video_status,
     generate_video,
@@ -596,6 +597,53 @@ class DirectorManager:
             return asset.file_path
         return None
 
+    # 图音生视频的参考音频若走云存储连接器（见下面 _upload_audio_to_cloud_storage），
+    # 用这个固定名字去查「我的扩展」里是否已连接——目前只接 Azure 存储这一种
+    # 云存储连接器，不是任意 MCP 都能当"云存储"用。
+    _CLOUD_STORAGE_MCP_NAME = "azure-blob-storage"
+    _CLOUD_STORAGE_AUDIO_PREFIX = "audio"
+
+    async def _upload_audio_to_cloud_storage(self, audio_asset: DirectorAsset) -> str | None:
+        """若云存储连接器（azure-blob-storage）已连接，把一个就绪音频素材上传到
+        它的 audio/ 目录，返回公网 HTTPS 直链；未连接、素材文件不存在、或
+        上传失败时一律返回 None——调用方据此回退到本地文件路径（走
+        generate_video 自己的 base64 内联编码，受 _MAX_REFERENCE_AUDIO_BYTES
+        体积上限限制）。
+
+        云存储在这里是"有就用，没有就按老路子走"的可选路径，不是图音生视频
+        的硬依赖——没连云存储、或上传这一步本身失败，都不应该让生成直接
+        报错，只是拿不到体积豁免/直链而已。
+        """
+        entry = get_mcp_server_config(self._CLOUD_STORAGE_MCP_NAME)
+        if entry is None:
+            return None
+        if not audio_asset.file_path or not os.path.isfile(audio_asset.file_path):
+            return None
+        # 素材在本地磁盘上的文件名本身就是全局唯一的（TTS 产物是
+        # audio_<timestamp>_<8位hex>.ext，上传素材是 upload_<16位hex>.ext，
+        # 见 audio_gen_tools.generate_audio / director_multipart_http），
+        # 不需要再拿 asset_id 加前缀防重名——直接存成 audio/<原文件名>。
+        blob_name = f"{self._CLOUD_STORAGE_AUDIO_PREFIX}/{os.path.basename(audio_asset.file_path)}"
+        try:
+            result = await call_mcp_tool_via_temp_connection(
+                entry,
+                "upload_file",
+                {"local_path": audio_asset.file_path, "blob_name": blob_name},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[director] cloud storage upload for audio asset '%s' failed: %s",
+                audio_asset.asset_id, exc,
+            )
+            return None
+        if isinstance(result, str) and result.strip().lower().startswith(("http://", "https://")):
+            return result.strip()
+        logger.warning(
+            "[director] cloud storage upload for audio asset '%s' returned an unexpected "
+            "result instead of a URL: %r", audio_asset.asset_id, result,
+        )
+        return None
+
     async def _run_video_bridge_flf2v(
         self,
         *,
@@ -931,6 +979,14 @@ class DirectorManager:
                         "INVALID_PARAMS", "图音生视频需要先连接一个已就绪的音频素材，或填写音频链接"
                     )
                 reference_audio_path = str(audio_asset.file_path)
+                # 连的是素材（不是手填链接）时，云存储连上了就顺手把这段音频
+                # 传上去换一条公网直链：既绕开 generate_video 内联 base64 的
+                # 体积上限，也省得用户自己再去抄链接。没连云存储/上传失败就
+                # 原样走本地文件路径，不影响生成——见
+                # _upload_audio_to_cloud_storage 的取舍说明。
+                cloud_audio_url = await self._upload_audio_to_cloud_storage(audio_asset)
+                if cloud_audio_url:
+                    reference_audio_path = cloud_audio_url
             duration_seconds = int(params.get("duration_seconds") or 15)
             # 成片是否带音轨由卡片上的选项决定；没带这个字段（旧画布数据、
             # 或别的调用方）时按"有声音"处理——这张卡片的输入就是一段音频，

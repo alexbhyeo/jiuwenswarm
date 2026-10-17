@@ -406,6 +406,63 @@ async def fetch_mcp_tools_via_temp_connection(entry: dict[str, Any]) -> list[dic
                     logger.warning("[mcp-config] fetch disconnect failed: %s", disc_exc)
 
 
+async def call_mcp_tool_via_temp_connection(
+    entry: dict[str, Any], tool_name: str, arguments: dict[str, Any]
+) -> Any:
+    """Create a temporary MCP connection from a config entry, call one tool, and disconnect.
+
+    Sibling of ``fetch_mcp_tools_via_temp_connection`` (same connect/resolve/
+    disconnect shape) but for actually *using* a connected MCP's capability
+    programmatically instead of just listing its tools — e.g. director_manager
+    uploading an audio asset through a connected cloud-storage connector
+    before video generation, outside the chat LLM tool-calling loop.
+
+    Returns whatever ``extract_mcp_tool_result_content`` produces for the
+    call (a plain string for a single text result, or an ``McpToolResult``
+    with ``success=False`` on an explicit MCP-level error). Raises on
+    connect failure or transport-level errors — callers decide whether a
+    failure here should abort or just fall back to a non-cloud path.
+    """
+    from openjiuwen.core.runner.resources_manager.tool_manager import ToolMgr
+
+    name = str(entry.get("name", "")).strip()
+    transport = str(entry.get("transport", "")).strip().lower()
+    if not name or transport not in {"stdio", "sse", "http", "streamable-http", "streamable_http"}:
+        raise ValueError(f"invalid mcp entry name={name!r} transport={transport!r}")
+
+    try:
+        entry = resolve_placeholders(entry, CredentialStore(), name)
+    except Exception as resolve_exc:  # noqa: BLE001
+        logger.debug("[mcp-config] placeholder resolve failed: %s", resolve_exc)
+
+    cfg = build_mcp_server_config(entry)
+    if cfg is None:
+        raise ValueError(f"invalid mcp server entry for {name!r}")
+    client = ToolMgr._create_client(cfg)
+    try:
+        connected = await client.connect()
+        if not connected:
+            raise RuntimeError(f"failed to connect to mcp '{name}'")
+        return await client.call_tool(tool_name, arguments)
+    except BaseException as exc:  # noqa: BLE001
+        from jiuwenswarm.server.runtime.mcp.exc_group import reraise_as_exception
+        reraise_as_exception(exc)
+    finally:
+        try:
+            await client.disconnect()
+        except BaseException as exc:  # noqa: BLE001
+            if isinstance(exc, (Exception, asyncio.CancelledError)):
+                logger.warning("[mcp-config] call_tool disconnect failed: %s", exc)
+            else:
+                from jiuwenswarm.server.runtime.mcp.exc_group import (
+                    reraise_as_exception,
+                )
+                try:
+                    reraise_as_exception(exc)
+                except Exception as disc_exc:  # noqa: BLE001
+                    logger.warning("[mcp-config] call_tool disconnect failed: %s", disc_exc)
+
+
 async def fill_mcp_tools_fallback(item: dict[str, Any], name: str) -> None:
     """Populate ``item["tools"]`` from a temp connection when the connected
     MCP surfaced no tools via ToolMgr.
