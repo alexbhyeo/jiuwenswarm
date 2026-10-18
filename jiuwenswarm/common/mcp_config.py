@@ -406,6 +406,58 @@ async def fetch_mcp_tools_via_temp_connection(entry: dict[str, Any]) -> list[dic
                     logger.warning("[mcp-config] fetch disconnect failed: %s", disc_exc)
 
 
+async def call_mcp_tool(
+    entry: dict[str, Any], tool_name: str, arguments: dict[str, Any], *, timeout_s: float = 20.0
+) -> Any:
+    """Call a connected MCP's tool, reusing its live connection when one is
+    already cached — falls back to a short-lived temp connection otherwise.
+
+    ``mcp.connect`` leaves a successful stdio/HTTP connection cached in the
+    process-global ``Runner.resource_mgr`` (see ``probe_mcp_live_connection``'s
+    docstring). Calling ``call_mcp_tool_via_temp_connection`` on every single
+    invocation ignores that cache and pays a full spawn+handshake cost each
+    time (subprocess start + SDK imports, ~0.4s alone for the stdio case)
+    for no reason — this checks the cache first so a hot path (e.g. one
+    audio upload per video generation) isn't repeatedly re-paying it.
+
+    Either path is wrapped in ``timeout_s`` so a stalled network call or a
+    wedged subprocess can never block the caller indefinitely — callers that
+    treat the cloud path as optional (fall back to a local path on any
+    exception) get a bounded worst case instead of an unbounded hang.
+
+    The two paths go through different SDK layers and don't share a return
+    shape by default: the temp-connection path already unwraps via
+    ``extract_mcp_tool_result_content`` (plain value on success, an
+    ``McpToolResult`` on an explicit MCP-level error); a cached ``Tool`` from
+    ``Runner.resource_mgr`` is the higher-level ``MCPTool.invoke()``, which
+    wraps that same plain value as ``{"result": value}`` instead (see
+    ``MCPTool.invoke`` / ``render_for_llm`` in openjiuwen's mcp/base.py) while
+    still returning ``McpToolResult`` as-is on error. Unwrapped here so
+    callers get one consistent contract regardless of which path served the
+    call.
+    """
+    from openjiuwen.core.runner import Runner
+
+    name = str(entry.get("name", "")).strip()
+
+    async def _run() -> Any:
+        tool = None
+        try:
+            tool = await Runner.resource_mgr.get_mcp_tool(name=tool_name, server_name=name)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[mcp-config] cached tool lookup for '%s' failed: %s", name, exc)
+        if isinstance(tool, list):
+            tool = tool[0] if tool else None
+        if tool is not None:
+            result = await tool.invoke(arguments)
+            if isinstance(result, dict) and tuple(result.keys()) == ("result",):
+                return result["result"]
+            return result
+        return await call_mcp_tool_via_temp_connection(entry, tool_name, arguments)
+
+    return await asyncio.wait_for(_run(), timeout=timeout_s)
+
+
 async def call_mcp_tool_via_temp_connection(
     entry: dict[str, Any], tool_name: str, arguments: dict[str, Any]
 ) -> Any:

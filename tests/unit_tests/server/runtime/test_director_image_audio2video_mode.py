@@ -87,16 +87,18 @@ def _stub_video_tool(monkeypatch: pytest.MonkeyPatch, result: str) -> _StubVideo
 
 
 class _StubCloudUpload:
-    """Stands in for ``call_mcp_tool_via_temp_connection`` when a cloud-storage
-    connector is "connected" - records the (entry, tool_name, arguments) it was
-    called with and either returns ``url`` or raises ``error``."""
+    """Stands in for ``call_mcp_tool`` when a cloud-storage connector is
+    "connected" - records the (entry, tool_name, arguments) it was called
+    with and either returns ``url`` or raises ``error``."""
 
     def __init__(self, *, url: str | None = None, error: Exception | None = None) -> None:
         self.url = url
         self.error = error
         self.calls: list[dict[str, Any]] = []
 
-    async def __call__(self, entry: dict[str, Any], tool_name: str, arguments: dict[str, Any]) -> Any:
+    async def __call__(
+        self, entry: dict[str, Any], tool_name: str, arguments: dict[str, Any], **kwargs: Any
+    ) -> Any:
         self.calls.append({"entry": entry, "tool_name": tool_name, "arguments": arguments})
         if self.error is not None:
             raise self.error
@@ -113,7 +115,7 @@ def _configure_cloud_storage(
         lambda name: {"name": name, "transport": "stdio"} if name == dm.DirectorManager._CLOUD_STORAGE_MCP_NAME else None,
     )
     stub = _StubCloudUpload(url=url, error=error)
-    monkeypatch.setattr(dm, "call_mcp_tool_via_temp_connection", stub)
+    monkeypatch.setattr(dm, "call_mcp_tool", stub)
     return stub
 
 

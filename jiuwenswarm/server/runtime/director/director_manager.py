@@ -32,7 +32,7 @@ from jiuwenswarm.agents.harness.common.tools.multimodal_config import (
 )
 from jiuwenswarm.agents.harness.common.tools.video_tools import video_understanding
 from jiuwenswarm.common.config import get_config, get_mcp_server_config
-from jiuwenswarm.common.mcp_config import call_mcp_tool_via_temp_connection
+from jiuwenswarm.common.mcp_config import call_mcp_tool
 from jiuwenswarm.agents.harness.common.tools.video_gen_tools import (
     check_video_status,
     generate_video,
@@ -611,8 +611,14 @@ class DirectorManager:
         体积上限限制）。
 
         云存储在这里是"有就用，没有就按老路子走"的可选路径，不是图音生视频
-        的硬依赖——没连云存储、或上传这一步本身失败，都不应该让生成直接
-        报错，只是拿不到体积豁免/直链而已。
+        的硬依赖——没连云存储、或上传这一步本身失败/超时，都不应该让生成
+        直接报错，只是拿不到体积豁免/直链而已。
+
+        走 call_mcp_tool（优先复用 mcp.connect 时就建立好的常驻连接，连接
+        没缓存住才退回临时连接）而不是每次都另起一个临时连接——图音生视频
+        每次生成都要调这一下，常驻连接能省掉一次进程起停的固定开销；
+        call_mcp_tool 自带超时兜底，上传本身卡住也不会把整张卡的生成时间
+        拖到没有上限。
         """
         entry = get_mcp_server_config(self._CLOUD_STORAGE_MCP_NAME)
         if entry is None:
@@ -625,10 +631,11 @@ class DirectorManager:
         # 不需要再拿 asset_id 加前缀防重名——直接存成 audio/<原文件名>。
         blob_name = f"{self._CLOUD_STORAGE_AUDIO_PREFIX}/{os.path.basename(audio_asset.file_path)}"
         try:
-            result = await call_mcp_tool_via_temp_connection(
+            result = await call_mcp_tool(
                 entry,
                 "upload_file",
                 {"local_path": audio_asset.file_path, "blob_name": blob_name},
+                timeout_s=20.0,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
