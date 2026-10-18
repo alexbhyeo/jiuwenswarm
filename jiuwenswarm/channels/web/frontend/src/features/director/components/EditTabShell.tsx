@@ -1259,7 +1259,6 @@ export function EditTabShell() {
                   src={rawFileUrl(activeClip.filePath)}
                   onTimeUpdate={handleMediaTimeUpdate}
                   playsInline
-                  muted
                   data-testid="director-edit-preview-video"
                 />
               ) : activeClip.type === 'audio' ? (
