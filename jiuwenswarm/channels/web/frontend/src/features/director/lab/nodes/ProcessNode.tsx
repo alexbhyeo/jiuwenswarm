@@ -1,10 +1,13 @@
 import { Handle, Position, useNodeConnections, useNodesData, type NodeProps } from '@xyflow/react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { useDirectorStore } from '../../directorStore';
 import { useLabActions } from '../LabActionsContext';
 import { AUDIO_VOICE_OPTIONS, DEFAULT_AUDIO_VOICE } from '../../audioVoices';
 import { AUDIO_STYLE_OPTIONS, DEFAULT_AUDIO_STYLE, audioStyleLabelKey } from '../../audioStyles';
 import type { AudioNodeData, ImageNodeData, ProcessNodeData, TextNodeData, VideoNodeData } from '../labTypes';
+import type { DirectorAsset } from '../../types';
 import {
   OUTPUT_COUNT_OPTIONS,
   PROCESS_KIND_MAX_AUDIOS,
@@ -14,6 +17,7 @@ import {
   PROCESS_KIND_MULTI_REF,
   supportsAudioOutput,
 } from '../labTypes';
+import { PromptTextarea } from './PromptTextarea';
 
 const ASPECT_RATIO_OPTIONS = ['16:9', '9:16', '1:1', '4:3'];
 const IMAGE_RESOLUTION_OPTIONS = ['512', '768', '1024'];
@@ -35,6 +39,12 @@ const generateIcon = (
 const chevronDown = (
   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
     <path d="m6 9 6 6 6-6" />
+  </svg>
+);
+
+const closeIcon = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round">
+    <path d="M18 6 6 18M6 6l12 12" />
   </svg>
 );
 
@@ -93,6 +103,7 @@ function useConnectedAudio(nodeId: string, handleId: string): { assetId: string 
 export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData }) {
   const { t } = useTranslation();
   const actions = useLabActions();
+  const project = useDirectorStore((s) => s.projects.find((p) => p.project_id === s.selectedProjectId) ?? null);
   const maxImages = PROCESS_KIND_MAX_IMAGES[data.kind];
   const maxVideos = PROCESS_KIND_MAX_VIDEOS[data.kind];
   const maxAudios = PROCESS_KIND_MAX_AUDIOS[data.kind];
@@ -100,7 +111,25 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   const outputCount = data.outputCount || 1;
   const isMultiRef = !!PROCESS_KIND_MULTI_REF[data.kind];
 
-  const text = useConnectedText(id, 'text');
+  // 卡片自带的文字提示非空时优先于"文字提示"端口连线——跟下面 audioUrl/
+  // videoUrl 同一个取舍，见 labTypes.ts 的 ProcessNodeData.prompt 注释。
+  const connectedText = useConnectedText(id, 'text');
+  const inlinePrompt = (data.prompt ?? '').trim();
+  const text = inlinePrompt || connectedText;
+  const promptFromPort = !inlinePrompt && connectedText.length > 0;
+
+  const namedImageAssets = useMemo(() => {
+    if (!project) return [];
+    const seen = new Set<string>();
+    const result: DirectorAsset[] = [];
+    for (const asset of project.assets) {
+      if ((asset.type === 'image' || asset.type === 'character') && asset.status === 'ready' && asset.name && !seen.has(asset.name)) {
+        seen.add(asset.name);
+        result.push(asset);
+      }
+    }
+    return result;
+  }, [project]);
   const image1 = useConnectedImage(id, maxImages >= 1 && !isMultiRef ? 'image1' : '__none__');
   const image2 = useConnectedImage(id, maxImages >= 2 ? 'image2' : '__none__');
   const images = useConnectedImages(id, isMultiRef ? 'image1' : '__none__');
@@ -164,6 +193,11 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
     return () => document.removeEventListener('mousedown', handleClick, true);
   }, [paramsOpen]);
 
+  // 文字提示弹窗用 Portal 挂到 document.body（见下面渲染处的注释），不是
+  // .lab-node-params-popover 那种贴着卡片的内联浮层，所以不需要跟它一样
+  // 的"点击画布空白处关闭"逻辑——遮罩本身的 onClick 已经处理了关闭。
+  const [promptOpen, setPromptOpen] = useState(false);
+
   const resolutionOptions = mode === 'video' ? VIDEO_RESOLUTION_OPTIONS : IMAGE_RESOLUTION_OPTIONS;
   // 文生音频没有宽高比/分辨率/时长这些画面参数，改成音色选择。
   const isAudio = mode === 'audio';
@@ -199,11 +233,28 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
       </div>
 
       <div className="lab-node-ports">
-        <div className="lab-node-input-row">
+        <div
+          className="lab-node-input-row lab-node-input-row--clickable nodrag"
+          role="button"
+          tabIndex={0}
+          title={t('director.lab.textPromptEditHint')}
+          onClick={() => setPromptOpen(true)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setPromptOpen(true);
+            }
+          }}
+          data-testid="lab-process-node-prompt-row"
+        >
           <Handle type="target" position={Position.Left} id="text" />
           <span className="lab-node-input-dot" />
           {t('director.lab.textPrompt')}
-          {text && <span className="lab-node-input-filled">✓</span>}
+          {text && (
+            <span className="lab-node-input-filled" title={promptFromPort ? undefined : text}>
+              ✓
+            </span>
+          )}
         </div>
 
         {maxImages >= 1 && (
@@ -497,6 +548,48 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
       </button>
 
       <Handle type="source" position={Position.Right} id="out" />
+
+      {/* 用 Portal 挂到 document.body：React Flow 画布层带 CSS transform
+          （平移/缩放），transform 祖先会把 position:fixed 的遮罩"收编"进
+          自己的坐标系——遮罩不再真正贴满视口，而是跟着画布一起缩放/跑位。
+          挂到 body 下彻底脱离这个祖先链，同 ConnectorMarket/ConfirmDialog
+          的写法（bug 2026091001-001 同一类问题）。 */}
+      {promptOpen &&
+        createPortal(
+          <div className="director-dialog-overlay" onClick={() => setPromptOpen(false)}>
+            <div
+              className="director-prompt-dialog"
+              onClick={(e) => e.stopPropagation()}
+              data-testid="lab-process-node-prompt-dialog"
+            >
+              <div className="director-prompt-dialog-title">
+                {t('director.lab.textPrompt')}
+                <button
+                  type="button"
+                  className="director-prompt-dialog-close"
+                  title={t('common.close')}
+                  onClick={() => setPromptOpen(false)}
+                  data-testid="lab-process-node-prompt-dialog-close"
+                >
+                  {closeIcon}
+                </button>
+              </div>
+              {promptFromPort && (
+                <div className="director-prompt-dialog-hint">{t('director.lab.textPromptPortHint')}</div>
+              )}
+              <PromptTextarea
+                value={data.prompt ?? ''}
+                onChange={(value) => actions.patchProcessNode(id, { prompt: value })}
+                namedImageAssets={namedImageAssets}
+                textareaClassName="director-prompt-dialog-textarea"
+                placeholder={t('director.lab.samplePrompt')}
+                autoFocus
+                data-testid="lab-process-node-prompt-dialog-textarea"
+              />
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

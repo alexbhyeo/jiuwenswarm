@@ -148,6 +148,8 @@
       "swapImage": "替换为上传图片",
       "textPrompt": "文字提示",
       "samplePrompt": "一艘小船缓缓驶过平静的海面，天空湛蓝，光线柔和",
+      "textPromptEditHint": "点击填写文字提示",
+      "textPromptPortHint": "当前提示词来自连接的文本节点；在下面输入会改用这里填写的文字",
       "settingsTitle": "生成设置",
       "model": "模型",
       "refMode": "参考方式",

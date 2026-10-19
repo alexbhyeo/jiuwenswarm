@@ -148,6 +148,8 @@
       "swapImage": "Swap with uploaded image",
       "textPrompt": "Text Prompt",
       "samplePrompt": "A small boat drifts slowly across a calm sea, under a blue sky with soft light",
+      "textPromptEditHint": "Click to write a text prompt",
+      "textPromptPortHint": "The current prompt comes from a connected text node; typing below switches to what you enter here",
       "settingsTitle": "Generation Settings",
       "model": "Model",
       "refMode": "Reference Mode",

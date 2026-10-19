@@ -1006,6 +1006,103 @@
   color: #fff;
 }
 
+/* ---------- Process 卡片自带的文字提示弹窗 ----------
+   复用 .director-dialog-overlay 做遮罩（点遮罩关闭），弹窗本身比
+   .director-dialog（新建项目用，360px 固定宽）宽、高度由内容撑开——
+   写提示词需要的空间比一个项目名输入框大得多。 */
+.director-prompt-dialog {
+  /* .director-page 的设计 token（见文件顶部）只在它自己的 DOM 子树里能解析
+     ——这个弹窗走 Portal 挂到 document.body，不再是 .director-page 的后代，
+     var(--d-*) 会全部解析不到值（属性直接被忽略，不是""/0 这种"合法空值"，
+     背景/边框/阴影因此完全不出现，只剩裸文字浮在遮罩上）。在这里把用到的
+     token 原样重新声明一份：CSS 自定义属性顺着 DOM 向下继承，子树里嵌的
+     .director-at-menu（@ 下拉）照样能从这一层拿到值，不需要再单独声明一次。 */
+  --d-text-primary: #191919;
+  --d-text-secondary: #777777;
+  --d-text-placeholder: #808080;
+  --d-bg-card: #ffffff;
+  --d-bg-shell: #f3f3f3;
+  --d-bg-hover: #f0f0f0;
+  --d-bg-page: #f5f7f9;
+  --d-border-default: #e4e4e7;
+  --d-border-strong: #d4d4d8;
+  --d-accent: #2563eb;
+  --d-accent-soft: rgba(37, 99, 235, 0.1);
+  --d-radius-sm: 6px;
+  --d-radius-md: 8px;
+  --d-radius-lg: 12px;
+  --d-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --d-shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04);
+
+  width: 480px;
+  max-width: calc(100vw - 32px);
+  background: var(--d-bg-card);
+  border-radius: var(--d-radius-lg);
+  box-shadow: var(--d-shadow-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.director-prompt-dialog-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--d-text-primary);
+}
+
+.director-prompt-dialog-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--d-radius-sm);
+  background: none;
+  color: var(--d-text-secondary);
+  cursor: pointer;
+}
+
+.director-prompt-dialog-close:hover {
+  background: var(--d-bg-hover);
+  color: var(--d-text-primary);
+}
+
+.director-prompt-dialog-hint {
+  font-size: 11.5px;
+  color: var(--d-text-secondary);
+  background: var(--d-bg-shell);
+  border-radius: var(--d-radius-sm);
+  padding: 6px 10px;
+  line-height: 1.5;
+}
+
+.director-prompt-dialog-textarea {
+  display: block;
+  width: 100%;
+  min-height: 160px;
+  padding: 10px 12px;
+  border: 1px solid var(--d-border-default);
+  border-radius: var(--d-radius-md);
+  background: var(--d-bg-page);
+  color: var(--d-text-primary);
+  font: inherit;
+  resize: vertical;
+}
+
+.director-prompt-dialog-textarea:focus {
+  outline: none;
+  border-color: var(--d-accent);
+}
+
+.director-prompt-dialog-textarea::placeholder {
+  color: var(--d-text-placeholder);
+}
+
 .director-dialog-btn--confirm:disabled {
   opacity: 0.5;
   cursor: default;
@@ -2616,9 +2713,11 @@
 }
 
 /* "@" 下拉（.director-at-menu）用 position:absolute; top:100% 贴在最近的
-   已定位祖先下面——包一层紧贴 textarea 的容器，让下拉紧跟在输入框正下方，
-   而不是贴到整张卡片（含标题栏）下面。 */
-.lab-node-text-edit-wrap {
+   已定位祖先下面——PromptTextarea 组件自己包一层紧贴 textarea 的容器，让
+   下拉紧跟在输入框正下方，而不是贴到整张卡片/弹窗下面。TextNode 的编辑态
+   和 ProcessNode 卡片的文字提示弹窗共用同一个 PromptTextarea，这条规则
+   因此是通用的，不挂在 .lab-node--text 下面。 */
+.director-at-menu-anchor {
   position: relative;
 }
 
@@ -2742,6 +2841,18 @@
   margin-left: auto;
   color: #16a34a;
   font-weight: 600;
+}
+
+/* 只有"文字提示"这一行是可点的——点开卡片自带的文字提示弹窗（见下面
+   .director-prompt-dialog），其余输入行（参考图/参考音频/源视频……）只能
+   靠拖连线，没有对应的"填这里"弹窗。 */
+.lab-node-input-row--clickable {
+  cursor: pointer;
+  border-radius: var(--d-radius-sm);
+}
+
+.lab-node-input-row--clickable:hover {
+  background: var(--d-bg-hover);
 }
 
 .lab-node-params {
