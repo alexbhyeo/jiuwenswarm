@@ -18,6 +18,7 @@ import {
   supportsAudioOutput,
 } from '../labTypes';
 import { PromptTextarea } from './PromptTextarea';
+import { renderWithImageChips } from './promptChips';
 
 const ASPECT_RATIO_OPTIONS = ['16:9', '9:16', '1:1', '4:3'];
 const IMAGE_RESOLUTION_OPTIONS = ['512', '768', '1024'];
@@ -197,6 +198,13 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   // .lab-node-params-popover 那种贴着卡片的内联浮层，所以不需要跟它一样
   // 的"点击画布空白处关闭"逻辑——遮罩本身的 onClick 已经处理了关闭。
   const [promptOpen, setPromptOpen] = useState(false);
+  // 弹窗默认展示"渲染态"（@名称 带缩略图），点一下才切成可编辑的原始文本
+  // ——跟 TextNode 卡片同一套取舍（textarea 没法同时又能编辑又能在文字
+  // 中间插入图片），每次重新打开弹窗都先回到渲染态。
+  const [promptEditing, setPromptEditing] = useState(false);
+  useEffect(() => {
+    if (promptOpen) setPromptEditing(false);
+  }, [promptOpen]);
 
   const resolutionOptions = mode === 'video' ? VIDEO_RESOLUTION_OPTIONS : IMAGE_RESOLUTION_OPTIONS;
   // 文生音频没有宽高比/分辨率/时长这些画面参数，改成音色选择。
@@ -577,15 +585,30 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
               {promptFromPort && (
                 <div className="director-prompt-dialog-hint">{t('director.lab.textPromptPortHint')}</div>
               )}
-              <PromptTextarea
-                value={data.prompt ?? ''}
-                onChange={(value) => actions.patchProcessNode(id, { prompt: value })}
-                namedImageAssets={namedImageAssets}
-                textareaClassName="director-prompt-dialog-textarea"
-                placeholder={t('director.lab.samplePrompt')}
-                autoFocus
-                data-testid="lab-process-node-prompt-dialog-textarea"
-              />
+              {promptEditing ? (
+                <PromptTextarea
+                  value={data.prompt ?? ''}
+                  onChange={(value) => actions.patchProcessNode(id, { prompt: value })}
+                  namedImageAssets={namedImageAssets}
+                  textareaClassName="director-prompt-dialog-textarea"
+                  placeholder={t('director.lab.samplePrompt')}
+                  autoFocus
+                  onBlur={() => setPromptEditing(false)}
+                  data-testid="lab-process-node-prompt-dialog-textarea"
+                />
+              ) : (
+                <div
+                  className="director-prompt-dialog-display nodrag"
+                  data-testid="lab-process-node-prompt-dialog-display"
+                  onClick={() => setPromptEditing(true)}
+                >
+                  {data.prompt ? (
+                    renderWithImageChips(data.prompt, namedImageAssets)
+                  ) : (
+                    <span className="lab-node-text-placeholder">{t('director.lab.samplePrompt')}</span>
+                  )}
+                </div>
+              )}
             </div>
           </div>,
           document.body

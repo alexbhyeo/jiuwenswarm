@@ -11,15 +11,17 @@ export interface AtMenuState {
   query: string;
 }
 
-/** 光标之前最近的 "@token"（token 内不含空白，"@" 前须是行首或空白）。 */
+/** 光标之前最近的 "@token"（token 内不含空白）。不要求 "@" 前是行首或空白——
+ *  中文提示词里 "@名称" 经常直接跟在中文标点（，。：）或另一个汉字后面，没有
+ *  空格分隔（"中景，@Mini Fairy Luna 在…"），跟 renderWithImageChips 的匹配
+ *  正则（同样不限定 "@" 前一个字符）对齐，否则下拉在真实中文提示词里基本
+ *  触发不了。 */
 export function detectAtToken(value: string, cursor: number): AtMenuState | null {
   const upto = value.slice(0, cursor);
   const atIndex = upto.lastIndexOf('@');
   if (atIndex === -1) return null;
   const query = upto.slice(atIndex + 1);
   if (/\s/.test(query)) return null;
-  const before = atIndex > 0 ? upto[atIndex - 1] : '';
-  if (before && !/\s/.test(before)) return null;
   return { start: atIndex, query };
 }
 

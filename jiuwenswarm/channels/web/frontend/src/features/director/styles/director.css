@@ -1103,6 +1103,28 @@
   color: var(--d-text-placeholder);
 }
 
+/* 弹窗未编辑时的渲染态，和 .director-prompt-dialog-textarea 同样的尺寸/
+   内边距，点进去编辑时内容不跳动；"@名称" 命中图片/角色素材渲染成带缩略图
+   的 chip，见 nodes/promptChips.tsx 的 renderWithImageChips。 */
+.director-prompt-dialog-display {
+  display: block;
+  width: 100%;
+  min-height: 160px;
+  padding: 10px 12px;
+  border: 1px solid var(--d-border-default);
+  border-radius: var(--d-radius-md);
+  background: var(--d-bg-page);
+  color: var(--d-text-primary);
+  font: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
+}
+
+.director-prompt-dialog-display:hover {
+  background: var(--d-bg-hover);
+}
+
 .director-dialog-btn--confirm:disabled {
   opacity: 0.5;
   cursor: default;
