@@ -3106,18 +3106,6 @@
   color: var(--d-text-primary);
 }
 
-.lab-toolrail-btn--text {
-  border-color: transparent;
-  background: #22c55e;
-  color: #fff;
-  box-shadow: var(--d-shadow-lg);
-}
-
-.lab-toolrail-btn--text:hover {
-  background: #16a34a;
-  color: #fff;
-}
-
 .lab-toolrail-btn--active {
   border-color: var(--d-accent);
   color: var(--d-accent);

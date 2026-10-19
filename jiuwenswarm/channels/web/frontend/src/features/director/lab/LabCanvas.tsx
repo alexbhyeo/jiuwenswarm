@@ -84,12 +84,6 @@ const isRemoteUrl = (value: string): boolean => /^https?:\/\//i.test(value);
 const GENERATE_RECOVERY_POLL_INTERVAL_MS = 5000;
 const GENERATE_RECOVERY_MAX_ATTEMPTS = 120; // 120 * 5s = 10 分钟，覆盖比 5 分钟客户端超时更长的真实生成耗时
 
-const plusIcon = (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 5v14M5 12h14" />
-  </svg>
-);
-
 const imageGroupIcon = (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
     <rect x="3" y="4" width="18" height="16" rx="2.5" />
@@ -783,13 +777,13 @@ function LabCanvasInner() {
     if (newAssetIds.length === 0) return; // 已经全部摆过，不重复摆
 
     const ROW_HEIGHT = 260;
-    const COL_TEXT_X = 60;
     const COL_REF_X = 60;
     const COL_PROCESS_X = 420;
     const COL_OUTPUT_X = 780;
-    // 不依赖任何上一个输出的素材，各自独立占一整组（文字/处理/输出三列）
-    // 纵向摞下去；依赖别的素材输出的（引用了它的 图片参考/首尾帧），改成
-    // 在依赖的那一组右边再开一组横向摆——GROUP_STEP 是一整组三列的宽度
+    // 不依赖任何上一个输出的素材，各自独立占一整组（参考图/处理/输出三列
+    // ——文字提示不再占一列，见下面 processData.prompt）纵向摞下去；依赖
+    // 别的素材输出的（引用了它的 图片参考/首尾帧），改成在依赖的那一组
+    // 右边再开一组横向摆——GROUP_STEP 是一整组三列的宽度
     // 再加安全间距，保证下一组的文字列不会撞到上一组输出列的卡片。
     const GROUP_STEP = 1080;
     // 接到已有画布的下方，不覆盖用户手动摆放的内容。
@@ -1054,13 +1048,9 @@ function LabCanvasInner() {
             );
 
       const xOffset = depth * GROUP_STEP;
-      const textX = COL_TEXT_X + xOffset;
       const refX = COL_REF_X + xOffset;
       const processX = COL_PROCESS_X + xOffset;
       const outputX = COL_OUTPUT_X + xOffset;
-
-      const textNodeId = nextNodeId('text');
-      addNode({ id: textNodeId, type: 'text', position: { x: textX, y }, data: { text: asset.prompt } });
 
       const processNodeId = nextNodeId('process');
       const params = (asset.params ?? {}) as Record<string, unknown>;
@@ -1073,6 +1063,10 @@ function LabCanvasInner() {
           typeof params.resolution === 'string' ? params.resolution : mode === 'video' ? '720p' : '512',
         durationSeconds: typeof params.duration_seconds === 'number' ? params.duration_seconds : 5,
         outputCount: 1,
+        // 文字提示不再落成一张独立的"文字提示"卡片+连线——直接写进卡片
+        // 自带的文字提示弹窗（见 ProcessNodeData.prompt 的取舍说明），
+        // 画布因此少一张卡片、少一条线，也不需要再摆文字列。
+        prompt: asset.prompt,
         // 音频卡片重建后音色不能变回默认值——params 里存了当时用的 voice。
         voice: typeof params.voice === 'string' ? params.voice : DEFAULT_AUDIO_VOICE,
         // 风格同理（没有这个字段的旧素材重建出来就是不指定风格）。
@@ -1093,9 +1087,6 @@ function LabCanvasInner() {
             : '',
       };
       addNode({ id: processNodeId, type: 'process', position: { x: processX, y }, data: processData });
-      setEdges((eds) =>
-        addEdge({ id: nextNodeId('edge'), source: textNodeId, sourceHandle: 'text', target: processNodeId, targetHandle: 'text' }, eds)
-      );
 
       // imageRef 的 image1 端口允许多条连线（见 onConnect 里的
       // PROCESS_KIND_MULTI_REF 特判）——依赖的素材大多已经在上一层摆过
@@ -1277,15 +1268,6 @@ function LabCanvasInner() {
     return { dx: step * 36, dy: step * 28 };
   }, []);
 
-  const handleAddText = () => {
-    const { dx, dy } = nextSpawnOffset();
-    const center = wrapperRef.current
-      ? screenToFlowPosition({ x: wrapperRef.current.clientWidth / 2 + dx, y: wrapperRef.current.clientHeight / 2 + dy })
-      : { x: 200 + dx, y: 200 + dy };
-    addNode({ id: nextNodeId('text'), type: 'text', position: center, data: { text: '' } });
-    setOpenMenu(null);
-  };
-
   const handleAddProcess = (kind: ProcessKind) => {
     const { dx, dy } = nextSpawnOffset();
     const center = wrapperRef.current
@@ -1328,15 +1310,6 @@ function LabCanvasInner() {
         </ReactFlow>
 
         <div className="lab-toolrail">
-          <button
-            type="button"
-            className="lab-toolrail-btn lab-toolrail-btn--text"
-            title={t('director.lab.addText')}
-            onClick={handleAddText}
-          >
-            {plusIcon}
-          </button>
-
           <div className="lab-toolrail-item">
             <button
               type="button"
