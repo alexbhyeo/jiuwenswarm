@@ -259,7 +259,9 @@
       "skillSetDefault": "Set as default",
       "skillSetDefaultHint": "Use this skill as the assistant's base instructions (takes effect next turn); it becomes always-on and leaves this list",
       "skillSetDefaultUnavailable": "Not installed in the workspace (body unreadable) — cannot be set as default",
-      "skillSetDefaultBusy": "Switching…"
+      "skillSetDefaultBusy": "Switching…",
+      "minimizeHint": "Minimize edit assistant",
+      "restoreHint": "Restore edit assistant"
     }
   },
   "applicationPlugins": {

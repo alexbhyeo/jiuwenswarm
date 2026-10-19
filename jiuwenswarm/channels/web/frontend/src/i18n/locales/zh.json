@@ -259,7 +259,9 @@
       "skillSetDefault": "设为默认",
       "skillSetDefaultHint": "把这个技能作为剪辑助手的基础说明（下一轮生效），它本身改为始终加载、不再出现在这里",
       "skillSetDefaultUnavailable": "该技能未安装到工作区（读不到正文），不能设为默认",
-      "skillSetDefaultBusy": "切换中…"
+      "skillSetDefaultBusy": "切换中…",
+      "minimizeHint": "最小化剪辑助手",
+      "restoreHint": "展开剪辑助手"
     }
   },
   "applicationPlugins": {

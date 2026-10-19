@@ -2870,6 +2870,41 @@
   overflow: hidden;
 }
 
+/* 最小化后容器只需要包住那一颗胶囊按钮，不再占满画布右侧一整条——否则
+   即使视觉上只剩一颗按钮，这块隐形的 360px 宽、顶到底的区域仍然会挡住
+   底下画布的点击/拖拽。用 :has() 检测子节点是不是折叠态的胶囊按钮来
+   整体切换，不需要从父组件（LabCanvas）往下传折叠状态。 */
+.lab-edit-chat-overlay:has(.director-edit-chat-collapsed-pill) {
+  inset: auto 16px 16px auto;
+  width: auto;
+  height: auto;
+  border: none;
+  border-radius: var(--d-radius-full);
+  box-shadow: none;
+  overflow: visible;
+}
+
+.director-edit-chat-collapsed-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 16px;
+  border: 1px solid var(--d-border-default);
+  border-radius: var(--d-radius-full);
+  background: var(--d-bg-card);
+  color: var(--d-text-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: var(--d-shadow-lg);
+  cursor: pointer;
+}
+
+.director-edit-chat-collapsed-pill:hover {
+  border-color: var(--d-border-strong);
+  color: var(--d-accent);
+}
+
 /* -- 悬浮工具栏（左侧竖排图标按钮 + 添加菜单） -- */
 
 .lab-toolrail {

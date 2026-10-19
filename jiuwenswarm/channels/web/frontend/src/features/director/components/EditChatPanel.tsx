@@ -47,6 +47,19 @@ const skillIcon = (
   </svg>
 );
 
+const minimizeIcon = (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round">
+    <path d="M5 19h14" />
+  </svg>
+);
+
+const agentPillIcon = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3v3M12 18v3M3 12h3M18 12h3M6.3 6.3l2 2M15.7 15.7l2 2M17.7 6.3l-2 2M8.3 15.7l-2 2" />
+    <circle cx="12" cy="12" r="3.2" />
+  </svg>
+);
+
 // 超过这个字符数的助手消息默认折叠，提供"展开/收起"——与参考截图里长消息
 // 的处理方式一致，避免一次规划性长回复把对话区撑得很长。
 const EXPAND_THRESHOLD = 260;
@@ -147,6 +160,9 @@ export function EditChatPanel() {
   const setAssistantSkillDefault = useDirectorStore((s) => s.setAssistantSkillDefault);
   const setSkillNames = useDirectorStore((s) => s.setEditChatSkillNames);
 
+  // 最小化是画布视口层面的偏好，不是某个项目的数据——切换项目不重置，只有
+  // 用户自己点一下小圆点才收起/展开。
+  const [collapsed, setCollapsed] = useState(false);
   const [expandedIndexes, setExpandedIndexes] = useState<Set<number>>(new Set());
   const [atMenu, setAtMenu] = useState<AtMenuState | null>(null);
   const [highlightIndex, setHighlightIndex] = useState(0);
@@ -337,6 +353,21 @@ export function EditChatPanel() {
     }
   };
 
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        className="director-edit-chat-collapsed-pill"
+        title={t('director.editChat.restoreHint')}
+        onClick={() => setCollapsed(false)}
+        data-testid="director-edit-chat-collapsed-pill"
+      >
+        {agentPillIcon}
+        {t('director.editChat.title')}
+      </button>
+    );
+  }
+
   if (!project) {
     return (
       <div className="director-edit-chat director-edit-chat--empty">
@@ -372,6 +403,15 @@ export function EditChatPanel() {
             onClick={() => actions.buildFlowFromChat()}
           >
             {flowIcon}
+          </button>
+          <button
+            type="button"
+            className="director-edit-chat-build-flow-btn"
+            title={t('director.editChat.minimizeHint')}
+            onClick={() => setCollapsed(true)}
+            data-testid="director-edit-chat-minimize-btn"
+          >
+            {minimizeIcon}
           </button>
           {skillMenuOpen && (
             <div className="director-edit-chat-skills-menu" data-testid="director-edit-chat-skills-menu">
