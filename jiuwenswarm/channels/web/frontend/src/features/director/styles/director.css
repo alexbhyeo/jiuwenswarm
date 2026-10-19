@@ -2615,6 +2615,13 @@
   min-width: 220px;
 }
 
+/* "@" 下拉（.director-at-menu）用 position:absolute; top:100% 贴在最近的
+   已定位祖先下面——包一层紧贴 textarea 的容器，让下拉紧跟在输入框正下方，
+   而不是贴到整张卡片（含标题栏）下面。 */
+.lab-node-text-edit-wrap {
+  position: relative;
+}
+
 .lab-node-textarea {
   display: block;
   width: 100%;
@@ -2635,6 +2642,52 @@
 
 .lab-node-textarea::placeholder {
   color: var(--d-text-placeholder);
+}
+
+/* 未编辑时的渲染态：和 textarea 同样的内边距/字号，让点进去编辑时内容不
+   跳动；"@名称" 命中图片/角色素材的部分渲染成带缩略图的 chip（见
+   TextNode.tsx 的 renderWithImageChips），命中不到或类型不对的仍按纯
+   文本展示。 */
+.lab-node-text-display {
+  display: block;
+  width: 100%;
+  min-height: 84px;
+  padding: 10px 12px;
+  border-radius: 0 0 var(--d-radius-lg) var(--d-radius-lg);
+  color: var(--d-text-primary);
+  font: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
+}
+
+.lab-node-text-display:hover {
+  background: var(--d-bg-hover);
+}
+
+.lab-node-text-placeholder {
+  color: var(--d-text-placeholder);
+}
+
+.lab-node-text-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px 1px 2px;
+  margin: 0 1px;
+  border-radius: var(--d-radius-full);
+  background: var(--d-accent-soft);
+  color: var(--d-accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.lab-node-text-chip img {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
 }
 
 /* -- 处理节点（Process Node） -- */
