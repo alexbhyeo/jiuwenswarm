@@ -33,6 +33,11 @@ interface PendingGeneration {
 
 interface DirectorState {
   activeTab: DirectorTabKey;
+  // 左侧"导演模式"面板（项目列表/素材库）的折叠态——点击全局导航栏的
+  // "导演"图标在已经处于导演模式时触发（见 App.tsx handleNavigate），
+  // 给 创作/实验室/剪辑 让出更多宽度，不影响 activeTab/selectedProjectId
+  // 等其它状态。
+  railCollapsed: boolean;
   projects: DirectorProject[];
   projectsLoading: boolean;
   projectsError: string | null;
@@ -48,6 +53,7 @@ interface DirectorState {
   pendingGeneration: PendingGeneration | null;
 
   setActiveTab: (tab: DirectorTabKey) => void;
+  toggleRailCollapsed: () => void;
   loadProjects: () => Promise<void>;
   createProject: (name: string) => Promise<DirectorProject | null>;
   renameProject: (projectId: string, name: string) => Promise<void>;
@@ -132,6 +138,7 @@ function stopPolling(): void {
 
 export const useDirectorStore = create<DirectorState>((set, get) => ({
   activeTab: 'create',
+  railCollapsed: false,
   projects: [],
   projectsLoading: false,
   projectsError: null,
@@ -167,6 +174,7 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
     set((s) => ({ editTimelineByProject: { ...s.editTimelineByProject, [projectId]: snapshot } })),
 
   setActiveTab: (tab) => set({ activeTab: tab }),
+  toggleRailCollapsed: () => set((s) => ({ railCollapsed: !s.railCollapsed })),
 
   loadProjects: async () => {
     set({ projectsLoading: true, projectsError: null });

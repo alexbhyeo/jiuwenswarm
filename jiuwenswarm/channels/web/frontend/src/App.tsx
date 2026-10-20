@@ -15,6 +15,7 @@ import { SkillPanel } from './components/SkillPanel';
 import { AgentManagementPanel } from './components/AgentManagementPanel';
 import { RsiPage } from './features/rsi/RsiPage';
 import { DirectorPage } from './features/director/DirectorPage';
+import { useDirectorStore } from './features/director/directorStore';
 import {
   normalizeRSIEnabled,
   setRSIFeatureEnabled,
@@ -3416,6 +3417,13 @@ function AppContent({
 
   const handleNavigate = useCallback(
     (nav: MainNavKey) => {
+      // 已经在导演模式里再点一次"导演"图标——不是导航（已经在这个 tab
+      // 了），而是折叠/展开"导演模式"左侧面板（项目列表/素材库），给
+      // 创作/实验室/剪辑让出更多宽度。
+      if (nav === 'director' && activeNav === 'director') {
+        useDirectorStore.getState().toggleRailCollapsed();
+        return;
+      }
       if (
         activeNav === 'settings' &&
         nav !== 'settings' &&

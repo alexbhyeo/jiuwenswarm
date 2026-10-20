@@ -9,6 +9,7 @@ import './styles/director.css';
 
 export function DirectorPage() {
   const activeTab = useDirectorStore((s) => s.activeTab);
+  const railCollapsed = useDirectorStore((s) => s.railCollapsed);
   const projects = useDirectorStore((s) => s.projects);
   const selectedProject = useDirectorStore(
     (s) => s.projects.find((p) => p.project_id === s.selectedProjectId) ?? null
@@ -23,12 +24,14 @@ export function DirectorPage() {
 
   return (
     <div className="director-page">
-      <DirectorRail
-        projects={projects}
-        selectedProject={selectedProject}
-        onNewProject={() => setRailDialogOpen(true)}
-        onSelectProject={selectProject}
-      />
+      {!railCollapsed && (
+        <DirectorRail
+          projects={projects}
+          selectedProject={selectedProject}
+          onNewProject={() => setRailDialogOpen(true)}
+          onSelectProject={selectProject}
+        />
+      )}
       <div className="director-detail">
         {activeTab === 'create' && <CreationHomeTab />}
         {activeTab === 'lab' && <LabTabShell />}
