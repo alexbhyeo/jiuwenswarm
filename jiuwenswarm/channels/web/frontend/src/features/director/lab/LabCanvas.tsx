@@ -780,9 +780,17 @@ function LabCanvasInner() {
     // 不依赖任何上一个输出的素材，各自独立占一整组（参考图/处理/输出三列
     // ——文字提示不再占一列，见下面 processData.prompt）纵向摞下去；依赖
     // 别的素材输出的（引用了它的 图片参考/首尾帧），改成在依赖的那一组
-    // 右边再开一组横向摆——GROUP_STEP 是一整组三列的宽度
-    // 再加安全间距，保证下一组的文字列不会撞到上一组输出列的卡片。
-    const GROUP_STEP = 1080;
+    // 右边再开一组横向摆。下一组的参考列绝大多数时候不会真的摆出卡片——
+    // ensureImageRefNode 会直接复用依赖的那张输出卡片（见该函数注释），
+    // 空出来的参考列原样占着位置的话，"依赖的输出卡片" 到 "下一组的处理
+    // 卡片" 就会凭空多出一整列的间距，跟组内 参考→处理/处理→输出 的 360
+    // 间距对不上（实测会看到忽窄忽宽、两条不一样宽的间距交替出现）。这里
+    // GROUP_STEP 取 720（= COL_PROCESS_X - COL_OUTPUT_X 的绝对值 ×2，也就是
+    // 组内一列的宽度），让"依赖的输出列"与"下一组的参考列"算出来正好落在
+    // 同一个 x——参考复用时直接接上、不留空列，各组间距跟组内一样均匀；
+    // 真有全新参考图需要新开一列的少数情况，就接受它跟上一组输出列共用
+    // 同一列 x（不同 y，不会互相遮挡），换来摆得更多的"复用"情形间距一致。
+    const GROUP_STEP = 720;
     // 画布刚清空，从顶部开始摆。
     let rowY = 60;
 
@@ -993,17 +1001,19 @@ function LabCanvasInner() {
       return depth;
     };
 
-    // 同一层内避免多个素材的 y 算出来太接近而叠在一起——逐个登记已经用过
-    // 的 y，冲突就顺延一整行高度。
-    const usedYByDepth = new Map<number, number[]>();
+    // 同一层内避免多个素材的 y 算出来太接近而叠在一起——按"离上一张卡片至少
+    // 一个 ROW_HEIGHT"单调往下顺延，而不是拿 desired 挨个跟所有已登记的 y
+    // 比对、冲突就各自反复 +ROW_HEIGHT（那种写法在多图参考场景——好几张
+    // 卡片的依赖均值彼此很接近——会连续顺延好几次，叠加出比 ROW_HEIGHT
+    // 大得多、而且彼此不一致的间距，参考列和处理列的间距因此对不上）。
+    // 只登记"上一次分到的 y"，新的一张只要不比它再往下一个 ROW_HEIGHT
+    // 就直接顺延到这个下限，离得够远（desired 本来就比它靠后）就还是用
+    // desired——既保证不重叠，也保证间距跟素材列一样稳定。
+    const lastYByDepth = new Map<number, number>();
     const claimY = (depth: number, desired: number): number => {
-      const used = usedYByDepth.get(depth) ?? [];
-      let y = desired;
-      while (used.some((u) => Math.abs(u - y) < ROW_HEIGHT)) {
-        y += ROW_HEIGHT;
-      }
-      used.push(y);
-      usedYByDepth.set(depth, used);
+      const last = lastYByDepth.get(depth);
+      const y = last === undefined ? desired : Math.max(desired, last + ROW_HEIGHT);
+      lastYByDepth.set(depth, y);
       return y;
     };
 
