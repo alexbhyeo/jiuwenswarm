@@ -746,10 +746,18 @@ function LabCanvasInner() {
 
     const assetById = new Map(project.assets.map((a) => [a.asset_id, a]));
 
-    // 从画布现有节点里预先建好两张索引表，新摆的内容也会持续写入这两张
-    // 表——之后同一次调用里更晚的素材，既能查到"这个素材本身摆过没"，
-    // 也能查到"这个文件路径对应哪个可以复用的图片节点"（同一张设计图，
-    // 既是自己那一行的输出，也可能是下一行的参考图输入）。
+    // 每次点"生成实验室流程图"都先把画布上全部的素材卡片/处理卡片清空，
+    // 再按聊天记录整体重建一遍——不再是"只摆没摆过的素材"的增量模式，
+    // 这样聊天记录里素材被删掉/重新生成之后，画布不会留下一张对不上的
+    // 旧卡片。
+    setNodes([]);
+    setEdges([]);
+
+    // 画布已经清空，下面几张索引表不需要再从旧节点里预先填——全部由这
+    // 次重建过程中新摆出来的节点现填（见下面 ensureImageRefNode 等函数），
+    // 同一次调用里更晚的素材既能查到"这个素材本身摆过没"，也能查到"这个
+    // 文件路径对应哪个可以复用的图片节点"（同一张设计图，既是自己那一行
+    // 的输出，也可能是下一行的参考图输入）。
     const outputNodeIdByAsset = new Map<string, string>();
     const imageNodeIdByPath = new Map<string, string>();
     // 视频卡片也能当输入（视频生音频的 video1 端口），所以要单独一张
@@ -759,22 +767,11 @@ function LabCanvasInner() {
     // 音频卡片也能当输入（图音生视频的 audio1 端口），同样单独一张表。
     const audioNodeIdByPath = new Map<string, string>();
     // 素材 id -> 它在画布上的 y 坐标——用来给"依赖上一个输出"的素材算摆放
-    // 位置（取它依赖的那些素材的 y 均值），既覆盖这次新摆的素材，也覆盖
-    // 已经在画布上、来自更早一次 build 的素材。
+    // 位置（取它依赖的那些素材的 y 均值）。
     const assetY = new Map<string, number>();
-    for (const n of getNodes()) {
-      const d = n.data as { assetId?: string | null; filePath?: string } | undefined;
-      if (d?.assetId) {
-        outputNodeIdByAsset.set(d.assetId, n.id);
-        assetY.set(d.assetId, n.position.y);
-      }
-      if (n.type === 'image' && d?.filePath) imageNodeIdByPath.set(d.filePath, n.id);
-      if (n.type === 'video' && d?.filePath) videoNodeIdByPath.set(d.filePath, n.id);
-      if (n.type === 'audio' && d?.filePath) audioNodeIdByPath.set(d.filePath, n.id);
-    }
 
-    const newAssetIds = orderedAssetIds.filter((id) => !outputNodeIdByAsset.has(id));
-    if (newAssetIds.length === 0) return; // 已经全部摆过，不重复摆
+    // 画布已经整体清空，聊天记录里出现过的素材这次都要重新摆一遍。
+    const newAssetIds = orderedAssetIds;
 
     const ROW_HEIGHT = 260;
     const COL_REF_X = 60;
@@ -786,9 +783,8 @@ function LabCanvasInner() {
     // 右边再开一组横向摆——GROUP_STEP 是一整组三列的宽度
     // 再加安全间距，保证下一组的文字列不会撞到上一组输出列的卡片。
     const GROUP_STEP = 1080;
-    // 接到已有画布的下方，不覆盖用户手动摆放的内容。
-    const existingMaxY = getNodes().reduce((max, n) => Math.max(max, n.position.y), 0);
-    let rowY = existingMaxY > 0 ? existingMaxY + ROW_HEIGHT : 60;
+    // 画布刚清空，从顶部开始摆。
+    let rowY = 60;
 
     const ensureImageRefNode = (filePath: string, x: number, y: number): string => {
       const existing = imageNodeIdByPath.get(filePath);
@@ -1171,7 +1167,7 @@ function LabCanvasInner() {
       if (outputType === 'image') imageNodeIdByPath.set(asset.file_path as string, outputNodeId);
       if (outputType === 'audio') audioNodeIdByPath.set(asset.file_path as string, outputNodeId);
     }
-  }, [selectedProjectId, getNodes, addNode, setEdges]);
+  }, [selectedProjectId, setNodes, addNode, setEdges]);
 
   // 画布持久化分两层：
   //
