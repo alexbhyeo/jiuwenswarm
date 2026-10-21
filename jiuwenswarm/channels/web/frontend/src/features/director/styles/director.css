@@ -2993,6 +2993,59 @@
   line-height: 1.4;
 }
 
+/* 处理卡片"已生成"态——卡片与它的产物合并成一张之后，媒体预览/切换条/
+   命名行就挂在参数区下方、生成按钮上方，复用独立输出卡片已有的
+   .lab-node-media(--video/--audio)/.lab-node-name 样式（选择器本身没有
+   限定父级，直接按类名生效）。一条分隔线把它和上面的参数区分开，
+   呼应 .lab-node-error 的留白节奏。 */
+.lab-node-process-output {
+  margin: 4px 8px 0;
+  border-top: 1px solid var(--d-border-default);
+  padding-top: 8px;
+}
+
+.lab-node-process-output .lab-node-media {
+  border-radius: var(--d-radius-sm);
+}
+
+.lab-node-history-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 6px 0 2px;
+}
+
+.lab-node-history-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: var(--d-radius-full);
+  background: var(--d-bg-shell);
+  color: var(--d-text-secondary);
+  cursor: pointer;
+}
+
+.lab-node-history-btn:hover:not(:disabled) {
+  background: var(--d-bg-hover);
+  color: var(--d-text-primary);
+}
+
+.lab-node-history-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.lab-node-history-position {
+  font-size: 11px;
+  color: var(--d-text-secondary);
+  min-width: 28px;
+  text-align: center;
+}
+
 .lab-node-generate-btn {
   display: flex;
   align-items: center;

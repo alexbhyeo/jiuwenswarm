@@ -47,6 +47,11 @@ export interface LabActions {
    *  用户自己上传的图片，同时让后续引用这个名字的处理卡片自动接上换后
    *  的图片。 */
   swapImage: (nodeId: string, file: File) => void;
+  /** 切换处理卡片当前展示/生效的产物——挪动 data.activeHistoryIndex，不
+   *  删除其它历史记录，可以来回切换。切换后卡片顶层的 assetId/filePath/
+   *  name 镜像字段也会跟着更新，下游连到这张卡片的 image1/image2/video1/
+   *  audio1 端口因此自动读到新切到的这一条产物。 */
+  swapHistory: (nodeId: string, newIndex: number) => void;
 }
 
 const LabActionsContext = createContext<LabActions | null>(null);

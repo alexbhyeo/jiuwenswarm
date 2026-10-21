@@ -3,6 +3,7 @@ import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLabActions } from '../LabActionsContext';
 import type { ImageNodeData } from '../labTypes';
+import { MediaFrame } from './MediaFrame';
 import { NodeNameLabel } from './NodeNameLabel';
 
 const enlargeIcon = (
@@ -23,10 +24,6 @@ const swapIcon = (
   </svg>
 );
 
-function rawFileUrl(path: string): string {
-  return `/file-api/raw-file?path=${encodeURIComponent(path)}`;
-}
-
 export function ImageNode({ id, data }: NodeProps & { data: ImageNodeData }) {
   const { t } = useTranslation();
   const actions = useLabActions();
@@ -37,7 +34,7 @@ export function ImageNode({ id, data }: NodeProps & { data: ImageNodeData }) {
     <div className="lab-node lab-node--image">
       <div className="lab-node-label">{t('director.lab.refImage')}</div>
       <div className="lab-node-media">
-        <img ref={imgRef} src={rawFileUrl(data.filePath)} alt={data.name} className="nodrag" />
+        <MediaFrame ref={imgRef} mode="image" filePath={data.filePath} name={data.name} className="nodrag" />
         <div className="lab-node-media-actions">
           <button type="button" title={t('director.enlarge')} onClick={() => imgRef.current?.requestFullscreen?.()}>
             {enlargeIcon}

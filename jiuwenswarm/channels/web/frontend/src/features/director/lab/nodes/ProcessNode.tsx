@@ -17,6 +17,8 @@ import {
   PROCESS_KIND_MULTI_REF,
   supportsAudioOutput,
 } from '../labTypes';
+import { MediaFrame } from './MediaFrame';
+import { NodeNameLabel } from './NodeNameLabel';
 import { PromptTextarea } from './PromptTextarea';
 import { renderWithImageChips } from './promptChips';
 
@@ -46,6 +48,24 @@ const chevronDown = (
 const closeIcon = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round">
     <path d="M18 6 6 18M6 6l12 12" />
+  </svg>
+);
+
+const chevronLeftIcon = (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round">
+    <path d="m15 18-6-6 6-6" />
+  </svg>
+);
+
+const chevronRightIcon = (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round">
+    <path d="m9 18 6-6-6-6" />
+  </svg>
+);
+
+const swapIcon = (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17 3l4 4-4 4M21 7H7M7 21l-4-4 4-4M3 17h14" />
   </svg>
 );
 
@@ -111,6 +131,13 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   const mode = PROCESS_KIND_MODE[data.kind];
   const outputCount = data.outputCount || 1;
   const isMultiRef = !!PROCESS_KIND_MULTI_REF[data.kind];
+
+  // 卡片与它的产物合并成一张之后，"已生成过"就是 history 非空——空＝渲染
+  // 态跟今天的处理卡片一样（提示词/参数/生成按钮）；非空＝额外展示
+  // history[activeHistoryIndex] 这一条的预览图/视频/音频 + 切换条 +
+  // "重新生成"。
+  const isGenerated = data.history.length > 0;
+  const activeEntry = data.history[data.activeHistoryIndex] ?? data.history[data.history.length - 1] ?? null;
 
   // 卡片自带的文字提示非空时优先于"文字提示"端口连线——跟下面 audioUrl/
   // videoUrl 同一个取舍，见 labTypes.ts 的 ProcessNodeData.prompt 注释。
@@ -180,6 +207,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
 
   const [paramsOpen, setParamsOpen] = useState(false);
   const paramsRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!paramsOpen) return;
@@ -232,7 +260,11 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
         : 'director.lab.audioOutputGeneratedHint';
 
   return (
-    <div className={`lab-node lab-node--process lab-node--process-${data.kind}`}>
+    <div
+      className={`lab-node lab-node--process lab-node--process-${data.kind}`}
+      data-testid="lab-process-node"
+      data-variant={isGenerated ? 'generated' : 'idle'}
+    >
       <div className="lab-node-label">
         {t(`director.lab.process.${data.kind}`)}
         <button type="button" className="lab-node-text-delete" title={t('director.delete.action')} onClick={() => actions.deleteNode(id)}>
@@ -518,26 +550,98 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
               </div>
             )}
 
-            <div className="lab-node-params-popover-section">
-              <div className="lab-node-params-popover-label">{t('director.lab.outputCountLabel')}</div>
-              <div className="lab-node-params-popover-pills">
-                {OUTPUT_COUNT_OPTIONS.map((v) => (
-                  <button
-                    type="button"
-                    key={v}
-                    className={`lab-node-param-pill ${outputCount === v ? 'lab-node-param-pill--active' : ''}`}
-                    onClick={() => actions.patchProcessNode(id, { outputCount: v })}
-                  >
-                    {v}
-                  </button>
-                ))}
+            {/* 一次生成几份独立结果只在第一次生成之前有意义——生成过以后
+                "要几份"就是画布上留几张卡片（删掉多余的即可），这个字段
+                不再被读取，继续显示只会让人以为改了它能拆分/合并已有产物。 */}
+            {!isGenerated && (
+              <div className="lab-node-params-popover-section">
+                <div className="lab-node-params-popover-label">{t('director.lab.outputCountLabel')}</div>
+                <div className="lab-node-params-popover-pills">
+                  {OUTPUT_COUNT_OPTIONS.map((v) => (
+                    <button
+                      type="button"
+                      key={v}
+                      className={`lab-node-param-pill ${outputCount === v ? 'lab-node-param-pill--active' : ''}`}
+                      onClick={() => actions.patchProcessNode(id, { outputCount: v })}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
       </div>
 
       {data.status === 'error' && data.error && <div className="lab-node-error">{data.error}</div>}
+
+      {isGenerated && activeEntry && (
+        <div className="lab-node-process-output">
+          <div className={`lab-node-media${mode === 'video' ? ' lab-node-media--video' : mode === 'audio' ? ' lab-node-media--audio' : ''}`}>
+            <MediaFrame mode={mode} filePath={activeEntry.filePath} name={activeEntry.name} className={mode === 'image' ? 'nodrag' : undefined} />
+            {/* "替换" 只对图片类卡片有意义，跟独立的 ImageNode 一样——
+                VideoNode/AudioNode 从来就没有这个按钮，合并卡片这里保持
+                同一个取舍（见 LabCanvas.handleSwapImage 的注释）。 */}
+            {mode === 'image' && (
+              <div className="lab-node-media-actions">
+                <button
+                  type="button"
+                  title={t('director.lab.swapImage')}
+                  className="nodrag"
+                  onClick={() => fileInputRef.current?.click()}
+                  data-testid="lab-process-node-swap-image"
+                >
+                  {swapIcon}
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="lab-node-swap-input"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) actions.swapImage(id, file);
+                    e.target.value = '';
+                  }}
+                />
+              </div>
+            )}
+          </div>
+          {data.history.length > 1 && (
+            <div className="lab-node-history-bar nodrag" data-testid="lab-process-node-history-bar">
+              <button
+                type="button"
+                className="lab-node-history-btn"
+                disabled={data.activeHistoryIndex <= 0}
+                title={t('director.lab.historyPrev')}
+                onClick={() => actions.swapHistory(id, data.activeHistoryIndex - 1)}
+                data-testid="lab-process-node-history-prev"
+              >
+                {chevronLeftIcon}
+              </button>
+              <span className="lab-node-history-position">
+                {data.activeHistoryIndex + 1}/{data.history.length}
+              </span>
+              <button
+                type="button"
+                className="lab-node-history-btn"
+                disabled={data.activeHistoryIndex >= data.history.length - 1}
+                title={t('director.lab.historyNext')}
+                onClick={() => actions.swapHistory(id, data.activeHistoryIndex + 1)}
+                data-testid="lab-process-node-history-next"
+              >
+                {chevronRightIcon}
+              </button>
+            </div>
+          )}
+          <NodeNameLabel
+            name={activeEntry.name}
+            fallback={t(`director.lab.process.${data.kind}`)}
+            onRename={(name) => actions.renameNode(id, name)}
+          />
+        </div>
+      )}
 
       <button
         type="button"
@@ -550,12 +654,12 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
         ) : (
           <>
             {generateIcon}
-            {t('director.lab.generate')}
+            {t(isGenerated ? 'director.lab.regenerate' : 'director.lab.generate')}
           </>
         )}
       </button>
 
-      <Handle type="source" position={Position.Right} id="out" />
+      <Handle type="source" position={Position.Right} id={mode} />
 
       {/* 用 Portal 挂到 document.body：React Flow 画布层带 CSS transform
           （平移/缩放），transform 祖先会把 position:fixed 的遮罩"收编"进

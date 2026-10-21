@@ -2,6 +2,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { useTranslation } from 'react-i18next';
 import { useLabActions } from '../LabActionsContext';
 import type { VideoNodeData } from '../labTypes';
+import { MediaFrame } from './MediaFrame';
 import { NodeNameLabel } from './NodeNameLabel';
 
 const trashIcon = (
@@ -9,10 +10,6 @@ const trashIcon = (
     <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0-.9 14a2 2 0 0 1-2 1.9H6.9a2 2 0 0 1-2-1.9L4 6" />
   </svg>
 );
-
-function rawFileUrl(path: string): string {
-  return `/file-api/raw-file?path=${encodeURIComponent(path)}`;
-}
 
 export function VideoNode({ id, data }: NodeProps & { data: VideoNodeData }) {
   const { t } = useTranslation();
@@ -22,7 +19,7 @@ export function VideoNode({ id, data }: NodeProps & { data: VideoNodeData }) {
     <div className="lab-node lab-node--video">
       <div className="lab-node-label">{t('director.categories.video')}</div>
       <div className="lab-node-media lab-node-media--video">
-        <video src={rawFileUrl(data.filePath)} controls playsInline preload="metadata" />
+        <MediaFrame mode="video" filePath={data.filePath} name={data.name} />
         <div className="lab-node-media-actions">
           <button type="button" title={t('director.delete.action')} onClick={() => actions.deleteNode(id)}>
             {trashIcon}

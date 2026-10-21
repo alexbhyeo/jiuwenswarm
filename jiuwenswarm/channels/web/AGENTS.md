@@ -149,3 +149,4 @@
 | `components/marketplace` | `marketplace` | 公共市场布局与目录缓存状态 |
 | `App.tsx` | `app` | 应用外壳;全局布局与 toast |
 | `components/ui/Select` | `ui-select` | 通用下拉选择控件 |
+| `features/director/lab` | `lab-process-node` | 实验室画布处理卡片(合并态/未生成态)、文字提示弹窗、历史切换条 |

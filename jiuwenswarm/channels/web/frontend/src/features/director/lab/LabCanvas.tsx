@@ -27,7 +27,7 @@ import { TextNode } from './nodes/TextNode';
 import { ProcessNode } from './nodes/ProcessNode';
 import { DEFAULT_AUDIO_VOICE } from '../audioVoices';
 import { DEFAULT_AUDIO_STYLE } from '../audioStyles';
-import type { ImageNodeData, ProcessKind, ProcessMode, ProcessNodeData } from './labTypes';
+import type { GenerationEntry, ImageNodeData, ProcessKind, ProcessMode, ProcessNodeData } from './labTypes';
 import {
   DEFAULT_VIDEO_BRIDGE_PROMPT,
   PROCESS_KIND_MODE,
@@ -48,14 +48,6 @@ let nodeIdCounter = 0;
 function nextNodeId(prefix: string): string {
   nodeIdCounter += 1;
   return `${prefix}_${Date.now()}_${nodeIdCounter}`;
-}
-
-// 一个处理节点开了多个输出（ProcessNodeData.outputCount）时，每个输出槽位
-// 各自独立生成、各自可能独立进入"视频还在生成中，需要轮询"的状态——用
-// "节点id:槽位序号" 而不是单纯的节点 id 做 pollTimers 的 key，避免槽位 1
-// 的轮询定时器把槽位 0 那条覆盖掉。
-function timerKey(nodeId: string, slotIndex: number): string {
-  return `${nodeId}:${slotIndex}`;
 }
 
 const IMAGE_PROCESS_KINDS: ProcessKind[] = ['text2image', 'imageRef'];
@@ -113,6 +105,16 @@ type ToolrailMenu = 'image' | 'video' | 'audio' | null;
 // onNodesChange/onEdgesChange，等操作停下来一小段时间再落盘一次，避免
 // 拖动过程中每一帧都发一次保存请求。
 const LAB_CANVAS_SAVE_DEBOUNCE_MS = 800;
+
+// 处理卡片与它的产物合并成一张之后，"已生成"态的卡片（标签+端口区+参数区+
+// 媒体预览+命名行+按钮）实测高度约 445px（文字提示弹窗 close 掉之后量的，
+// 图片/视频/多参考图三种 kind 高度一致——.lab-node-ports 的 min-height:78px
+// 统一撑住端口区，不随端口行数变化；媒体预览走固定 4:3 画框，也不随 kind
+// 变化）。buildFlowFromChat 纵向摆放同一组里的卡片（ROW_HEIGHT）、以及
+// handleGenerate 一次生成多份时纵向摆放兄弟卡片，都要按这个高度留间距，
+// 不能再沿用合并前"卡片+独立输出卡片"更矮的旧间距——沿用旧间距的话，新卡片
+// 比间距高出将近一倍，纵向相邻的两张卡片会重叠在一起。留一点余量到 480。
+const PROCESS_CARD_ROW_HEIGHT = 480;
 
 // LabTabShell 用 key={selectedProjectId} 强制在切换项目/切换 tab 时整个
 // 重新挂载 LabCanvas，所以这里只需要在"挂载那一刻"读一次初始状态。
@@ -183,23 +185,34 @@ function LabCanvasInner() {
     [setEdges, nodes]
   );
 
+  // 独立的输出卡片（image/video/audio）用自己的节点类型表明产物类型；合并
+  // 卡片（process）没有独立类型，产物类型要从它的 kind 反查
+  // PROCESS_KIND_MODE——两种卡片都能作为下游 image1/image2/video1/audio1
+  // 端口的连线来源，缺了这一分支，拖线连到一张已经生成过的合并卡片会被
+  // 判定为非法连线（已保存的连线不受影响，这只是拖线那一刻的校验）。
+  const sourceMediaType = useCallback((node: Node): ProcessMode | null => {
+    if (node.type === 'image' || node.type === 'video' || node.type === 'audio') return node.type;
+    if (node.type === 'process') return PROCESS_KIND_MODE[(node.data as ProcessNodeData).kind];
+    return null;
+  }, []);
+
   const isValidConnection = useCallback(
     (connection: Connection | Edge) => {
       const sourceNode = nodes.find((n) => n.id === connection.source);
       if (!sourceNode) return false;
       if (connection.targetHandle === 'text') return sourceNode.type === 'text';
       if (connection.targetHandle === 'image1' || connection.targetHandle === 'image2') {
-        return sourceNode.type === 'image';
+        return sourceMediaType(sourceNode) === 'image';
       }
-      // 视频生音频/视频生视频/视频连视频的输入视频端口：只接受视频输出节点。
+      // 视频生音频/视频生视频/视频连视频的输入视频端口：只接受视频产物。
       if (connection.targetHandle === 'video1' || connection.targetHandle === 'video2') {
-        return sourceNode.type === 'video';
+        return sourceMediaType(sourceNode) === 'video';
       }
-      // 图音生视频的参考音频端口：只接受音频输出节点。
-      if (connection.targetHandle === 'audio1') return sourceNode.type === 'audio';
+      // 图音生视频的参考音频端口：只接受音频产物。
+      if (connection.targetHandle === 'audio1') return sourceMediaType(sourceNode) === 'audio';
       return true;
     },
-    [nodes]
+    [nodes, sourceMediaType]
   );
 
   const handleUpdateText = useCallback(
@@ -211,8 +224,21 @@ function LabCanvasInner() {
 
   const handleRenameNode = useCallback(
     (nodeId: string, name: string) => {
-      setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, name } } : n)));
-      // 有真实素材（assetId）的输出节点，改名要同步回后端的 DirectorAsset——
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (n.id !== nodeId) return n;
+          if (n.type === 'process') {
+            // 合并卡片改名要同时改两处：扁平镜像字段（下游连线/这里立刻
+            // 读到的都是它）和 history 里那一条自己的 name——不然切换到
+            // 另一条历史记录再切回来，名字又变回生成时的旧名字。
+            const data = n.data as ProcessNodeData;
+            const history = data.history.map((entry, i) => (i === data.activeHistoryIndex ? { ...entry, name } : entry));
+            return { ...n, data: { ...data, name, history } };
+          }
+          return { ...n, data: { ...n.data, name } };
+        })
+      );
+      // 有真实素材（assetId）的卡片，改名要同步回后端的 DirectorAsset——
       // 不然画布上看到的名字和素材面板/composer 的 "@名称" 引用两边会对不
       // 上（画布这边改了，素材那边还是旧名字，"@新名字" 反而引用不到）。
       const assetId = (nodes.find((n) => n.id === nodeId)?.data as { assetId?: string | null } | undefined)?.assetId;
@@ -223,18 +249,25 @@ function LabCanvasInner() {
     [setNodes, nodes, selectedProjectId]
   );
 
-  // 用本地上传的图片文件替换一张图片节点（通常是某个处理卡片生成出来的
-  // 结果）的实际内容——保留这张卡片原来的名字不变，并把新上传的素材同步
-  // 改成同一个名字，这样后续处理卡片的 "@名字" 引用（find_asset_by_name
-  // 同名取 updated_at 最新的一条）会落到刚换上来的这张图，画布上直接连线
-  // 引用它的下游卡片也会因为节点 id 不变、只是 data.filePath 更新而自动
-  // 生效——两条路径都不需要用户再手动去重新接一次线。
+  // 用本地上传的图片文件替换一张图片卡片（独立的参考卡片，或者合并卡片
+  // 展示的那一条历史记录）的实际内容——保留这张卡片原来的名字不变，并把
+  // 新上传的素材同步改成同一个名字，这样后续处理卡片的 "@名字" 引用
+  // （find_asset_by_name 同名取 updated_at 最新的一条）会落到刚换上来的
+  // 这张图，画布上直接连线引用它的下游卡片也会因为节点 id 不变、只是
+  // filePath 更新而自动生效——两条路径都不需要用户再手动去重新接一次线。
+  //
+  // "替换"只对图片类卡片有意义——独立卡片一直只有 ImageNode 带这个按钮
+  // （VideoNode/AudioNode 没有），合并卡片这里同样只在 mode==='image' 时
+  // 才生效（kind 决定 mode，见 PROCESS_KIND_MODE）。
   const handleSwapImage = useCallback(
     async (nodeId: string, file: File) => {
       if (!selectedProjectId) return;
       const node = nodes.find((n) => n.id === nodeId);
-      if (!node || node.type !== 'image') return;
-      const data = node.data as ImageNodeData;
+      if (!node) return;
+      const isMergedImageCard =
+        node.type === 'process' && PROCESS_KIND_MODE[(node.data as ProcessNodeData).kind] === 'image';
+      if (node.type !== 'image' && !isMergedImageCard) return;
+      const data = node.data as ImageNodeData | ProcessNodeData;
       const project = useDirectorStore.getState().projects.find((p) => p.project_id === selectedProjectId);
       const originalAsset = data.assetId ? project?.assets.find((a) => a.asset_id === data.assetId) : undefined;
       const assetType = originalAsset?.type === 'character' ? 'character' : 'image';
@@ -249,11 +282,25 @@ function LabCanvasInner() {
         if (!newAsset?.file_path) return;
 
         setNodes((nds) =>
-          nds.map((n) =>
-            n.id === nodeId
-              ? { ...n, data: { ...n.data, assetId: newAsset.asset_id, filePath: newAsset.file_path as string } }
-              : n
-          )
+          nds.map((n) => {
+            if (n.id !== nodeId) return n;
+            if (isMergedImageCard) {
+              // 换的是合并卡片当前展示的那一条历史记录——同时改
+              // history[activeHistoryIndex] 和扁平镜像字段，不然切到别的
+              // 历史记录再切回来，换上去的图又变回原来生成的那张。
+              const pd = n.data as ProcessNodeData;
+              const history = pd.history.map((entry, i) =>
+                i === pd.activeHistoryIndex
+                  ? { ...entry, assetId: newAsset.asset_id, filePath: newAsset.file_path as string }
+                  : entry
+              );
+              return {
+                ...n,
+                data: { ...pd, history, assetId: newAsset.asset_id, filePath: newAsset.file_path as string },
+              };
+            }
+            return { ...n, data: { ...n.data, assetId: newAsset.asset_id, filePath: newAsset.file_path as string } };
+          })
         );
 
         if (data.name) {
@@ -271,14 +318,14 @@ function LabCanvasInner() {
     (nodeId: string) => {
       setNodes((nds) => nds.filter((n) => n.id !== nodeId));
       setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
-      // 处理节点可能同时有多个槽位（timerKey(nodeId, slot)）各自在轮询——
-      // 删除这个节点要把它名下所有槽位的定时器都清掉，不只是精确匹配
-      // nodeId 本身那一个 key（那是旧的单输出实现遗留的写法）。
-      for (const key of Array.from(pollTimers.current.keys())) {
-        if (key === nodeId || key.startsWith(`${nodeId}:`)) {
-          clearTimeout(pollTimers.current.get(key));
-          pollTimers.current.delete(key);
-        }
+      // 卡片与产物合并成一张之后，一个节点 id 只对应它自己这一次正在跑
+      // 的轮询（outputCount>1 时每份独立输出各自克隆成一张独立卡片，各有
+      // 各的 id——见 handleGenerate），不会再有同一个 id 下多个槽位各自
+      // 轮询的情况，直接按 nodeId 精确清一条就够。
+      const timer = pollTimers.current.get(nodeId);
+      if (timer) {
+        clearTimeout(timer);
+        pollTimers.current.delete(nodeId);
       }
     },
     [setNodes, setEdges]
@@ -304,6 +351,11 @@ function LabCanvasInner() {
         // 参与生成参数。见 defaultGenerateAudio / supportsAudioOutput。
         generateAudio: defaultGenerateAudio(kind),
         outputCount: 1,
+        history: [],
+        activeHistoryIndex: 0,
+        assetId: null,
+        filePath: '',
+        name: '',
       };
       addNode({ id, type: 'process', position, data });
       // 视频连视频：FLF2V 只拿到两张静态图，没有提示词模型无从得知该怎么
@@ -335,170 +387,131 @@ function LabCanvasInner() {
     [setNodes]
   );
 
+  // 卡片与它的产物合并成一张之后，轮询/超时找回都是在往同一张卡片自己的
+  // history 里追加/改写一条记录，不再是另起一张独立的输出节点——pollTimers
+  // 因此直接用 nodeId 当 key（outputCount>1 时每份独立输出各自克隆成一张
+  // 独立卡片，各有各的 id，见 handleGenerate，不会有同一个 id 下多条并发
+  // 轮询互相覆盖的问题）。
   const pollOutputNode = useCallback(
-    (processNodeId: string, outputNodeId: string, projectId: string, assetId: string, jobId: string, slotIndex: number) => {
-      const key = timerKey(processNodeId, slotIndex);
+    (nodeId: string, historyIndex: number, projectId: string, assetId: string, jobId: string) => {
       const timer = setTimeout(async () => {
         try {
           const { directorGenerateCheckStatus } = await import('../directorApi');
           const { status, project } = await directorGenerateCheckStatus(projectId, assetId, jobId);
           const asset = project.assets.find((a) => a.asset_id === assetId);
           if (status === 'pending') {
-            pollOutputNode(processNodeId, outputNodeId, projectId, assetId, jobId, slotIndex);
+            pollOutputNode(nodeId, historyIndex, projectId, assetId, jobId);
             return;
           }
-          pollTimers.current.delete(key);
+          pollTimers.current.delete(nodeId);
           void useDirectorStore.getState().loadProjects();
           if (status === 'failed') {
-            setProcessNodeState(processNodeId, { status: 'error', error: asset?.error || t('director.lab.generateFailed') });
+            setProcessNodeState(nodeId, { status: 'error', error: asset?.error || t('director.lab.generateFailed') });
             return;
           }
-          setProcessNodeState(processNodeId, { status: 'idle' });
+          setProcessNodeState(nodeId, { status: 'idle' });
+          if (!asset?.file_path) return;
           setNodes((nds) =>
-            nds.map((n) =>
-              n.id === outputNodeId && asset?.file_path
-                ? { ...n, data: { ...n.data, filePath: asset.file_path, name: asset.name || asset.prompt } }
-                : n
-            )
+            nds.map((n) => {
+              if (n.id !== nodeId) return n;
+              const data = n.data as ProcessNodeData;
+              const history = data.history.map((entry, i) =>
+                i === historyIndex ? { ...entry, filePath: asset.file_path as string, name: asset.name || asset.prompt || entry.name } : entry
+              );
+              // 轮询这段时间里用户可能已经切到了另一条历史记录——这时只
+              // 更新 history 里那一条自己的记录，不去动当前正展示的扁平
+              // 镜像字段（否则预览会在用户切走之后又被偷偷切回来）。
+              const stillActive = data.activeHistoryIndex === historyIndex;
+              return {
+                ...n,
+                data: {
+                  ...data,
+                  history,
+                  ...(stillActive ? { filePath: asset.file_path, name: asset.name || asset.prompt || data.name } : {}),
+                },
+              };
+            })
           );
         } catch (e) {
-          pollTimers.current.delete(key);
+          pollTimers.current.delete(nodeId);
           const message = e instanceof Error ? e.message : String(e);
-          setProcessNodeState(processNodeId, { status: 'error', error: message });
+          setProcessNodeState(nodeId, { status: 'error', error: message });
         }
       }, 5000);
-      pollTimers.current.set(key, timer);
+      pollTimers.current.set(nodeId, timer);
     },
     [setNodes, setProcessNodeState, t]
   );
 
-  // 按 slotIndex 取出这个处理节点当前已有的第 N 个输出节点——多个输出时，
-  // "out" 端口会扇出多条边，边本身不带顺序，靠每个输出节点 data.slotIndex
-  // （创建时写入）排序后按位置取。
-  const getExistingOutputNodesSorted = useCallback(
-    (nodeId: string): Node[] => {
-      const outEdges = getEdges().filter((e) => e.source === nodeId && e.sourceHandle === 'out');
-      return outEdges
-        .map((e) => getNodes().find((n) => n.id === e.target))
-        .filter((n): n is Node => !!n)
-        .sort((a, b) => (((a.data as { slotIndex?: number }).slotIndex ?? 0) - ((b.data as { slotIndex?: number }).slotIndex ?? 0)));
-    },
-    [getEdges, getNodes]
-  );
-
-  // outputCount 调小时，把多出来的那些槽位对应的旧输出节点删掉——比如从
-  // 5 改成 2，槽位 2/3/4 的三张旧卡片不该继续留在画布上。
-  const pruneExtraOutputSlots = useCallback(
-    (nodeId: string, keepCount: number) => {
-      const existing = getExistingOutputNodesSorted(nodeId);
-      for (const node of existing.slice(keepCount)) {
-        handleDeleteNode(node.id);
-      }
-    },
-    [getExistingOutputNodesSorted, handleDeleteNode]
-  );
-
-  // 把"生成结果"接到处理节点第 slotIndex 个输出槽位——同一个槽位再次生成
-  // 时就地替换已有的输出节点，而不是每次都在画布上再摞一张新卡片；不同
-  // 槽位各自独立成一个输出节点，从同一个 "out" 端口扇出多条连线。
-  // handleGenerate 的正常成功路径、和下面 recoverFromGenerateTimeout 从
-  // 超时里"捞回"迟到结果的路径，都要做这同一件事，所以抽成共享函数。
+  // 把一次生成结果追加进这张卡片自己的 history，指针指向新追加的这一条
+  // ——不再是"找/建一个独立输出节点"，卡片自己就是产物。handleGenerate
+  // 的正常成功路径、和下面 recoverFromGenerateTimeout 从超时里"捞回"迟到
+  // 结果的路径，都要做这同一件事，所以抽成共享函数。返回新记录在 history
+  // 里的下标，供调用方传给 pollOutputNode 继续跟踪这条记录。
   const applyGenerateResult = useCallback(
-    (nodeId: string, node: Node, outputAsset: DirectorAsset | undefined, slotIndex: number): string => {
-      // 产物类型决定输出节点用哪个渲染器：视频/音频各有自己的播放器，
-      // 其余（图片、角色）都走图片节点。
-      const outputType =
-        outputAsset?.type === 'video' ? 'video' : outputAsset?.type === 'audio' ? 'audio' : 'image';
-
-      // 按"这个节点自己记的 slotIndex 是否等于我要找的槽位号"查找，不能用
-      // 排序后数组的下标当槽位号——并发时各槽位落定的先后顺序是任意的
-      // （比如槽位 1 先落定、槽位 2 其次、槽位 0 最后），这时"排序后数组的
-      // 第 0 项"只是"目前已存在的节点里 slotIndex 最小的那个"（可能是槽位
-      // 1 的节点），根本不是槽位 0 自己的节点——按下标取会把槽位 0 的结果
-      // 错误地写进槽位 1 的卡片里，凭空少一张卡。
-      const existingAtSlot = getExistingOutputNodesSorted(nodeId).find(
-        (n) => ((n.data as { slotIndex?: number }).slotIndex ?? 0) === slotIndex
-      );
-      const isInPlaceUpdate = !!existingAtSlot && existingAtSlot.type === outputType;
-
-      // 就地替换同一个槽位时，沿用这张卡片已经有的名字（不管是用户手动
-      // 改的还是之前哪次生成留下的），不能被这次生成结果自己的
-      // name/prompt 顶掉——否则每次点"生成"重跑同一张卡片，名字就跟着
-      // 新一轮的提示词/空名字变来变去，用户之前起的名字（以及别处 "@名字"
-      // 的引用）就对不上了。只有真正新建一个槽位（不是就地替换）时才用
-      // 生成结果自身的 name/prompt 当默认名字。
-      const preservedName = isInPlaceUpdate ? ((existingAtSlot!.data as { name?: string }).name ?? '') : '';
-      const outputData = {
+    (nodeId: string, outputAsset: DirectorAsset | undefined): number => {
+      const current = getNodes().find((n) => n.id === nodeId);
+      const data = current?.data as ProcessNodeData | undefined;
+      // 沿用这张卡片已经有的名字（不管是用户手动改的还是之前哪次生成留下
+      // 的），不能被这次生成结果自己的 name/prompt 顶掉——否则每次点"重新
+      // 生成"，名字就跟着新一轮的提示词/空名字变来变去，用户之前起的名字
+      // （以及别处 "@名字" 的引用）就对不上了。
+      const pinnedName = data?.name || '';
+      const entry: GenerationEntry = {
         assetId: outputAsset?.asset_id ?? null,
         filePath: outputAsset?.file_path ?? '',
-        name: preservedName || outputAsset?.name || outputAsset?.prompt || '',
-        slotIndex,
+        name: pinnedName || outputAsset?.name || outputAsset?.prompt || '',
       };
-
       // 沿用的名字如果和这次生成结果本身的名字不一样（每次生成在后端都是
       // 一条全新的 DirectorAsset，name 默认是空的），把新素材也同步改成
       // 同一个名字——"@名字" 引用（find_asset_by_name 同名取 updated_at
-      // 最新的一条）才能落到刚生成的这张新图，而不是继续指向旧图。
-      if (preservedName && outputAsset?.asset_id && preservedName !== outputAsset.name && selectedProjectId) {
-        void useDirectorStore.getState().renameAsset(selectedProjectId, outputAsset.asset_id, preservedName);
+      // 最新的一条）才能落到刚生成的这条新记录，而不是继续指向旧的。
+      if (pinnedName && outputAsset?.asset_id && pinnedName !== outputAsset.name && selectedProjectId) {
+        void useDirectorStore.getState().renameAsset(selectedProjectId, outputAsset.asset_id, pinnedName);
       }
-
-      let outputNodeId: string;
-      if (isInPlaceUpdate) {
-        outputNodeId = existingAtSlot!.id;
-        setNodes((nds) => nds.map((n) => (n.id === outputNodeId ? { ...n, data: outputData } : n)));
-      } else {
-        if (existingAtSlot) {
-          handleDeleteNode(existingAtSlot.id);
-        }
-        outputNodeId = nextNodeId('out');
-        addNode({
-          id: outputNodeId,
-          type: outputType,
-          // 多个输出纵向错开摆放，避免互相重叠——图片/视频输出卡片实际
-          // 高度约 220px（标签行 + 4:3 媒体预览 + 名称行），间距必须大于
-          // 卡片高度，否则相邻输出会视觉重叠，下层卡片的按钮也会被上层
-          // 卡片的 DOM 遮住而无法点击。
-          position: { x: node.position.x + 360, y: node.position.y + slotIndex * 240 },
-          data: outputData,
-        });
-        setEdges((eds) =>
-          addEdge(
-            {
-              id: nextNodeId('edge'),
-              source: nodeId,
-              sourceHandle: 'out',
-              target: outputNodeId,
-              targetHandle: 'in',
-            },
-            eds
-          )
-        );
-      }
-      return outputNodeId;
+      const history = [...(data?.history ?? []), entry];
+      const newIndex = history.length - 1;
+      setNodes((nds) =>
+        nds.map((n) =>
+          n.id === nodeId
+            ? { ...n, data: { ...n.data, history, activeHistoryIndex: newIndex, assetId: entry.assetId, filePath: entry.filePath, name: entry.name } }
+            : n
+        )
+      );
+      return newIndex;
     },
-    [getExistingOutputNodesSorted, setNodes, addNode, setEdges, handleDeleteNode, selectedProjectId]
+    [getNodes, setNodes, selectedProjectId]
+  );
+
+  // 切换这张卡片当前展示/生效的产物——只挪指针，不删除其它历史记录，
+  // 可以来回切换；下游连到这张卡片 image1/image2/video1/audio1 端口的
+  // 卡片会因为扁平镜像字段变了而自动读到新切到的这一条。
+  const handleSwapHistory = useCallback(
+    (nodeId: string, newIndex: number) => {
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (n.id !== nodeId) return n;
+          const data = n.data as ProcessNodeData;
+          const clamped = Math.max(0, Math.min(newIndex, data.history.length - 1));
+          const entry = data.history[clamped];
+          if (!entry) return n;
+          return { ...n, data: { ...data, activeHistoryIndex: clamped, assetId: entry.assetId, filePath: entry.filePath, name: entry.name } };
+        })
+      );
+    },
+    [setNodes]
   );
 
   // director.generate 客户端超时后的"找回"轮询：定期重新拉这个项目的素材
   // 列表，找一个 priorAssetIds 里没有、类型和这次生成模式一致的新素材——
   // 后端那次调用没有被取消，迟早会把结果（成功或失败）写进
   // director_state.json，这里只是换一种方式重新读到它。找到 ready 就按
-  // 正常成功路径接上输出节点；找到 failed 才真正报错；重试到
+  // 正常成功路径追加进 history；找到 failed 才真正报错；重试到
   // GENERATE_RECOVERY_MAX_ATTEMPTS 次还是一无所获，才当作超时失败展示
-  // 给用户——避免用户明明看到画布上"生成完成"了、进程节点却还卡在一个
+  // 给用户——避免用户明明看到画布上"生成完成"了、卡片却还卡在一个
   // 过时的"请求超时"错误上。
   const recoverFromGenerateTimeout = useCallback(
-    (
-      nodeId: string,
-      node: Node,
-      projectId: string,
-      priorAssetIds: Set<string>,
-      mode: ProcessMode,
-      slotIndex: number,
-      attempt = 0
-    ) => {
-      const key = timerKey(nodeId, slotIndex);
+    (nodeId: string, projectId: string, priorAssetIds: Set<string>, mode: ProcessMode, attempt = 0) => {
       const timer = setTimeout(async () => {
         let newAsset: DirectorAsset | undefined;
         try {
@@ -515,17 +528,17 @@ function LabCanvasInner() {
         }
 
         if (newAsset) {
-          pollTimers.current.delete(key);
-          // 这个素材接下来会被这个槽位占用——同一轮里后面的槽位再找"新
-          // 出现的素材"时不能又找到它，否则多个槽位会抢同一份结果。
+          pollTimers.current.delete(nodeId);
+          // 这个素材接下来会被这张卡片占用——同一轮里其它兄弟卡片再找"新
+          // 出现的素材"时不能又找到它，否则多张卡片会抢同一份结果。
           priorAssetIds.add(newAsset.asset_id);
           if (newAsset.status === 'failed') {
             setProcessNodeState(nodeId, { status: 'error', error: newAsset.error || t('director.lab.generateFailed') });
             return;
           }
-          const outputNodeId = applyGenerateResult(nodeId, node, newAsset, slotIndex);
+          const historyIndex = applyGenerateResult(nodeId, newAsset);
           if (newAsset.status === 'pending' && newAsset.job_id) {
-            pollOutputNode(nodeId, outputNodeId, projectId, newAsset.asset_id, newAsset.job_id, slotIndex);
+            pollOutputNode(nodeId, historyIndex, projectId, newAsset.asset_id, newAsset.job_id);
           } else {
             setProcessNodeState(nodeId, { status: 'idle' });
           }
@@ -533,31 +546,29 @@ function LabCanvasInner() {
         }
 
         if (attempt + 1 >= GENERATE_RECOVERY_MAX_ATTEMPTS) {
-          pollTimers.current.delete(key);
+          pollTimers.current.delete(nodeId);
           setProcessNodeState(nodeId, { status: 'error', error: t('director.lab.generateTimeoutGaveUp') });
           return;
         }
-        recoverFromGenerateTimeout(nodeId, node, projectId, priorAssetIds, mode, slotIndex, attempt + 1);
+        recoverFromGenerateTimeout(nodeId, projectId, priorAssetIds, mode, attempt + 1);
       }, GENERATE_RECOVERY_POLL_INTERVAL_MS);
-      pollTimers.current.set(key, timer);
+      pollTimers.current.set(nodeId, timer);
     },
     [applyGenerateResult, pollOutputNode, setProcessNodeState, t]
   );
 
-  // 单个输出槽位的一次生成——outputCount > 1 时 handleGenerate 会依次对
-  // 0..outputCount-1 各调一次，参数（提示词/参考图/宽高比等）完全一样，
-  // 只是各自独立起一次真实的生成请求、各自落到自己的输出槽位上。
+  // 一张卡片的一次生成——outputCount > 1 时 handleGenerate 会对原卡片和
+  // 它克隆出来的每张兄弟卡片各调一次，参数（提示词/参考图/宽高比等）
+  // 完全一样，只是各自独立起一次真实的生成请求、各自追加进自己的 history。
   const runOneGenerate = useCallback(
     async (
       nodeId: string,
-      node: Node,
       data: ProcessNodeData,
       mode: ProcessMode,
       prompt: string,
       resolved: ResolvedGenerateInput,
       projectId: string,
-      priorAssetIds: Set<string>,
-      slotIndex: number
+      priorAssetIds: Set<string>
     ): Promise<'ok' | 'failed'> => {
       try {
         const { directorGenerate } = await import('../directorApi');
@@ -638,10 +649,10 @@ function LabCanvasInner() {
         void useDirectorStore.getState().loadProjects();
         const outputAsset = result.project.assets.find((a) => a.asset_id === result.assetId);
         if (outputAsset) priorAssetIds.add(outputAsset.asset_id);
-        const outputNodeId = applyGenerateResult(nodeId, node, outputAsset, slotIndex);
+        const historyIndex = applyGenerateResult(nodeId, outputAsset);
 
         if (outputAsset?.status === 'pending' && outputAsset.job_id) {
-          pollOutputNode(nodeId, outputNodeId, projectId, outputAsset.asset_id, outputAsset.job_id, slotIndex);
+          pollOutputNode(nodeId, historyIndex, projectId, outputAsset.asset_id, outputAsset.job_id);
         }
         return outputAsset?.status === 'failed' ? 'failed' : 'ok';
       } catch (e) {
@@ -651,7 +662,7 @@ function LabCanvasInner() {
         // 报错，转成轮询项目素材列表去把这个结果找回来；真正的失败信息
         // 只应该来自服务商/后端明确返回的错误，或者轮询到期还是一无所获。
         if (e instanceof DirectorApiError && e.code === 'REQUEST_TIMEOUT') {
-          recoverFromGenerateTimeout(nodeId, node, projectId, priorAssetIds, mode, slotIndex);
+          recoverFromGenerateTimeout(nodeId, projectId, priorAssetIds, mode);
           return 'ok';
         }
         const message = e instanceof Error ? e.message : String(e);
@@ -673,46 +684,89 @@ function LabCanvasInner() {
       const data = node.data as ProcessNodeData;
       const mode = PROCESS_KIND_MODE[data.kind];
       const prompt = resolved.prompt.trim();
-      const outputCount = Math.max(1, data.outputCount || 1);
+      // 一次出几份独立结果只在第一次生成之前有意义——生成过以后"要几份"
+      // 就是画布上留几张卡片（见 ProcessNodeData.outputCount 注释）。
+      const isFirstGenerate = data.history.length === 0;
+      const outputCount = isFirstGenerate ? Math.max(1, data.outputCount || 1) : 1;
 
-      // outputCount 调小过的话，先把多出来的旧输出槽位清掉。
-      pruneExtraOutputSlots(nodeId, outputCount);
+      // 首次生成且要一次出多份：克隆出 outputCount-1 张兄弟卡片，每张各自
+      // 复制一份这张卡片当前的全部输入连线（文字提示/参考图/视频/音频，
+      // 不只是 image1），独立各生成各的——跟用户手动在画布上多摆几张一样
+      // 的处理卡片、各自接好同样的输入，没有任何需要持久化的"同一组"关系；
+      // 以后要减少份数，直接删掉对应的兄弟卡片即可。
+      const targets: { id: string; data: ProcessNodeData }[] = [{ id: nodeId, data }];
+      if (isFirstGenerate && outputCount > 1) {
+        const incomingEdges = getEdges().filter((e) => e.target === nodeId);
+        for (let i = 1; i < outputCount; i++) {
+          const siblingId = nextNodeId('process');
+          const siblingData: ProcessNodeData = {
+            ...data,
+            status: 'idle',
+            error: null,
+            history: [],
+            activeHistoryIndex: 0,
+            assetId: null,
+            filePath: '',
+            name: '',
+            // 这个字段生成过一次之后就不再被读取（见上面 isFirstGenerate 的
+            // 注释），但"生成参数"这一行的摘要文字还是会显示 ×outputCount
+            // ——克隆出来的每张卡片各自都只代表"一份"，继续顶着原来的份数
+            // 会让人误以为这张卡片自己还要再生成好几份。
+            outputCount: 1,
+          };
+          addNode({
+            id: siblingId,
+            type: 'process',
+            position: { x: node.position.x, y: node.position.y + i * PROCESS_CARD_ROW_HEIGHT },
+            data: siblingData,
+          });
+          for (const e of incomingEdges) {
+            setEdges((eds) =>
+              addEdge(
+                { id: nextNodeId('edge'), source: e.source, sourceHandle: e.sourceHandle, target: siblingId, targetHandle: e.targetHandle },
+                eds
+              )
+            );
+          }
+          targets.push({ id: siblingId, data: siblingData });
+        }
+        // 原卡片同理——它也只代表"一份"，不该继续显示 ×outputCount。
+        setProcessNodeState(nodeId, { outputCount: 1 });
+        targets[0].data = { ...targets[0].data, outputCount: 1 };
+      }
 
       // 超时后要去项目素材列表里"找回"迟到的结果，得先知道生成前有哪些
       // 素材——找一个这个集合里没有的、类型匹配的新素材，就是这次生成
-      // 迟到的那份结果。多个槽位共享同一份集合并随着每个槽位落定持续
-      // 往里加，避免槽位之间抢到同一份刚出现的结果。
+      // 迟到的那份结果。多张卡片共享同一份集合并随着每张卡片落定持续
+      // 往里加，避免互相抢到同一份刚出现的结果。
       const priorAssetIds = new Set(
         useDirectorStore.getState().projects.find((p) => p.project_id === selectedProjectId)?.assets.map((a) => a.asset_id) ??
           []
       );
 
-      setProcessNodeState(nodeId, { status: 'generating', error: null });
+      for (const target of targets) setProcessNodeState(target.id, { status: 'generating', error: null });
 
-      // 并发对每个槽位发起一次真实生成——后端 director.generate 不再用锁
+      // 并发对每张卡片发起一次真实生成——后端 director.generate 不再用锁
       // 串行化 generate_visual/generate_video 调用（那把锁本来保护的是
       // director_state.json 的读改写，而 DirectorStore 的同步方法在
       // asyncio 单线程调度下天然不会被打断，不需要靠这把锁；见
       // director_manager.py 的说明），所以这里并发发起是真的能让多份输出
-      // 一起跑、而不是排队等最慢的那一份。每个槽位各自的 slotIndex 在
-      // 调用时就定死，不依赖谁先完成，落到哪个输出卡片不会因为并发而错位。
+      // 一起跑、而不是排队等最慢的那一份。
       const outcomes = await Promise.all(
-        Array.from({ length: outputCount }, (_, slotIndex) =>
-          runOneGenerate(nodeId, node, data, mode, prompt, resolved, selectedProjectId, priorAssetIds, slotIndex)
-        )
+        targets.map((target) => runOneGenerate(target.id, target.data, mode, prompt, resolved, selectedProjectId, priorAssetIds))
       );
-      const anyFailed = outcomes.includes('failed');
 
-      // 只要没有槽位在轮询中（pollTimers 里还留着这个节点的 key），说明
-      // 全部槽位都已经同步落定，可以把状态收个尾；还在轮询的槽位会在自己
-      // 完成时各自把状态改成 idle/error（见 pollOutputNode /
-      // recoverFromGenerateTimeout），这里不用等它们。
-      const stillPolling = Array.from(pollTimers.current.keys()).some((key) => key.startsWith(`${nodeId}:`));
-      if (!stillPolling) {
-        setProcessNodeState(nodeId, anyFailed ? { status: 'error' } : { status: 'idle' });
-      }
+      // 每张卡片按自己的结果收尾，不是整批共用一个成败——兄弟卡片之间互不
+      // 连带，一张失败不该把另一张本来成功了的也标红。还在轮询中
+      // （pollTimers 里还留着这个 id）的卡片会在自己完成时各自收尾（见
+      // pollOutputNode / recoverFromGenerateTimeout），这里不用等它们。
+      targets.forEach((target, i) => {
+        if (!pollTimers.current.has(target.id)) {
+          setProcessNodeState(target.id, outcomes[i] === 'failed' ? { status: 'error' } : { status: 'idle' });
+        }
+      });
     },
-    [getNodes, selectedProjectId, setProcessNodeState, pruneExtraOutputSlots, runOneGenerate]
+    [getNodes, getEdges, selectedProjectId, setProcessNodeState, addNode, setEdges, runOneGenerate]
   );
 
   // 把 剪辑助手 对话里已经真实生成过的设计图/关键帧/视频（助手消息的
@@ -773,28 +827,30 @@ function LabCanvasInner() {
     // 画布已经整体清空，聊天记录里出现过的素材这次都要重新摆一遍。
     const newAssetIds = orderedAssetIds;
 
-    const ROW_HEIGHT = 260;
+    const ROW_HEIGHT = PROCESS_CARD_ROW_HEIGHT;
     const COL_REF_X = 60;
     const COL_PROCESS_X = 420;
-    const COL_OUTPUT_X = 780;
-    // 不依赖任何上一个输出的素材，各自独立占一整组（参考图/处理/输出三列
-    // ——文字提示不再占一列，见下面 processData.prompt）纵向摞下去；依赖
-    // 别的素材输出的（引用了它的 图片参考/首尾帧），改成在依赖的那一组
-    // 右边再开一组横向摆。下一组的参考列绝大多数时候不会真的摆出卡片——
-    // ensureImageRefNode 会直接复用依赖的那张输出卡片（见该函数注释），
-    // 空出来的参考列原样占着位置的话，"依赖的输出卡片" 到 "下一组的处理
-    // 卡片" 就会凭空多出一整列的间距，跟组内 参考→处理/处理→输出 的 360
-    // 间距对不上（实测会看到忽窄忽宽、两条不一样宽的间距交替出现）。这里
-    // GROUP_STEP 取 720（= COL_PROCESS_X - COL_OUTPUT_X 的绝对值 ×2，也就是
-    // 组内一列的宽度），让"依赖的输出列"与"下一组的参考列"算出来正好落在
-    // 同一个 x——参考复用时直接接上、不留空列，各组间距跟组内一样均匀；
-    // 真有全新参考图需要新开一列的少数情况，就接受它跟上一组输出列共用
-    // 同一列 x（不同 y，不会互相遮挡），换来摆得更多的"复用"情形间距一致。
-    const GROUP_STEP = 720;
+    // 卡片与它的产物合并成一张之后，不再需要单独的"输出列"——处理卡片
+    // 自己就是产物，只剩 参考图/处理 两列。不依赖任何上一张卡片的素材各自
+    // 独立占一整组纵向摞下去；依赖别的素材（引用了它的 图片参考/首尾帧）
+    // 的，改成在依赖的那一组右边再开一组横向摆。下一组的参考列绝大多数
+    // 时候不会真的摆出卡片——ensureImageRefNode 会直接复用依赖的那张卡片
+    // 本身（见该函数注释），所以 GROUP_STEP 取 360（= COL_PROCESS_X -
+    // COL_REF_X，组内参考→处理这一列的宽度），让"被复用的那张卡片"与
+    // "下一组的参考列"算出来正好落在同一个 x——参考复用时直接接上、不留
+    // 空列，各组间距因此跟组内一样均匀；真有全新参考图需要新开一列的少数
+    // 情况，就接受它跟上一组的卡片共用同一列 x（不同 y，不会互相遮挡）。
+    const GROUP_STEP = 360;
     // 画布刚清空，从顶部开始摆。
     let rowY = 60;
 
-    const ensureImageRefNode = (filePath: string, x: number, y: number): string => {
+    // columnKey 复用上面 processColumnKey/refColumnKey 的同一张登记表——
+    // "复用不到、要新开一张参考卡片"这个分支此前完全不经过任何避让检查，
+    // 直接拿调用方传来的 y 摆上去；这张新卡片的列（refX）在 GROUP_STEP 的
+    // 设计下往往跟另一个深度的处理列是同一个物理 x（见上面 GROUP_STEP 和
+    // refColumnKey 注释），不经避让检查就可能和那一列已经摆好的处理卡片
+    // 叠在一起。
+    const ensureImageRefNode = (filePath: string, x: number, y: number, columnKey: string): string => {
       const existing = imageNodeIdByPath.get(filePath);
       if (existing) return existing;
       const matchingAsset = project.assets.find((a) => a.file_path === filePath);
@@ -802,7 +858,7 @@ function LabCanvasInner() {
       addNode({
         id,
         type: 'image',
-        position: { x, y },
+        position: { x, y: claimY(columnKey, y) },
         data: {
           assetId: matchingAsset?.asset_id ?? null,
           filePath,
@@ -816,7 +872,7 @@ function LabCanvasInner() {
     // 视频输入（视频生音频的 video1 端口）复用该视频素材自己的输出卡片：
     // 同一次 build 里刚摆的那张（见下面的 outputNodeIdByAsset.set）或更早
     // 一次 build 留下的那张。实在找不到才新建一张视频卡片。
-    const ensureVideoNode = (filePath: string, x: number, y: number): string => {
+    const ensureVideoNode = (filePath: string, x: number, y: number, columnKey: string): string => {
       const existing = videoNodeIdByPath.get(filePath);
       if (existing) return existing;
       const placedAssetId = assetIdByFilePath.get(filePath);
@@ -830,7 +886,7 @@ function LabCanvasInner() {
       addNode({
         id,
         type: 'video',
-        position: { x, y },
+        position: { x, y: claimY(columnKey, y) },
         data: {
           assetId: matchingAsset?.asset_id ?? null,
           filePath,
@@ -843,7 +899,7 @@ function LabCanvasInner() {
 
     // 音频输入（图音生视频的 audio1 端口）与 ensureVideoNode 同构：优先复用
     // 该音频素材自己的输出卡片，找不到才新建一张音频卡片。
-    const ensureAudioNode = (filePath: string, x: number, y: number): string => {
+    const ensureAudioNode = (filePath: string, x: number, y: number, columnKey: string): string => {
       const existing = audioNodeIdByPath.get(filePath);
       if (existing) return existing;
       const placedAssetId = assetIdByFilePath.get(filePath);
@@ -857,7 +913,7 @@ function LabCanvasInner() {
       addNode({
         id,
         type: 'audio',
-        position: { x, y },
+        position: { x, y: claimY(columnKey, y) },
         data: {
           assetId: matchingAsset?.asset_id ?? null,
           filePath,
@@ -1001,21 +1057,33 @@ function LabCanvasInner() {
       return depth;
     };
 
-    // 同一层内避免多个素材的 y 算出来太接近而叠在一起——按"离上一张卡片至少
-    // 一个 ROW_HEIGHT"单调往下顺延，而不是拿 desired 挨个跟所有已登记的 y
-    // 比对、冲突就各自反复 +ROW_HEIGHT（那种写法在多图参考场景——好几张
-    // 卡片的依赖均值彼此很接近——会连续顺延好几次，叠加出比 ROW_HEIGHT
-    // 大得多、而且彼此不一致的间距，参考列和处理列的间距因此对不上）。
-    // 只登记"上一次分到的 y"，新的一张只要不比它再往下一个 ROW_HEIGHT
-    // 就直接顺延到这个下限，离得够远（desired 本来就比它靠后）就还是用
-    // desired——既保证不重叠，也保证间距跟素材列一样稳定。
-    const lastYByDepth = new Map<number, number>();
-    const claimY = (depth: number, desired: number): number => {
-      const last = lastYByDepth.get(depth);
+    // 避免同一列里多张卡片的 y 算出来太接近而叠在一起——按"离这一列上一张
+    // 卡片至少一个 ROW_HEIGHT"单调往下顺延，而不是拿 desired 挨个跟所有
+    // 已登记的 y 比对、冲突就各自反复 +ROW_HEIGHT（那种写法在多图参考
+    // 场景——好几张卡片的依赖均值彼此很接近——会连续顺延好几次，叠加出比
+    // ROW_HEIGHT 大得多、而且彼此不一致的间距）。只登记"这一列上一次分到
+    // 的 y"，新的一张只要不比它再往下一个 ROW_HEIGHT 就直接顺延到这个
+    // 下限，离得够远（desired 本来就比它靠后）就还是用 desired——既保证
+    // 不重叠，也保证间距稳定。
+    //
+    // 这里按"列"（columnKey）登记，不是按"深度"——GROUP_STEP 的设计让
+    // 深度 D 处理列与深度 D+1 参考列算出来是同一个物理 x（见 GROUP_STEP
+    // 注释），如果分别用深度 D 和深度 D+1 当 key，两边各记各的、互不知道
+    // 对方占了哪些 y，碰巧算出接近的 y 时就会在同一列里撞在一起。
+    // processColumnKey/refColumnKey 把这两种"同一列"的情况映射到同一个
+    // key，新摆一张卡片前都先过一遍 claimY，不管它是处理卡片本身，还是
+    // ensureImageRefNode 等函数里"复用不到、要新开一张"的参考卡片。
+    const lastYByColumn = new Map<string, number>();
+    const claimY = (columnKey: string, desired: number): number => {
+      const last = lastYByColumn.get(columnKey);
       const y = last === undefined ? desired : Math.max(desired, last + ROW_HEIGHT);
-      lastYByDepth.set(depth, y);
+      lastYByColumn.set(columnKey, y);
       return y;
     };
+    const processColumnKey = (depth: number): string => `proc:${depth}`;
+    // 深度 0 的参考列（COL_REF_X，没有再往前一层的处理列）单独给一个不会
+    // 跟任何处理列撞上的 key。
+    const refColumnKey = (depth: number): string => (depth > 0 ? processColumnKey(depth - 1) : 'ref:0');
 
     const orderedForLayout = Array.from(plans.keys())
       .map((id) => ({ id, depth: depthOf(id) }))
@@ -1038,28 +1106,41 @@ function LabCanvasInner() {
         depAssetIds,
       } = plan;
 
-      const y =
+      // 深度 0 也过一遍 claimY（用同一个 processColumnKey(0)）——这一列
+      // 可能跟深度 1 的参考列共享物理 x（见 refColumnKey 注释），新摆的
+      // 参考卡片一样会在这张登记表里占位，深度 0 的处理卡片不能绕开它。
+      const y = claimY(
+        processColumnKey(depth),
         depth === 0
           ? (() => {
               const placed = rowY;
               rowY += ROW_HEIGHT;
               return placed;
             })()
-          : claimY(
-              depth,
-              (() => {
-                const depYs = depAssetIds.map((depId) => assetY.get(depId)).filter((v): v is number => v !== undefined);
-                return depYs.length > 0 ? depYs.reduce((a, b) => a + b, 0) / depYs.length : rowY;
-              })()
-            );
+          : (() => {
+              const depYs = depAssetIds.map((depId) => assetY.get(depId)).filter((v): v is number => v !== undefined);
+              return depYs.length > 0 ? depYs.reduce((a, b) => a + b, 0) / depYs.length : rowY;
+            })()
+      );
+      const refColKey = refColumnKey(depth);
 
       const xOffset = depth * GROUP_STEP;
       const refX = COL_REF_X + xOffset;
       const processX = COL_PROCESS_X + xOffset;
-      const outputX = COL_OUTPUT_X + xOffset;
 
       const processNodeId = nextNodeId('process');
       const params = (asset.params ?? {}) as Record<string, unknown>;
+      // 卡片与它的产物合并成一张之后，这里不再摆一张单独的输出卡片——
+      // 这个素材本身就是这张卡片的第一条（也是唯一一条）历史记录，直接
+      // 写进 history，指针指向它自己（见 labTypes.ts 的 ProcessNodeData
+      // 注释：assetId/filePath/name 是 history[activeHistoryIndex] 的扁平
+      // 镜像，下游卡片的 image1/image2/video1/audio1 连线原样读这几个
+      // 顶层字段）。
+      const entry: GenerationEntry = {
+        assetId: asset.asset_id,
+        filePath: asset.file_path as string,
+        name: asset.name || asset.prompt || '',
+      };
       const processData: ProcessNodeData = {
         kind,
         status: 'idle',
@@ -1091,6 +1172,11 @@ function LabCanvasInner() {
           kind === 'video2video' && typeof params.input_video_path === 'string' && isRemoteUrl(params.input_video_path)
             ? params.input_video_path
             : '',
+        history: [entry],
+        activeHistoryIndex: 0,
+        assetId: entry.assetId,
+        filePath: entry.filePath,
+        name: entry.name,
       };
       addNode({ id: processNodeId, type: 'process', position: { x: processX, y }, data: processData });
 
@@ -1100,19 +1186,19 @@ function LabCanvasInner() {
       // 路径查），不会重复摆一张；只有真正找不到已有节点时才会在这一层
       // 的参考列新开一张卡片。
       referenceImagePaths.forEach((refPath, i) => {
-        const refId = ensureImageRefNode(refPath, refX, y - 150 + i * 240);
+        const refId = ensureImageRefNode(refPath, refX, y - 150 + i * 240, refColKey);
         setEdges((eds) =>
           addEdge({ id: nextNodeId('edge'), source: refId, sourceHandle: 'image', target: processNodeId, targetHandle: 'image1' }, eds)
         );
       });
       if (firstFramePath) {
-        const refId = ensureImageRefNode(firstFramePath, refX, y - 150);
+        const refId = ensureImageRefNode(firstFramePath, refX, y - 150, refColKey);
         setEdges((eds) =>
           addEdge({ id: nextNodeId('edge'), source: refId, sourceHandle: 'image', target: processNodeId, targetHandle: 'image1' }, eds)
         );
       }
       if (lastFramePath) {
-        const refId = ensureImageRefNode(lastFramePath, refX, y + 150);
+        const refId = ensureImageRefNode(lastFramePath, refX, y + 150, refColKey);
         setEdges((eds) =>
           addEdge({ id: nextNodeId('edge'), source: refId, sourceHandle: 'image', target: processNodeId, targetHandle: 'image2' }, eds)
         );
@@ -1121,7 +1207,7 @@ function LabCanvasInner() {
         // 视频生音频的输入视频：复用那路视频素材自己的卡片，连到 video1
         // 端口——与首帧/尾帧/参考图同一套路子。视频生视频填的是 HTTPS 链接
         // 时没有素材卡片可复用，链接已经填回卡片上，不再多摆一个节点。
-        const refId = ensureVideoNode(inputVideoPath, refX, y);
+        const refId = ensureVideoNode(inputVideoPath, refX, y, refColKey);
         setEdges((eds) =>
           addEdge({ id: nextNodeId('edge'), source: refId, sourceHandle: 'video', target: processNodeId, targetHandle: 'video1' }, eds)
         );
@@ -1130,7 +1216,7 @@ function LabCanvasInner() {
         // 图音生视频的参考音频：复用那段音频素材自己的卡片，连到 audio1
         // 端口；参考图走上面的 referenceImagePaths（后端存的是单数
         // reference_image_path，这里已归一成列表）接到 image1。
-        const refId = ensureAudioNode(inputAudioPath, refX, y + 150);
+        const refId = ensureAudioNode(inputAudioPath, refX, y + 150, refColKey);
         setEdges((eds) =>
           addEdge({ id: nextNodeId('edge'), source: refId, sourceHandle: 'audio', target: processNodeId, targetHandle: 'audio1' }, eds)
         );
@@ -1139,14 +1225,14 @@ function LabCanvasInner() {
         // 视频连视频的两段源片：各自复用自己的视频素材卡片，分别连到
         // video1（片段一）/ video2（片段二）端口——与 video2audio 的单路
         // video1 同一套路子，只是这里要还原两条连线。
-        const clip1RefId = ensureVideoNode(bridgeClip1Path, refX, y - 150);
+        const clip1RefId = ensureVideoNode(bridgeClip1Path, refX, y - 150, refColKey);
         setEdges((eds) =>
           addEdge(
             { id: nextNodeId('edge'), source: clip1RefId, sourceHandle: 'video', target: processNodeId, targetHandle: 'video1' },
             eds
           )
         );
-        const clip2RefId = ensureVideoNode(bridgeClip2Path, refX, y + 150);
+        const clip2RefId = ensureVideoNode(bridgeClip2Path, refX, y + 150, refColKey);
         setEdges((eds) =>
           addEdge(
             { id: nextNodeId('edge'), source: clip2RefId, sourceHandle: 'video', target: processNodeId, targetHandle: 'video2' },
@@ -1155,27 +1241,15 @@ function LabCanvasInner() {
         );
       }
 
-      const outputNodeId = nextNodeId('out');
-      // 音频素材必须摆成 audio 卡片（<audio controls>）；归到 image 会被渲染成
-      // 一个 src 指向 .wav 的 <img>，重建出来的卡片直接是坏的。
-      const outputType = asset.type === 'video' ? 'video' : asset.type === 'audio' ? 'audio' : 'image';
-      addNode({
-        id: outputNodeId,
-        type: outputType,
-        position: { x: outputX, y },
-        data: { assetId: asset.asset_id, filePath: asset.file_path, name: asset.name || asset.prompt, slotIndex: 0 },
-      });
-      // 本次 build 刚摆出来的卡片也要立刻进索引表：排在后面的素材（比如引用
-      // 这段视频写解说的那张音频卡片）要能复用这张卡片，而不是再摆一张。
-      outputNodeIdByAsset.set(asset.asset_id, outputNodeId);
-      setEdges((eds) =>
-        addEdge({ id: nextNodeId('edge'), source: processNodeId, sourceHandle: 'out', target: outputNodeId, targetHandle: 'in' }, eds)
-      );
-
-      outputNodeIdByAsset.set(asset.asset_id, outputNodeId);
+      // 合并卡片自己就是产物——不再摆一张独立输出卡片、也不再需要
+      // processNodeId → outputNodeId 的自连线。本次 build 刚摆出来的卡片
+      // 立刻进索引表：排在后面的素材（比如引用这段视频写解说的那张音频
+      // 卡片）要能把它当参考复用，而不是再摆一张独立的参考卡片。
+      outputNodeIdByAsset.set(asset.asset_id, processNodeId);
       assetY.set(asset.asset_id, y);
-      if (outputType === 'image') imageNodeIdByPath.set(asset.file_path as string, outputNodeId);
-      if (outputType === 'audio') audioNodeIdByPath.set(asset.file_path as string, outputNodeId);
+      if (mode === 'image') imageNodeIdByPath.set(asset.file_path as string, processNodeId);
+      if (mode === 'video') videoNodeIdByPath.set(asset.file_path as string, processNodeId);
+      if (mode === 'audio') audioNodeIdByPath.set(asset.file_path as string, processNodeId);
     }
   }, [selectedProjectId, setNodes, addNode, setEdges]);
 
@@ -1294,6 +1368,7 @@ function LabCanvasInner() {
         buildFlowFromChat,
         renameNode: handleRenameNode,
         swapImage: handleSwapImage,
+        swapHistory: handleSwapHistory,
       }}
     >
       <div className="lab-canvas-wrap" ref={wrapperRef}>

@@ -184,6 +184,15 @@ export type ProcessStatus = 'idle' | 'generating' | 'error';
 
 export const OUTPUT_COUNT_OPTIONS = [1, 2, 3, 4, 5] as const;
 
+/** 处理卡片自带的一条历史产物记录——卡片不再需要单独一张输出节点，生成
+ *  结果直接追加进卡片自己的 history。"重新生成"永远往后追加一条、指针
+ *  指向最新；"切回上一个"只挪指针，不删记录，可以再切回来。 */
+export interface GenerationEntry {
+  assetId: string | null;
+  filePath: string;
+  name: string;
+}
+
 export interface ProcessNodeData {
   [key: string]: unknown;
   kind: ProcessKind;
@@ -226,9 +235,30 @@ export interface ProcessNodeData {
    *  （buildFlowFromChat）重建画布时仍然靠它接一个真实的文本节点，连了线
    *  的画布不受这个新字段影响（这里留空就行）。 */
   prompt?: string;
-  /** 一次"生成"要产出几份独立结果（1-5），每份各自成一个输出节点，从
-   *  同一个 "out" 端口扇出多条连线——不是同一份结果的多个帧，而是同样的
-   *  提示词/参数各自独立生成 N 次，供用户挑选。旧数据没有这个字段时按 1
-   *  处理（行为与改造前完全一致）。 */
+  /** 一次"生成"要产出几份独立结果（1-5）——只在第一次生成之前有意义：
+   *  这时每一份各自克隆成一张独立的卡片（各自的 history 从空开始，共享
+   *  同一批输入连线），而不是同一张卡片里的多份结果。生成过一次之后这个
+   *  字段就不再被读取（画布上要几份，直接删/留对应的卡片即可），仅在参数
+   *  弹窗里首次生成前可见。旧数据没有这个字段时按 1 处理。 */
   outputCount: number;
+  /** 这张卡片的产物历史——卡片与它的"输出"合并成一张之后，generate 不再
+   *  另开一张输出节点，而是往这里追加一条 GenerationEntry。空数组＝还没
+   *  生成过（渲染态＝"idle"，跟今天的处理卡片一样只有提示词/参数/生成
+   *  按钮）；非空＝渲染态＝"generated"，展示 history[activeHistoryIndex]
+   *  这一条的预览图/视频/音频，外加"‹ N/M ›"切换条（entries 不止一条
+   *  才显示）。 */
+  history: GenerationEntry[];
+  /** history 里当前生效的下标——决定预览里展示哪一条，也决定下游卡片的
+   *  image1/image2/video1/audio1 连线实际读到哪一条产物（见下面的扁平
+   *  镜像字段）。 */
+  activeHistoryIndex: number;
+  /** 镜像 history[activeHistoryIndex]——故意不用 getter：这几个字段要在
+   *  LabCanvas.tsx 到处可见的 `{ ...n.data, ...patch }` 浅拷贝模式下原样
+   *  存活，也要能直接存进 director_state.json（纯 JSON，不能是函数/
+   *  getter）。ProcessNode.tsx 的 useConnectedImage/useConnectedVideo/
+   *  useConnectedAudio/useConnectedImages 原样按 { assetId, filePath }
+   *  读取顶层字段，合并卡片后这几个 hook 不需要改一行。 */
+  assetId: string | null;
+  filePath: string;
+  name: string;
 }

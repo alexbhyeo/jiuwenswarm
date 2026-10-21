@@ -2,6 +2,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { useTranslation } from 'react-i18next';
 import { useLabActions } from '../LabActionsContext';
 import type { AudioNodeData } from '../labTypes';
+import { MediaFrame } from './MediaFrame';
 import { NodeNameLabel } from './NodeNameLabel';
 
 const trashIcon = (
@@ -9,10 +10,6 @@ const trashIcon = (
     <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0-.9 14a2 2 0 0 1-2 1.9H6.9a2 2 0 0 1-2-1.9L4 6" />
   </svg>
 );
-
-function rawFileUrl(path: string): string {
-  return `/file-api/raw-file?path=${encodeURIComponent(path)}`;
-}
 
 /** 文生音频的输出节点。与 VideoNode 同构，只是把播放器换成 <audio>。 */
 export function AudioNode({ id, data }: NodeProps & { data: AudioNodeData }) {
@@ -23,7 +20,7 @@ export function AudioNode({ id, data }: NodeProps & { data: AudioNodeData }) {
     <div className="lab-node lab-node--audio">
       <div className="lab-node-label">{t('director.categories.audio')}</div>
       <div className="lab-node-media lab-node-media--audio">
-        <audio src={rawFileUrl(data.filePath)} controls preload="metadata" />
+        <MediaFrame mode="audio" filePath={data.filePath} name={data.name} />
         <div className="lab-node-media-actions">
           <button type="button" title={t('director.delete.action')} onClick={() => actions.deleteNode(id)}>
             {trashIcon}
