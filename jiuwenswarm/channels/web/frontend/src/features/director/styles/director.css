@@ -2679,7 +2679,10 @@
   opacity: 1;
 }
 
-.lab-node-media-actions button {
+/* 下载按钮是 <a download>（不是 <button>）才能触发浏览器原生下载，跟这一
+   排其它按钮共用同一套圆形图标样式，选择器里把 a 也带上。 */
+.lab-node-media-actions button,
+.lab-node-media-actions a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2690,9 +2693,11 @@
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
   cursor: pointer;
+  text-decoration: none;
 }
 
-.lab-node-media-actions button:hover {
+.lab-node-media-actions button:hover,
+.lab-node-media-actions a:hover {
   background: rgba(0, 0, 0, 0.75);
 }
 

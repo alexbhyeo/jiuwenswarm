@@ -69,6 +69,33 @@ const swapIcon = (
   </svg>
 );
 
+const enlargeIcon = (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3" />
+  </svg>
+);
+
+const downloadIcon = (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3v12M7 10l5 5 5-5M4 19h16" />
+  </svg>
+);
+
+function rawFileUrl(path: string): string {
+  return `/file-api/raw-file?path=${encodeURIComponent(path)}`;
+}
+
+/** 下载按钮的建议文件名——跟 DirectorRail.tsx 的 downloadFileName 同一个
+ *  取舍（主文件名用素材名/提示词，后缀照抄磁盘上那份文件自己的后缀），
+ *  这里单独写一份而不是跨模块共享，是因为两边拿到的输入形状不一样
+ *  （这里是 GenerationEntry，那边是 DirectorAsset），为了这一个小差异
+ *  去抽象反而更绕。 */
+function downloadFileName(name: string, filePath: string, fallback: string): string {
+  const base = (name || fallback).trim() || fallback;
+  const match = /\.[a-zA-Z0-9]+$/.exec(filePath);
+  return match ? `${base}${match[0]}` : base;
+}
+
 function useConnectedText(nodeId: string, handleId: string): string {
   const connections = useNodeConnections({ id: nodeId, handleType: 'target', handleId });
   const sourceId = connections[0]?.source;
@@ -208,6 +235,10 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   const [paramsOpen, setParamsOpen] = useState(false);
   const paramsRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // "放大"按钮调浏览器 Fullscreen API 时要拿到这张 <img> 本身——同
+  // DirectorRail.tsx 的 EnlargeableImage，只是那边是独立的参考卡片，
+  // 这里是合并卡片"已生成"态里嵌的那张图。
+  const mediaImgRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
     if (!paramsOpen) return;
@@ -579,12 +610,32 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
       {isGenerated && activeEntry && (
         <div className="lab-node-process-output">
           <div className={`lab-node-media${mode === 'video' ? ' lab-node-media--video' : mode === 'audio' ? ' lab-node-media--audio' : ''}`}>
-            <MediaFrame mode={mode} filePath={activeEntry.filePath} name={activeEntry.name} className={mode === 'image' ? 'nodrag' : undefined} />
-            {/* "替换" 只对图片类卡片有意义，跟独立的 ImageNode 一样——
-                VideoNode/AudioNode 从来就没有这个按钮，合并卡片这里保持
-                同一个取舍（见 LabCanvas.handleSwapImage 的注释）。 */}
+            <MediaFrame ref={mediaImgRef} mode={mode} filePath={activeEntry.filePath} name={activeEntry.name} className={mode === 'image' ? 'nodrag' : undefined} />
+            {/* 放大/下载/替换都只对图片类卡片有意义，跟素材面板的
+                EnlargeableImage/视频原生控件同一个取舍——VideoNode/AudioNode
+                从来就没有这几个按钮（视频靠原生播放器控件自带的全屏/下载），
+                合并卡片这里保持同一个取舍（见 LabCanvas.handleSwapImage 的
+                注释）。 */}
             {mode === 'image' && (
               <div className="lab-node-media-actions">
+                <button
+                  type="button"
+                  title={t('director.enlarge')}
+                  onClick={() => mediaImgRef.current?.requestFullscreen?.()}
+                  data-testid="lab-process-node-enlarge-image"
+                >
+                  {enlargeIcon}
+                </button>
+                <a
+                  href={rawFileUrl(activeEntry.filePath)}
+                  download={downloadFileName(activeEntry.name, activeEntry.filePath, t(`director.lab.process.${data.kind}`))}
+                  title={t('director.download')}
+                  className="nodrag"
+                  onClick={(e) => e.stopPropagation()}
+                  data-testid="lab-process-node-download-image"
+                >
+                  {downloadIcon}
+                </a>
                 <button
                   type="button"
                   title={t('director.lab.swapImage')}
