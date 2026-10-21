@@ -314,6 +314,36 @@ function LabCanvasInner() {
     [selectedProjectId, nodes, setNodes]
   );
 
+  // 用素材库里已经存在的图片/角色素材替换一张图片卡片当前展示的内容——
+  // 不经过上传，直接拿这个素材自己的 assetId/filePath。跟上面
+  // handleSwapImage（本地上传一个新文件）刻意反过来：那边是新文件没有
+  // 身份，所以把它改名成卡片原来的名字；这里的素材本来就有自己的名字
+  // （用户在 素材 面板里起的，可能已经被别的卡片的提示词用 "@名字" 引用
+  // 着），换上去之后卡片应该改用这个素材自己的名字，而不是反过来把这个
+  // 已经有身份的素材强行改名成卡片原来的名字——那样会把它在别处的引用
+  // 对不上。
+  const handleSwapImageFromAsset = useCallback(
+    (nodeId: string, asset: { assetId: string | null; filePath: string; name: string }) => {
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (n.id !== nodeId) return n;
+          const isMergedImageCard =
+            n.type === 'process' && PROCESS_KIND_MODE[(n.data as ProcessNodeData).kind] === 'image';
+          if (n.type !== 'image' && !isMergedImageCard) return n;
+          if (isMergedImageCard) {
+            const pd = n.data as ProcessNodeData;
+            const history = pd.history.map((entry, i) =>
+              i === pd.activeHistoryIndex ? { ...entry, assetId: asset.assetId, filePath: asset.filePath, name: asset.name } : entry
+            );
+            return { ...n, data: { ...pd, history, assetId: asset.assetId, filePath: asset.filePath, name: asset.name } };
+          }
+          return { ...n, data: { ...n.data, assetId: asset.assetId, filePath: asset.filePath, name: asset.name } };
+        })
+      );
+    },
+    [setNodes]
+  );
+
   const handleDeleteNode = useCallback(
     (nodeId: string) => {
       setNodes((nds) => nds.filter((n) => n.id !== nodeId));
@@ -356,6 +386,8 @@ function LabCanvasInner() {
         assetId: null,
         filePath: '',
         name: '',
+        // 手动在画布上新建的卡片不对应聊天记录里的任何素材。
+        originAssetId: null,
       };
       addNode({ id, type: 'process', position, data });
       // 视频连视频：FLF2V 只拿到两张静态图，没有提示词模型无从得知该怎么
@@ -800,20 +832,25 @@ function LabCanvasInner() {
 
     const assetById = new Map(project.assets.map((a) => [a.asset_id, a]));
 
-    // 清空重建之前，先把"已经在画布上、而且重新生成过"的卡片记下来——
-    // 卡片的 history[0] 永远是它最早那条记录（见 applyGenerateResult 只
-    // 追加不删除），如果这条记录的 assetId 正好是聊天记录里的某个素材，
-    // 说明这张卡片就是那个素材对应的卡片，哪怕用户后来点过几次"重新
-    // 生成"、甚至切换过正在展示哪一条结果。不这样记下来的话，清空重建
-    // 会让这张卡片退回成聊天记录里那一条最早的记录，用户后来重新生成出
-    // 来的结果、以及"当前选的是哪一条"这个状态都会凭空丢失。
+    // 清空重建之前，先把"已经在画布上、而且重新生成过/换过图"的卡片记
+    // 下来——按卡片自带的 originAssetId（它最初对应的聊天素材 id，一旦
+    // 摆出来就再也不会被改动，见 labTypes.ts 的字段注释）找回这张卡片，
+    // 不管用户后来点过几次"重新生成"、切换过正在展示哪一条结果，还是
+    // 直接"替换图片"换掉了当前这一条。不这样记下来的话，清空重建会让
+    // 这张卡片退回成聊天记录里最初那一条记录，用户后来做的这些改动都会
+    // 凭空丢失。
+    //
+    // 这里不能用 history[0].assetId 当 key——"替换图片"换的就是
+    // history[activeHistoryIndex] 自己的 assetId，卡片只有一条记录、还
+    // 没点过"重新生成"时，history[0] 正好就是 activeHistoryIndex 指向的
+    // 那一条，会被换图直接覆盖掉，跟聊天记录里的原始素材 id 对不上，
+    // 换上去的图反而会在下一次清空重建时丢失。
     const preservedHistoryByAssetId = new Map<string, { history: GenerationEntry[]; activeHistoryIndex: number }>();
     for (const n of getNodes()) {
       if (n.type !== 'process') continue;
       const data = n.data as ProcessNodeData;
-      const firstEntryAssetId = data.history?.[0]?.assetId;
-      if (firstEntryAssetId && data.history.length > 0) {
-        preservedHistoryByAssetId.set(firstEntryAssetId, {
+      if (data.originAssetId && data.history.length > 0) {
+        preservedHistoryByAssetId.set(data.originAssetId, {
           history: data.history,
           activeHistoryIndex: data.activeHistoryIndex,
         });
@@ -1206,6 +1243,10 @@ function LabCanvasInner() {
         assetId: activeEntry.assetId,
         filePath: activeEntry.filePath,
         name: activeEntry.name,
+        // 这张卡片这次重建对应的聊天素材——固定写一次，不随后续的重新
+        // 生成/替换图片变化，下次清空重建靠它找回这张卡片（见上面
+        // preservedHistoryByAssetId 的注释）。
+        originAssetId: asset.asset_id,
       };
       addNode({ id: processNodeId, type: 'process', position: { x: processX, y }, data: processData });
 
@@ -1396,6 +1437,7 @@ function LabCanvasInner() {
         buildFlowFromChat,
         renameNode: handleRenameNode,
         swapImage: handleSwapImage,
+        swapImageFromAsset: handleSwapImageFromAsset,
         swapHistory: handleSwapHistory,
       }}
     >

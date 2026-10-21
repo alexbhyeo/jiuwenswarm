@@ -17,7 +17,7 @@ import {
   PROCESS_KIND_MULTI_REF,
   supportsAudioOutput,
 } from '../labTypes';
-import { MediaFrame } from './MediaFrame';
+import { MediaFrame, popoverPositionFromTrigger } from './MediaFrame';
 import { NodeNameLabel } from './NodeNameLabel';
 import { PromptTextarea } from './PromptTextarea';
 import { renderWithImageChips } from './promptChips';
@@ -185,6 +185,24 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
     }
     return result;
   }, [project]);
+
+  // "替换"弹层里挑素材用的列表——跟上面 namedImageAssets 不同，这里不按
+  // 名字去重（@ 提及自动补全要去重是为了候选不重复，这里是要把素材库里
+  // 每一张图都列出来让用户选），排除当前卡片正展示的这一条（选它等于
+  // 什么都没换），按最近更新排在前面，方便找到刚生成/刚上传的那几张。
+  const swappableAssets = useMemo(() => {
+    if (!project) return [];
+    return project.assets
+      .filter(
+        (a) =>
+          (a.type === 'image' || a.type === 'character') &&
+          a.status === 'ready' &&
+          a.file_path &&
+          a.asset_id !== data.assetId
+      )
+      .sort((a, b) => b.updated_at - a.updated_at);
+  }, [project, data.assetId]);
+
   const image1 = useConnectedImage(id, maxImages >= 1 && !isMultiRef ? 'image1' : '__none__');
   const image2 = useConnectedImage(id, maxImages >= 2 ? 'image2' : '__none__');
   const images = useConnectedImages(id, isMultiRef ? 'image1' : '__none__');
@@ -235,6 +253,13 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   const [paramsOpen, setParamsOpen] = useState(false);
   const paramsRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [swapOpen, setSwapOpen] = useState(false);
+  // 换图弹层改成 Portal 到 document.body（见下面渲染处的注释）之后，触发
+  // 按钮和弹层本身不再是同一棵 DOM 子树——点击空白处关闭要同时认这两个
+  // ref，缺一个都会导致点按钮本身也被误判成"点了外面"。
+  const swapWrapRef = useRef<HTMLDivElement>(null);
+  const swapPopoverRef = useRef<HTMLDivElement>(null);
+  const [swapPos, setSwapPos] = useState<{ top: number; left: number } | null>(null);
   // "放大"按钮调浏览器 Fullscreen API 时要拿到这张 <img> 本身——同
   // DirectorRail.tsx 的 EnlargeableImage，只是那边是独立的参考卡片，
   // 这里是合并卡片"已生成"态里嵌的那张图。
@@ -252,6 +277,21 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
     document.addEventListener('mousedown', handleClick, true);
     return () => document.removeEventListener('mousedown', handleClick, true);
   }, [paramsOpen]);
+
+  // 换图弹层点画布空白处关闭——跟上面 paramsOpen 同一个取舍（捕获阶段，
+  // 不受 React Flow pane 自己 stopPropagation() 影响）。弹层本身 Portal 到
+  // body 之后已经脱离 swapWrapRef 这棵子树，两个 ref 都要查一遍。
+  useEffect(() => {
+    if (!swapOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (swapWrapRef.current?.contains(target)) return;
+      if (swapPopoverRef.current?.contains(target)) return;
+      setSwapOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick, true);
+    return () => document.removeEventListener('mousedown', handleClick, true);
+  }, [swapOpen]);
 
   // 文字提示弹窗用 Portal 挂到 document.body（见下面渲染处的注释），不是
   // .lab-node-params-popover 那种贴着卡片的内联浮层，所以不需要跟它一样
@@ -636,15 +676,77 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
                 >
                   {downloadIcon}
                 </a>
-                <button
-                  type="button"
-                  title={t('director.lab.swapImage')}
-                  className="nodrag"
-                  onClick={() => fileInputRef.current?.click()}
-                  data-testid="lab-process-node-swap-image"
-                >
-                  {swapIcon}
-                </button>
+                <div className="lab-node-swap-wrap nodrag" ref={swapWrapRef}>
+                  <button
+                    type="button"
+                    title={t('director.lab.swapImage')}
+                    onClick={(e) => {
+                      if (swapOpen) {
+                        setSwapOpen(false);
+                        return;
+                      }
+                      setSwapPos(popoverPositionFromTrigger(e.currentTarget));
+                      setSwapOpen(true);
+                    }}
+                    data-testid="lab-process-node-swap-image"
+                  >
+                    {swapIcon}
+                  </button>
+                  {/* .lab-node-media 有 overflow:hidden 裁掉超出卡片的内容
+                      （给图片裁圆角用），弹层自己比卡片高得多，不 Portal 出去
+                      会被从中间切掉——同 promptOpen 那个弹窗一样挂到 body，
+                      只是那个是居中遮罩，这个是贴着按钮的浮层，所以用
+                      popoverPositionFromTrigger 算 fixed 定位而不是遮罩居中。 */}
+                  {swapOpen &&
+                    swapPos &&
+                    createPortal(
+                      <div
+                        className="lab-node-swap-popover nowheel"
+                        ref={swapPopoverRef}
+                        style={{ top: swapPos.top, left: swapPos.left }}
+                        data-testid="lab-process-node-swap-popover"
+                      >
+                        <button
+                          type="button"
+                          className="lab-node-swap-popover-upload"
+                          onClick={() => {
+                            setSwapOpen(false);
+                            fileInputRef.current?.click();
+                          }}
+                          data-testid="lab-process-node-swap-upload-local"
+                        >
+                          {t('director.lab.swapUploadLocal')}
+                        </button>
+                        <div className="lab-node-swap-popover-grid">
+                          {swappableAssets.length === 0 ? (
+                            <div className="lab-node-swap-popover-empty">{t('director.lab.swapNoAssets')}</div>
+                          ) : (
+                            swappableAssets.map((asset) => (
+                              <button
+                                type="button"
+                                key={asset.asset_id}
+                                className="lab-node-swap-popover-item"
+                                title={asset.name || asset.prompt || ''}
+                                onClick={() => {
+                                  setSwapOpen(false);
+                                  actions.swapImageFromAsset(id, {
+                                    assetId: asset.asset_id,
+                                    filePath: asset.file_path as string,
+                                    name: asset.name || asset.prompt || '',
+                                  });
+                                }}
+                                data-testid="lab-process-node-swap-asset"
+                                data-variant={asset.asset_id}
+                              >
+                                <img src={rawFileUrl(asset.file_path as string)} alt={asset.name || ''} />
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </div>,
+                      document.body
+                    )}
+                </div>
                 <input
                   ref={fileInputRef}
                   type="file"

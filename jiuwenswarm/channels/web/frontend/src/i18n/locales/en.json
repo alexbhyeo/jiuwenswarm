@@ -146,7 +146,9 @@
     "lab": {
       "breadcrumb": "Lab · Multi-Reference Composite",
       "refImage": "Image Reference",
-      "swapImage": "Swap with uploaded image",
+      "swapImage": "Swap image",
+      "swapUploadLocal": "Upload from device",
+      "swapNoAssets": "No swappable images in the asset library yet",
       "textPrompt": "Text Prompt",
       "samplePrompt": "A small boat drifts slowly across a calm sea, under a blue sky with soft light",
       "textPromptEditHint": "Click to write a text prompt",

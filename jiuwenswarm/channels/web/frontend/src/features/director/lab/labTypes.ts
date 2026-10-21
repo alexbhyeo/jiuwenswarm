@@ -261,4 +261,20 @@ export interface ProcessNodeData {
   assetId: string | null;
   filePath: string;
   name: string;
+  /** 这张卡片最初对应的、剪辑助手聊天记录里那条素材的 asset_id——
+   *  只在 buildFlowFromChat 第一次摆出这张卡片时写入一次，之后永远不会
+   *  被"重新生成"（只追加 history，不改这个字段）或"替换图片"（改的是
+   *  history[activeHistoryIndex] 自己的 assetId，不是这个字段）动过。
+   *
+   *  之所以需要这个单独字段：buildFlowFromChat 每次清空重建时，要靠它
+   *  把"清空前画布上的这张卡片"和"这次重建、聊天记录里的哪个素材"对应
+   *  起来，从而决定要不要保留清空前积累的 history（见该函数里
+   *  preservedHistoryByAssetId 的用法）。一开始图省事直接拿
+   *  history[0].assetId 当这个对应关系的 key，结果"替换图片"只换过一次、
+   *  还没重新生成过的卡片（history 仍只有一条）会把 history[0].assetId
+   *  本身覆盖成换上去的那张图的 id，跟聊天记录里的原始素材 id 对不上，
+   *  一清空重建就找不到、换上去的图就丢了——这个字段固定不变，就不会有
+   *  这个问题。手动在画布上新建的卡片（不是由聊天记录摆出来的）这个字段
+   *  是 null。 */
+  originAssetId: string | null;
 }

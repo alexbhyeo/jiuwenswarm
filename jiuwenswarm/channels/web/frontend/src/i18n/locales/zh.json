@@ -146,7 +146,9 @@
     "lab": {
       "breadcrumb": "实验室 · 多参考图合成",
       "refImage": "图片参考",
-      "swapImage": "替换为上传图片",
+      "swapImage": "替换图片",
+      "swapUploadLocal": "从本地上传",
+      "swapNoAssets": "素材库里还没有可替换的图片",
       "textPrompt": "文字提示",
       "samplePrompt": "一艘小船缓缓驶过平静的海面，天空湛蓝，光线柔和",
       "textPromptEditHint": "点击填写文字提示",

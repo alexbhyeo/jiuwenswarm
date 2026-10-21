@@ -2705,6 +2705,104 @@
   display: none;
 }
 
+.lab-node-swap-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+/* 悬浮在"替换"按钮下方的弹层——素材缩略图网格 + "从本地上传"入口。跟
+   .lab-node-media-actions 其它按钮共用同一套圆形图标样式（见上面选择器
+   列出的 button），这里用更高优先级的类名覆盖掉那套样式，不然弹层里的
+   按钮会被套成 24px 圆形图标。 */
+/* Portal 到 document.body（见 ProcessNode/ImageNode 里的注释），top/left
+   由 popoverPositionFromTrigger 算出来内联设置，这里只负责外观——不能再
+   用 position:absolute 贴着触发按钮算，弹层已经脱离卡片这棵子树了。
+   .director-page 的设计 token（文件顶部）只在它自己的 DOM 子树里能解析，
+   Portal 出去之后不再是它的后代，var(--d-*) 全部解析不到值（属性直接被
+   忽略，背景/边框因此完全不出现，变成所谓"背景透明"——内容其实都在，
+   只是看得见后面的卡片/画布透出来，混成一团）。跟 director-prompt-dialog
+   同一个修法：在这里把用到的 token 原样重新声明一份，顺着 DOM 向下
+   继承，下面 .lab-node-swap-popover-* 几个子选择器不用再各自声明一次。 */
+.lab-node-swap-popover {
+  --d-text-primary: #191919;
+  --d-text-secondary: #777777;
+  --d-bg-card: #ffffff;
+  --d-bg-shell: #f3f3f3;
+  --d-border-default: #e4e4e7;
+  --d-border-strong: #d4d4d8;
+  --d-accent: #2563eb;
+  --d-radius-sm: 6px;
+  --d-radius-md: 8px;
+
+  position: fixed;
+  z-index: 100;
+  width: 212px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--d-bg-shell);
+  border: 1px solid var(--d-border-default);
+  border-radius: var(--d-radius-md);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.lab-node-swap-popover-upload {
+  width: 100% !important;
+  height: auto !important;
+  padding: 6px 8px !important;
+  border-radius: var(--d-radius-sm) !important;
+  background: var(--d-bg-card) !important;
+  color: var(--d-text-primary) !important;
+  font-size: 11px;
+  text-align: left;
+  flex: 0 0 auto;
+}
+
+.lab-node-swap-popover-upload:hover {
+  border-color: var(--d-border-strong);
+}
+
+.lab-node-swap-popover-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.lab-node-swap-popover-item {
+  width: 100% !important;
+  height: auto !important;
+  aspect-ratio: 1 / 1;
+  padding: 0 !important;
+  border-radius: var(--d-radius-sm) !important;
+  background: var(--d-bg-card) !important;
+  overflow: hidden;
+  border: 1px solid transparent !important;
+}
+
+.lab-node-swap-popover-item:hover {
+  border-color: var(--d-accent) !important;
+}
+
+.lab-node-swap-popover-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.lab-node-swap-popover-empty {
+  grid-column: 1 / -1;
+  font-size: 10.5px;
+  color: var(--d-text-secondary);
+  text-align: center;
+  padding: 10px 0;
+}
+
 .lab-node-name {
   display: flex;
   align-items: center;
