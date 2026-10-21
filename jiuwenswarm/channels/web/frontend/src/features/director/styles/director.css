@@ -299,7 +299,10 @@
 .director-asset-image {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* 缩略图外框固定 16:9——用 cover 会把 9:16 这类竖版照片从中间裁掉上下
+     大半，只剩一条窄条。改成 contain 让整张图完整显示，裁不到的留白
+     露出 .director-asset-thumb 自己的背景色，不会变形也不会拉伸。 */
+  object-fit: contain;
   display: block;
 }
 
@@ -2640,7 +2643,10 @@
 .lab-node-media video {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* 跟 .director-asset-image 同一个修法——卡片外框固定 4:3，cover 会把
+     9:16 这类竖版素材裁掉大半，改成 contain 完整显示整张图/整段视频，
+     留白露出 .lab-node-media 自己的背景色。 */
+  object-fit: contain;
   display: block;
 }
 
