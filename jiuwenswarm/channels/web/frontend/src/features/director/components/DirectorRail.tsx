@@ -29,6 +29,14 @@ function rawFileUrl(path: string): string {
   return `/file-api/raw-file?path=${encodeURIComponent(path)}`;
 }
 
+/** 下载按钮的建议文件名——用素材名/提示词当主文件名，后缀照抄磁盘上
+ *  那份文件自己的后缀（没有后缀就不强加一个，交给浏览器自己判断）。 */
+function downloadFileName(asset: DirectorAsset, fallback: string): string {
+  const base = (asset.name || asset.prompt || fallback).trim() || fallback;
+  const match = /\.[a-zA-Z0-9]+$/.exec(asset.file_path ?? '');
+  return match ? `${base}${match[0]}` : base;
+}
+
 function relativeTime(t: (key: string, opts?: Record<string, unknown>) => string, ts: number): string {
   const diffMs = Date.now() - ts * 1000;
   const diffMin = Math.floor(diffMs / 60000);
@@ -100,20 +108,40 @@ const enlargeIcon = (
   </svg>
 );
 
+const downloadIcon = (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3v12M7 10l5 5 5-5M4 19h16" />
+  </svg>
+);
+
 interface EnlargeableImageProps {
   src: string;
   alt: string;
+  /** 下载时的建议文件名——视频缩略图用的是浏览器原生 <video controls>
+   *  自带的下载按钮，图片没有等价的原生控件，这里补一个明确的下载按钮，
+   *  让图片素材也能像视频素材一样直接下载。 */
+  downloadFileName: string;
 }
 
 /** 图片缩略图右下角的"放大"按钮，与视频原生控件的全屏按钮效果一致——
  *  都调用浏览器 Fullscreen API，而不是自建 lightbox。 */
-function EnlargeableImage({ src, alt }: EnlargeableImageProps) {
+function EnlargeableImage({ src, alt, downloadFileName }: EnlargeableImageProps) {
   const { t } = useTranslation();
   const imgRef = useRef<HTMLImageElement>(null);
 
   return (
     <>
       <img ref={imgRef} src={src} alt={alt} className="director-asset-image" />
+      <a
+        href={src}
+        download={downloadFileName}
+        className="director-asset-download-btn"
+        title={t('director.download')}
+        onClick={(e) => e.stopPropagation()}
+        data-testid="director-asset-image-download"
+      >
+        {downloadIcon}
+      </a>
       <button
         type="button"
         className="director-asset-enlarge-btn"
@@ -542,7 +570,11 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
                   >
                     <div className="director-asset-thumb director-asset-thumb--image">
                       {asset.file_path && (
-                        <EnlargeableImage src={rawFileUrl(asset.file_path)} alt={asset.name || asset.prompt} />
+                        <EnlargeableImage
+                          src={rawFileUrl(asset.file_path)}
+                          alt={asset.name || asset.prompt}
+                          downloadFileName={downloadFileName(asset, t('director.categories.image'))}
+                        />
                       )}
                     </div>
                     <AssetNameLabel
@@ -636,7 +668,11 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
                   >
                     <div className="director-asset-thumb director-asset-thumb--image">
                       {asset.file_path && (
-                        <EnlargeableImage src={rawFileUrl(asset.file_path)} alt={asset.name || asset.prompt} />
+                        <EnlargeableImage
+                          src={rawFileUrl(asset.file_path)}
+                          alt={asset.name || asset.prompt}
+                          downloadFileName={downloadFileName(asset, t('director.categories.character'))}
+                        />
                       )}
                     </div>
                     <AssetNameLabel

@@ -134,6 +134,7 @@
       "placeholder": "Name (no spaces)"
     },
     "enlarge": "Enlarge",
+    "download": "Download",
     "upload": {
       "action": "Upload",
       "error": "Upload failed: {{message}}"

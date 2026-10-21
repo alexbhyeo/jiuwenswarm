@@ -323,6 +323,30 @@
   background: rgba(0, 0, 0, 0.75);
 }
 
+/* 跟放大按钮对称摆在左下角——视频缩略图用浏览器原生 <video controls>
+   自带的下载按钮，图片没有等价的原生控件，这里补一个一样大小/位置对称
+   的下载按钮，让图片素材也能像视频素材一样直接下载。 */
+.director-asset-download-btn {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.director-asset-download-btn:hover {
+  background: rgba(0, 0, 0, 0.75);
+}
+
 .director-asset-name {
   display: flex;
   align-items: center;
