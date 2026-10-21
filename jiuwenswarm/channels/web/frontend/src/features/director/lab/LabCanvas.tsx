@@ -800,10 +800,30 @@ function LabCanvasInner() {
 
     const assetById = new Map(project.assets.map((a) => [a.asset_id, a]));
 
+    // 清空重建之前，先把"已经在画布上、而且重新生成过"的卡片记下来——
+    // 卡片的 history[0] 永远是它最早那条记录（见 applyGenerateResult 只
+    // 追加不删除），如果这条记录的 assetId 正好是聊天记录里的某个素材，
+    // 说明这张卡片就是那个素材对应的卡片，哪怕用户后来点过几次"重新
+    // 生成"、甚至切换过正在展示哪一条结果。不这样记下来的话，清空重建
+    // 会让这张卡片退回成聊天记录里那一条最早的记录，用户后来重新生成出
+    // 来的结果、以及"当前选的是哪一条"这个状态都会凭空丢失。
+    const preservedHistoryByAssetId = new Map<string, { history: GenerationEntry[]; activeHistoryIndex: number }>();
+    for (const n of getNodes()) {
+      if (n.type !== 'process') continue;
+      const data = n.data as ProcessNodeData;
+      const firstEntryAssetId = data.history?.[0]?.assetId;
+      if (firstEntryAssetId && data.history.length > 0) {
+        preservedHistoryByAssetId.set(firstEntryAssetId, {
+          history: data.history,
+          activeHistoryIndex: data.activeHistoryIndex,
+        });
+      }
+    }
+
     // 每次点"生成实验室流程图"都先把画布上全部的素材卡片/处理卡片清空，
     // 再按聊天记录整体重建一遍——不再是"只摆没摆过的素材"的增量模式，
     // 这样聊天记录里素材被删掉/重新生成之后，画布不会留下一张对不上的
-    // 旧卡片。
+    // 旧卡片。重新生成过的历史记录已经在上面摘出来了，不受这次清空影响。
     setNodes([]);
     setEdges([]);
 
@@ -1142,6 +1162,14 @@ function LabCanvasInner() {
         filePath: asset.file_path as string,
         name: asset.name || asset.prompt || '',
       };
+      // 这张卡片如果清空前已经重新生成过，用保留下来的完整历史（以及
+      // 当时选中的是第几条）顶替这里从聊天记录重建出来的单条记录——下游
+      // 卡片读的是 activeHistoryIndex 对应的那条的扁平镜像字段，保留下来
+      // 之后，重新生成出来的结果、以及"当前选中哪一条"都会原样接着用。
+      const preserved = preservedHistoryByAssetId.get(asset.asset_id);
+      const history = preserved?.history ?? [entry];
+      const activeHistoryIndex = preserved ? Math.min(Math.max(preserved.activeHistoryIndex, 0), history.length - 1) : 0;
+      const activeEntry = history[activeHistoryIndex] ?? entry;
       const processData: ProcessNodeData = {
         kind,
         status: 'idle',
@@ -1173,11 +1201,11 @@ function LabCanvasInner() {
           kind === 'video2video' && typeof params.input_video_path === 'string' && isRemoteUrl(params.input_video_path)
             ? params.input_video_path
             : '',
-        history: [entry],
-        activeHistoryIndex: 0,
-        assetId: entry.assetId,
-        filePath: entry.filePath,
-        name: entry.name,
+        history,
+        activeHistoryIndex,
+        assetId: activeEntry.assetId,
+        filePath: activeEntry.filePath,
+        name: activeEntry.name,
       };
       addNode({ id: processNodeId, type: 'process', position: { x: processX, y }, data: processData });
 
