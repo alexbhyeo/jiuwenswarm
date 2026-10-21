@@ -790,6 +790,55 @@ async def test_openrouter_video_reference_mode_folds_frame_into_references(monke
 
 
 @pytest.mark.asyncio
+async def test_openrouter_video_submit_retries_tls_send_errors(monkeypatch, tmp_path):
+    """A TLS record error while sending (anyio raises a bare ssl.SSLError) means no job was created."""
+    import ssl
+
+    inner = _or_video_handler(["completed"])
+    failures = iter([ssl.SSLError(1, "[SSL: SSLV3_ALERT_BAD_RECORD_MAC] ssl/tls alert bad record mac")])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            failure = next(failures, None)
+            if failure is not None:
+                raise failure
+        return inner(request)
+
+    seen = _patch_client(monkeypatch, handler)
+    result = await gt.submit_video(_OR_VIDEO_TARGET, gt.VideoRequest("p", "16:9", "720p", 5), str(tmp_path))
+    assert _saved_path(result).read_bytes() == _MP4
+    assert [r.method for r in seen].count("POST") == 2
+
+
+@pytest.mark.asyncio
+async def test_openrouter_persistent_tls_error_is_reported_not_raised(monkeypatch, tmp_path):
+    import ssl
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise ssl.SSLError(1, "[SSL: SSLV3_ALERT_BAD_RECORD_MAC] ssl/tls alert bad record mac")
+
+    seen = _patch_client(monkeypatch, handler)
+    result = await gt.submit_video(_OR_VIDEO_TARGET, gt.VideoRequest("p", "16:9", "720p", 5), str(tmp_path))
+    assert result.startswith("[ERROR]: OpenRouter video generation request failed: SSLError")
+    assert len(seen) == gt._OPENROUTER_POST_ATTEMPTS
+    image = await gt.generate_image(_OR_TARGET, "a fox", "1:1", str(tmp_path))
+    assert image.startswith("[ERROR]: OpenRouter image generation request failed: SSLError")
+
+
+@pytest.mark.asyncio
+async def test_openrouter_read_timeout_is_not_resubmitted(monkeypatch, tmp_path):
+    """After the body was sent the job may exist; resending could start (and bill) a second clip."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    seen = _patch_client(monkeypatch, handler)
+    result = await gt.submit_video(_OR_VIDEO_TARGET, gt.VideoRequest("p", "16:9", "720p", 5), str(tmp_path))
+    assert result.startswith("[ERROR]: OpenRouter video generation request failed: ReadTimeout")
+    assert len(seen) == 1
+
+
+@pytest.mark.asyncio
 async def test_openrouter_video_pending_failed_and_check(monkeypatch, tmp_path):
     _patch_client(monkeypatch, _or_video_handler(["in_progress"] * 100))
     request = gt.VideoRequest("p", "16:9", "480p", 5)

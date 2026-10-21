@@ -87,6 +87,7 @@ import logging
 import os
 import re
 import secrets
+import ssl
 import threading
 import time
 from dataclasses import dataclass
@@ -172,6 +173,12 @@ _VLLM_OMNI_MAX_POLL_SECONDS = 300
 
 _OPENROUTER_MAX_POLL_SECONDS = 300
 _OPENROUTER_FAILED_STATUSES = ("failed", "cancelled", "expired")
+# A POST that fails while connecting or sending (incl. a TLS record error such as
+# SSLV3_ALERT_BAD_RECORD_MAC, which anyio raises as a bare ssl.SSLError) never reached
+# the provider as a request, so no job was created and it is safe to send again.
+_OPENROUTER_SEND_ERRORS = (httpx.ConnectError, httpx.WriteError, httpx.ConnectTimeout, ssl.SSLError)
+_OPENROUTER_POST_ATTEMPTS = 3
+_OPENROUTER_RETRY_DELAY_SECONDS = 2
 # Ratios Gemini image models accept in image_config.aspect_ratio.
 _OPENROUTER_IMAGE_RATIOS = ("1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9")
 
@@ -1386,6 +1393,22 @@ def _openrouter_error_detail(resp: httpx.Response) -> str:
     return f"{resp.status_code} {str(error or payload)[:300]}"
 
 
+async def _openrouter_post(
+    client: httpx.AsyncClient, url: str, headers: dict[str, str], body: dict[str, Any]
+) -> httpx.Response:
+    """POST, resending when the request failed before it reached OpenRouter."""
+    for attempt in range(1, _OPENROUTER_POST_ATTEMPTS + 1):
+        try:
+            return await client.post(url, headers=headers, json=body)
+        except _OPENROUTER_SEND_ERRORS as exc:
+            if attempt == _OPENROUTER_POST_ATTEMPTS:
+                raise
+            logger.warning("OpenRouter POST %s failed while sending (attempt %d/%d): %r; retrying",
+                           url, attempt, _OPENROUTER_POST_ATTEMPTS, exc)
+            await asyncio.sleep(_OPENROUTER_RETRY_DELAY_SECONDS)
+    raise AssertionError("unreachable")
+
+
 async def _openrouter_image_bytes(client: httpx.AsyncClient, url: str) -> bytes:
     if url.startswith("data:"):
         return base64.b64decode(url.partition(",")[2])
@@ -1415,7 +1438,7 @@ async def _openrouter_generate_image(
     base = target.api_base.strip().rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=180, verify=get_requests_verify()) as client:
-            resp = await client.post(f"{base}/chat/completions", headers=headers, json=body)
+            resp = await _openrouter_post(client, f"{base}/chat/completions", headers, body)
             if resp.status_code != 200:
                 return f"[ERROR]: OpenRouter image generation failed: {_openrouter_error_detail(resp)}"
             try:
@@ -1434,7 +1457,7 @@ async def _openrouter_generate_image(
                 dest = _save_path(save_dir, "generated_images", _image_filename(index, data))
                 dest.write_bytes(data)
                 saved.append(str(dest))
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, ssl.SSLError) as exc:
         return f"[ERROR]: OpenRouter image generation request failed: {exc!r}"
     except (OSError, ValueError) as exc:
         return f"[ERROR]: failed to save OpenRouter image: {exc!r}"
@@ -1526,7 +1549,7 @@ async def _openrouter_submit_video(target: GenerationTarget, request: VideoReque
     body = _openrouter_video_body(target.model, request)
     try:
         async with httpx.AsyncClient(timeout=60, verify=get_requests_verify()) as client:
-            resp = await client.post(f"{base}/videos", headers=headers, json=body)
+            resp = await _openrouter_post(client, f"{base}/videos", headers, body)
             if resp.status_code not in (200, 201, 202):
                 return f"[ERROR]: OpenRouter video generation submit failed: {_openrouter_error_detail(resp)}"
             try:
@@ -1548,7 +1571,7 @@ async def _openrouter_submit_video(target: GenerationTarget, request: VideoReque
                     job_id, status, elapsed, " (call the tool again to wait; do not use shell sleep)"
                 )
             return await _openrouter_finish(_OpenRouterJob(client, base, headers, job_id), job, save_dir)
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, ssl.SSLError) as exc:
         return f"[ERROR]: OpenRouter video generation request failed: {exc!r}"
 
 
@@ -1566,5 +1589,5 @@ async def _openrouter_check_video(target: GenerationTarget, task_id: str, save_d
                     "(do not use shell sleep)."
                 )
             return await _openrouter_finish(_OpenRouterJob(client, base, headers, task_id), job, save_dir)
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, ssl.SSLError) as exc:
         return f"[ERROR]: checking OpenRouter video job {task_id} failed: {exc!r}"
