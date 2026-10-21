@@ -820,9 +820,6 @@ function LabCanvasInner() {
     const videoNodeIdByPath = new Map<string, string>();
     // 音频卡片也能当输入（图音生视频的 audio1 端口），同样单独一张表。
     const audioNodeIdByPath = new Map<string, string>();
-    // 素材 id -> 它在画布上的 y 坐标——用来给"依赖上一个输出"的素材算摆放
-    // 位置（取它依赖的那些素材的 y 均值）。
-    const assetY = new Map<string, number>();
 
     // 画布已经整体清空，聊天记录里出现过的素材这次都要重新摆一遍。
     const newAssetIds = orderedAssetIds;
@@ -841,8 +838,16 @@ function LabCanvasInner() {
     // 空列，各组间距因此跟组内一样均匀；真有全新参考图需要新开一列的少数
     // 情况，就接受它跟上一组的卡片共用同一列 x（不同 y，不会互相遮挡）。
     const GROUP_STEP = 360;
-    // 画布刚清空，从顶部开始摆。
-    let rowY = 60;
+    // 每一列（深度）各自独立、从画布顶部同一个起点往下顺序摞——不按"依赖
+    // 的素材排在第几行"对齐，保证不管一张卡片依赖的是上一列第几行，第二
+    // 列及以后的第一张卡片都跟第一列的第一张卡片一样从顶部开始，各列顶部
+    // 对齐，不会因为依赖关系而错位摆到比第一列更靠下的位置。
+    const rowYByDepth = new Map<number, number>();
+    const takeRowY = (depth: number): number => {
+      const next = rowYByDepth.get(depth) ?? 60;
+      rowYByDepth.set(depth, next + ROW_HEIGHT);
+      return next;
+    };
 
     // columnKey 复用上面 processColumnKey/refColumnKey 的同一张登记表——
     // "复用不到、要新开一张参考卡片"这个分支此前完全不经过任何避让检查，
@@ -1103,25 +1108,17 @@ function LabCanvasInner() {
         bridgeClip2Path,
         kind,
         mode,
-        depAssetIds,
       } = plan;
 
-      // 深度 0 也过一遍 claimY（用同一个 processColumnKey(0)）——这一列
-      // 可能跟深度 1 的参考列共享物理 x（见 refColumnKey 注释），新摆的
-      // 参考卡片一样会在这张登记表里占位，深度 0 的处理卡片不能绕开它。
-      const y = claimY(
-        processColumnKey(depth),
-        depth === 0
-          ? (() => {
-              const placed = rowY;
-              rowY += ROW_HEIGHT;
-              return placed;
-            })()
-          : (() => {
-              const depYs = depAssetIds.map((depId) => assetY.get(depId)).filter((v): v is number => v !== undefined);
-              return depYs.length > 0 ? depYs.reduce((a, b) => a + b, 0) / depYs.length : rowY;
-            })()
-      );
+      // 每一列都从同一个顶部起点（takeRowY 的初始值）往下摞，不管这张卡片
+      // 依赖的是上一列第几行——之前按"依赖素材的 y 均值"摆放，好几张卡片
+      // 依赖同一批上一列素材（比如都引用了同几张设计图做参考）时，算出来
+      // 的 y 均值完全一样，claimY 的避让逻辑就把它们一个接一个往下顺延，
+      // 整列相对第一列一起往下错开一整行，看着像"从第二列开始矮一截"。
+      // 改成每一列各自独立、从顶部开始顺序摞下去，跟第一列的起点对齐，
+      // 不再按依赖对齐——claimY 仍然保留（避免同一列里挨太近的卡片叠加，
+      // 以及和下一列复用这一列物理 x 的参考卡片冲突）。
+      const y = claimY(processColumnKey(depth), takeRowY(depth));
       const refColKey = refColumnKey(depth);
 
       const xOffset = depth * GROUP_STEP;
@@ -1246,7 +1243,6 @@ function LabCanvasInner() {
       // 立刻进索引表：排在后面的素材（比如引用这段视频写解说的那张音频
       // 卡片）要能把它当参考复用，而不是再摆一张独立的参考卡片。
       outputNodeIdByAsset.set(asset.asset_id, processNodeId);
-      assetY.set(asset.asset_id, y);
       if (mode === 'image') imageNodeIdByPath.set(asset.file_path as string, processNodeId);
       if (mode === 'video') videoNodeIdByPath.set(asset.file_path as string, processNodeId);
       if (mode === 'audio') audioNodeIdByPath.set(asset.file_path as string, processNodeId);
