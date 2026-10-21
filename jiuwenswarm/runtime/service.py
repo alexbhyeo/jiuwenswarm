@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import time
 import uuid
 from contextlib import aclosing
 from dataclasses import replace
@@ -120,7 +121,7 @@ class RuntimeStateError(RuntimeError):
 
 async def _initialize_runtime_dependencies() -> None:
     """Initialize shared runtime dependencies without starting a server."""
-    from jiuwenswarm.server.runtime.agent_adapter.interface_deep import (
+    from jiuwenswarm.runtime.checkpointer import (
         ensure_persistent_checkpointer,
     )
 
@@ -135,15 +136,21 @@ async def _acquire_process_runtime_dependencies() -> None:
         if _PROCESS_RUNTIME_DEPENDENCY_USERS == 0:
             runner_start_attempted = False
             try:
+                phase_started = time.monotonic()
                 await _initialize_runtime_dependencies()
+                logger.info("[Worker] preparation stage=checkpointer_start duration_ms=%.3f",
+                            (time.monotonic() - phase_started) * 1000)
                 from openjiuwen.core.runner import Runner
 
                 runner_start_attempted = True
+                phase_started = time.monotonic()
                 runner_started = await Runner.start()
+                logger.info("[Worker] preparation stage=runner_start duration_ms=%.3f",
+                            (time.monotonic() - phase_started) * 1000)
                 if runner_started is False:
                     raise RuntimeError("Runner failed to start")
             except BaseException as start_error:
-                from jiuwenswarm.server.runtime.agent_adapter.interface_deep import (
+                from jiuwenswarm.runtime.checkpointer import (
                     close_persistent_checkpointer,
                 )
 
@@ -197,7 +204,7 @@ async def _release_process_runtime_dependencies() -> None:
         except BaseException as exc:
             cleanup_errors.append(exc)
 
-        from jiuwenswarm.server.runtime.agent_adapter.interface_deep import (
+        from jiuwenswarm.runtime.checkpointer import (
             close_persistent_checkpointer,
         )
 
@@ -352,6 +359,7 @@ class AgentRuntime:
             team_execution_controller=team_execution_controller,
         )
         self._resource_lease = resource_lease
+        self._team_execution_controller = team_execution_controller
         self._session_coordinator = session_coordinator or RuntimeSessionCoordinator()
         self._session_runtime_lifecycle = session_runtime_lifecycle
         # Covers chat admission and preparation before the Team adapter creates
@@ -888,6 +896,10 @@ class AgentRuntime:
         """Return the bounded status record for queued Session work."""
         return self._session_coordinator.get_execution(execution_id)
 
+    def get_session_snapshot(self, session_id: str):
+        """Read the authoritative execution state without attaching a consumer."""
+        return self._session_coordinator.snapshot_session(session_id)
+
     async def prepare_session_fork(
         self,
         provision_input: SessionForkInput,
@@ -1075,12 +1087,21 @@ class AgentRuntime:
                 agent_definition=agent_execution.definition.to_dict(),
                 agent_definition_fingerprint=agent_execution.fingerprint,
             )
-        return await prepare_chat_turn(
+        prepared = await prepare_chat_turn(
             self._agent_manager,
             request,
             channel_id,
             **prepare_kwargs,
         )
+        from jiuwenswarm.common.mode_matrix import is_team_mode
+        from jiuwenswarm.runtime.team_controller import LazyTeamExecutionController
+
+        if (is_team_mode((request.params or {}).get("mode"))
+                and isinstance(self._team_execution_controller, LazyTeamExecutionController)):
+            # Team execution may report inactivity before a later delete. Its
+            # existing owner and reporter must be bound before the first turn.
+            self._team_execution_controller.activate()
+        return prepared
 
     async def cancel_request(
         self,
@@ -1813,9 +1834,28 @@ class AgentRuntime:
         if work_kind is not None:
             await self._ensure_session_registered(request)
             if work_kind is SessionWorkKind.CONTROL_INPUT:
-                events = await self._deliver_control(
-                    request, on_control_event=on_control_event,
-                )
+                if (
+                    request.params.get("source") in {"ask_user_interrupt", "confirm_interrupt"}
+                    and self._session_coordinator.control_target_work_kind(
+                        request.session_id or "default", self._control_request_id(request)
+                    ) is not SessionWorkKind.HEARTBEAT
+                ):
+                    async with aclosing(self._stream_with_runtime_context(
+                        self._stream_question_answer(request)
+                    )) as events:
+                        async for event in events:
+                            yield event
+                    return
+                # The resumed turn runs inside this await, before the loop
+                # below binds the Runtime. Bind it here as ``invoke`` does so
+                # the turn can reach host services such as Session messaging.
+                token = set_runtime_context(self, self._agent_manager)
+                try:
+                    events = await self._deliver_control(
+                        request, on_control_event=on_control_event,
+                    )
+                finally:
+                    reset_runtime_context(token)
                 for event in events:
                     yield event
                 return
@@ -2284,6 +2324,41 @@ class AgentRuntime:
                 )
                 await self._mark_pending_interaction(event)
                 yield event
+
+    async def _stream_question_answer(
+        self,
+        request: AgentRequest,
+    ) -> AsyncIterator[RuntimeEvent]:
+        """Stream a compatibility question or confirmation under control admission.
+
+        The unary control API deliberately collects a complete turn. WebSocket
+        chat.send answers must instead expose each event while the turn runs.
+        Heartbeat controls retain their existing owner and completion policy.
+        """
+        session_id = request.session_id or "default"
+        request_id = self._control_request_id(request)
+        begin_control = getattr(self._admission_controller, "begin_control", None)
+        end_control = getattr(self._admission_controller, "end_control", None)
+        admitted = callable(begin_control) and callable(end_control)
+        if admitted:
+            await begin_control(session_id)
+        try:
+            stream = self._session_coordinator.deliver_control_stream(
+                session_id,
+                request_id,
+                lambda: self._stream_control_started(request),
+                suspension_key=self._waiting_control_id,
+            )
+            async with aclosing(stream):
+                async for event in stream:
+                    yield event
+        except BaseException:
+            if self._session_coordinator.has_control_target(session_id, request_id):
+                await self._mark_pending_interaction_id(session_id, request_id)
+            raise
+        finally:
+            if admitted:
+                await end_control(session_id)
 
     async def _deliver_control(
         self,
@@ -3555,6 +3630,15 @@ class AgentRuntime:
 
     async def _ensure_extensions(self) -> None:
         self._shared_extensions_acquired = await _acquire_process_runtime_extensions()
+        # Shipped AgentGroups must be usable on first start; a bad package only warns.
+        try:
+            from jiuwenswarm.server.runtime.extension_package_manager import (
+                ensure_builtin_agent_groups_installed,
+            )
+
+            ensure_builtin_agent_groups_installed()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("builtin agent_group install skipped: %s", exc)
 
     async def _rollback_start(self) -> None:
         """Undo partially initialized owned dependencies after start failure."""
