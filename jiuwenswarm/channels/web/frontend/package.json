@@ -132,7 +132,8 @@
     "test:trajectory-turn-gaps": "esbuild src/features/trajectory/trajectoryTurnGaps.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/trajectory-turn-gaps/trajectoryTurnGaps.mjs && node --test tests/trajectoryTurnGaps.test.mjs",
     "test:trajectory-sequences": "esbuild src/features/trajectory/trajectorySequences.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/trajectory-sequences/trajectorySequences.mjs && node --test tests/trajectorySequences.test.mjs",
     "test:permission-text-i18n": "tsc src/components/InteractionSlot/permissionTextI18n.ts --target ES2020 --module ES2020 --moduleResolution Bundler --rootDir src --outDir node_modules/.cache/permission-text-i18n --skipLibCheck --noEmitOnError && node --test tests/permissionTextI18n.test.mjs",
-    "test:director-lab-audio": "esbuild src/features/director/lab/labTypes.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/director-lab-audio/labTypes.js && node --test tests/directorLabAudioOption.test.mjs"
+    "test:director-lab-audio": "esbuild src/features/director/lab/labTypes.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/director-lab-audio/labTypes.js && node --test tests/directorLabAudioOption.test.mjs",
+    "test:director-swap-popover": "esbuild src/features/director/lab/nodes/MediaFrame.tsx --bundle --platform=node --format=esm --loader:.tsx=tsx --outfile=node_modules/.cache/director-swap-popover/MediaFrame.js && node --test tests/directorSwapPopoverSize.test.mjs"
   },
   "dependencies": {
     "@a2ui/react": "0.8.0",

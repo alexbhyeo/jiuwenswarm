@@ -2742,27 +2742,31 @@
 
   position: fixed;
   z-index: 100;
-  width: 212px;
-  max-height: 260px;
+  /* 尺寸与 MediaFrame.tsx 的 SWAP_POPOVER_WIDTH / SWAP_POPOVER_MAX_HEIGHT
+     必须一致——定位那一步要用这几个数字把弹层夹进视口，只改一边会让弹层
+     跑到屏幕外或被裁掉。 */
+  width: 420px;
+  max-height: 560px;
+  max-width: calc(100vw - 16px);
   overflow-y: auto;
   background: var(--d-bg-shell);
   border: 1px solid var(--d-border-default);
   border-radius: var(--d-radius-md);
-  padding: 8px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 .lab-node-swap-popover-upload {
   width: 100% !important;
   height: auto !important;
-  padding: 6px 8px !important;
+  padding: 10px 12px !important;
   border-radius: var(--d-radius-sm) !important;
   background: var(--d-bg-card) !important;
   color: var(--d-text-primary) !important;
-  font-size: 11px;
+  font-size: 13px;
   text-align: left;
   flex: 0 0 auto;
 }
@@ -2771,11 +2775,13 @@
   border-color: var(--d-border-strong);
 }
 
+/* 3 列而不是 4 列：弹层加宽到 420px 之后，(420 - 24 padding - 20 gap) / 3
+   ≈ 125px 一格，比原来 4 列时的 ~44px 大得多，换图时能真正看清画面。 */
 .lab-node-swap-popover-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
-  max-height: 180px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  max-height: 470px;
   overflow-y: auto;
 }
 
@@ -2803,10 +2809,10 @@
 
 .lab-node-swap-popover-empty {
   grid-column: 1 / -1;
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--d-text-secondary);
   text-align: center;
-  padding: 10px 0;
+  padding: 16px 0;
 }
 
 .lab-node-name {
