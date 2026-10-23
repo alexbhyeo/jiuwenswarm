@@ -2616,6 +2616,36 @@
   color: #dc2626;
 }
 
+/* 标题栏右侧的操作组（显示开关 + 删除）。标题栏本身是 space-between，
+   三个平级子元素会把中间的开关挤到标题和删除之间、看起来悬在中间；包成
+   一组之后标题在左、两个图标紧挨着贴右。 */
+.lab-node-label-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lab-node-label-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+/* 卡片标题栏上的"模型 / 生成参数"显示开关：跟删除按钮同一套尺寸/位置，
+   hover 用主色（而不是删除按钮的红色）表示"这是显示类操作"。常驻显示，
+   不跟其它操作一样 hover 才露出——收起状态下用户也要能把它再打开。 */
+.lab-node-params-toggle:hover {
+  background: var(--d-bg-hover);
+  color: var(--d-accent);
+}
+
+/* 当前是"显示"状态时给图标一点存在感，和"已隐藏"区分开。 */
+.lab-node-params-toggle--on {
+  color: var(--d-text-primary);
+}
+
 /* -- 图片 / 视频 / 音频节点 -- */
 
 /* 三种"素材卡片"必须同宽。不能只靠 min/max 让内容自己撑开：图片卡片的
@@ -2958,13 +2988,23 @@
   max-width: 260px;
 }
 
-/* 输出连接点对齐到左侧输入端口组的垂直中心（标题栏高度 + 端口区
-   固定高度的一半），而不是卡片整体高度的中点——这样输出点正好和
-   左边那组输入点落在同一条水平线上，不会因为参数区/生成按钮的高度
-   把两侧的连接点错开。这个值由 .lab-node-label 与 .lab-node-ports
-   的固定高度决定，与处理类型、行数无关。 */
+/* 输出连接点对齐到左侧输入端口组的垂直中心（标题栏高度 + 端口区高度的
+   一半），而不是卡片整体高度的中点——这样输出点正好和左边那组输入点落在
+   同一条水平线上，不会因为参数区/生成按钮的高度把两侧的连接点错开。
+   端口区高度做成变量：收起详情时它变矮（见 lab-node-ports--compact），
+   输出点必须跟着上移，否则会飘到卡片中部。原来这里是写死的 79px，等于把
+   「标题栏 40px + 端口区 78px 的一半」这个算式固化下来，一改端口区高度就
+   对不上了。 */
+.lab-node--process {
+  --lab-process-ports-h: 78px;
+}
+
+.lab-node--process-compact {
+  --lab-process-ports-h: 26px;
+}
+
 .lab-node--process > .react-flow__handle-right {
-  top: 79px !important;
+  top: calc(var(--lab-process-header-h, 40px) + var(--lab-process-ports-h) / 2) !important;
   transform: translate(50%, -50%) !important;
 }
 
@@ -2976,7 +3016,60 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  min-height: 78px;
+  min-height: var(--lab-process-ports-h, 78px);
+}
+
+/* 收起详情时的端口条：**所有输入端口合并成左边缘的同一个圆点**。
+   每行压成 0 高、只留里面的 <Handle>（标签、圆点、✓ 全部 display:none），
+   再把每个 handle 绝对定位到端口区左侧同一点上——视觉上只剩一个点，连线
+   全部汇聚到它。
+
+   为什么仍然把**每个** <Handle> 留在 DOM 里、而不是只渲染"主端口"一个：
+   React Flow 靠 handle 元素把每条边挂上去。只留一个的话，指向 image2 /
+   片段二 之类非主端口的既有连线就找不到目标元素、画不出来（边还在 state
+   里，但画布上看不见了）。全部留着、叠在同一点，既满足"只看得到一个点"，
+   又不会丢任何一条已有连线。
+
+   新建连线会落到最上面那个 handle 上（同一位置的叠放顺序决定命中），所以给
+   主端口加 .lab-node-handle-primary 提高 z-index：默认连到 image1 / video1 /
+   audio1 / 文字提示（见 ProcessNode 的 primaryPortId），想要别的端口就把
+   详情展开再连。tooltip（title）由 JSX 直接写在每个 Handle 上。 */
+.lab-node-ports--compact {
+  position: relative;
+  gap: 0;
+}
+
+.lab-node-ports--compact .lab-node-input-row {
+  /* static：让下面那些绝对定位的 handle 以端口区（而不是 0 高的行）为定位
+     参照，否则它们会各自停在自己那一行的 0 高度位置上、散成几个点。 */
+  position: static;
+  height: 0;
+  min-height: 0;
+  padding: 0;
+  cursor: default;
+  /* 端口名是直接写在行里的**文本节点**，不是元素，下面那条
+     `> *:not(.react-flow__handle)` 选择器选不到它——只压扁高度的话，文字会
+     从 0 高的行里溢出来继续显示（收起后卡片上仍挂着"文字提示 / 图片参考"）。
+     字号归零是唯一能连裸文本一起收起来的写法；行里剩下的元素子节点本来就
+     display:none，所以不会误伤。 */
+  font-size: 0;
+  line-height: 0;
+}
+
+.lab-node-ports--compact .lab-node-input-row > *:not(.react-flow__handle) {
+  display: none;
+}
+
+.lab-node-ports--compact .react-flow__handle-left {
+  position: absolute !important;
+  top: 50% !important;
+  left: 0 !important;
+  transform: translate(-50%, -50%) !important;
+}
+
+/* 叠在同一个点上时，谁在上面就决定了新建连线落到哪个端口——主端口置顶。 */
+.lab-node-ports--compact .lab-node-handle-primary {
+  z-index: 3;
 }
 
 .lab-node-input-row {

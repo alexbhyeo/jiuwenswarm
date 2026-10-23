@@ -29,6 +29,7 @@ import { DEFAULT_AUDIO_VOICE } from '../audioVoices';
 import { DEFAULT_AUDIO_STYLE } from '../audioStyles';
 import { pickSwitchTargets } from './rebuildSwitch';
 import { swappedEntryName } from './swapAssets';
+import { getShowCardDetail, setShowCardDetail, stripDetailOverrides, useShowCardDetail } from './cardDetailPrefs';
 import { resolveDepths } from './rebuildLayout';
 import type { GenerationEntry, ImageNodeData, ProcessKind, ProcessMode, ProcessNodeData } from './labTypes';
 import {
@@ -102,6 +103,16 @@ const audioGroupIcon = (
   </svg>
 );
 
+/** 工具栏上的"显示 / 隐藏卡片的模型与生成参数"开关（sliders）。 */
+const cardParamsIcon = (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h10M18 18h2" />
+    <circle cx="16" cy="6" r="2" />
+    <circle cx="10" cy="12" r="2" />
+    <circle cx="16" cy="18" r="2" />
+  </svg>
+);
+
 type ToolrailMenu = 'image' | 'video' | 'audio' | null;
 
 // 画布持久化的 debounce 间隔：节点拖拽/连线时会连续触发多次
@@ -165,6 +176,7 @@ function LabCanvasInner() {
   const { screenToFlowPosition, getNodes, getEdges } = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [openMenu, setOpenMenu] = useState<ToolrailMenu>(null);
+  const showCardDetail = useShowCardDetail();
   const pollTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const addNode = useCallback((node: Node) => setNodes((nds) => nds.concat(node)), [setNodes]);
@@ -848,7 +860,10 @@ function LabCanvasInner() {
     // 没点过"重新生成"时，history[0] 正好就是 activeHistoryIndex 指向的
     // 那一条，会被换图直接覆盖掉，跟聊天记录里的原始素材 id 对不上，
     // 换上去的图反而会在下一次清空重建时丢失。
-    const preservedHistoryByAssetId = new Map<string, { history: GenerationEntry[]; activeHistoryIndex: number }>();
+    const preservedHistoryByAssetId = new Map<
+      string,
+      { history: GenerationEntry[]; activeHistoryIndex: number; detailVisible?: boolean }
+    >();
     for (const n of getNodes()) {
       if (n.type !== 'process') continue;
       const data = n.data as ProcessNodeData;
@@ -856,6 +871,7 @@ function LabCanvasInner() {
         preservedHistoryByAssetId.set(data.originAssetId, {
           history: data.history,
           activeHistoryIndex: data.activeHistoryIndex,
+          detailVisible: data.detailVisible,
         });
       }
     }
@@ -1282,6 +1298,9 @@ function LabCanvasInner() {
           kind === 'video2video' && typeof params.input_video_path === 'string' && isRemoteUrl(params.input_video_path)
             ? params.input_video_path
             : '',
+        // 逐卡片的"显示模型/生成参数"开关也要跟着卡片活下来，否则重建一次
+        // 就把用户逐卡调过的显示状态全抹回"跟随全局"。
+        detailVisible: preserved?.detailVisible,
         history,
         activeHistoryIndex,
         assetId: activeEntry.assetId,
@@ -1510,6 +1529,14 @@ function LabCanvasInner() {
     return { dx: step * 36, dy: step * 28 };
   }, []);
 
+  /** 全局"显示/隐藏详情"开关：先切默认值，再把所有逐卡覆盖清掉，让这一次点击
+   *  对画布上**每一张**卡片都生效。否则单独点过某张卡片之后，全局开关就再也
+   *  管不到它（见 cardDetailPrefs.stripDetailOverrides 的注释）。 */
+  const handleToggleAllCardDetail = useCallback(() => {
+    setShowCardDetail(!getShowCardDetail());
+    setNodes((nds) => stripDetailOverrides(nds));
+  }, [setNodes]);
+
   const handleAddProcess = (kind: ProcessKind) => {
     const { dx, dy } = nextSpawnOffset();
     const center = wrapperRef.current
@@ -1612,6 +1639,22 @@ function LabCanvasInner() {
                 ))}
               </div>
             )}
+          </div>
+
+          {/* 全局默认：卡片上要不要展示"模型 / 生成参数"那一段。逐卡片的开关
+              在卡片标题栏上（会覆盖这里的默认值）。放工具栏而不是设置页，
+              是因为它影响的就是眼前这块画布，边看边切最直观。 */}
+          <div className="lab-toolrail-item">
+            <button
+              type="button"
+              className={`lab-toolrail-btn ${showCardDetail ? '' : 'lab-toolrail-btn--active'}`}
+              title={t(showCardDetail ? 'director.lab.cardDetailHideAll' : 'director.lab.cardDetailShowAll')}
+              aria-pressed={showCardDetail}
+              onClick={handleToggleAllCardDetail}
+              data-testid="lab-toggle-card-params"
+            >
+              {cardParamsIcon}
+            </button>
           </div>
         </div>
 

@@ -19,6 +19,7 @@ import {
 } from '../labTypes';
 import { MediaFrame, popoverPositionFromTrigger } from './MediaFrame';
 import { filterSwappableAssets } from '../swapAssets';
+import { resolveDetailVisible, useShowCardDetail } from '../cardDetailPrefs';
 import { NodeNameLabel } from './NodeNameLabel';
 import { PromptTextarea } from './PromptTextarea';
 import { renderWithImageChips } from './promptChips';
@@ -79,6 +80,16 @@ const enlargeIcon = (
 const downloadIcon = (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
     <path d="M12 3v12M7 10l5 5 5-5M4 19h16" />
+  </svg>
+);
+
+/** 卡片标题栏上的"模型 / 生成参数"显示开关（sliders）。 */
+const paramsToggleIcon = (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h10M18 18h2" />
+    <circle cx="16" cy="6" r="2" />
+    <circle cx="10" cy="12" r="2" />
+    <circle cx="16" cy="18" r="2" />
   </svg>
 );
 
@@ -214,6 +225,14 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   // 源视频同理：video2video 的源片可以从"源视频"端口连进来，也可以直接填
   // 一条 HTTPS 地址（生视频接口只收 HTTPS 的 video_url 引用，本地素材送不
   // 进去，所以这条链接不是可有可无的便利功能，而是本地片段唯一可行的替代）。
+  // 收起详情后所有输入端口叠成左边缘的一个点，新建连线默认落到"主端口"上
+  // （置顶的那个）。优先非文字端口：这几类卡片的实际输入是图/片/音，文字提示
+  // 已经有卡片自带的弹窗，不是连线的主用途。顺序与 ProcessNode 渲染端口的顺序
+  // 无关，只表示"最常用的那一路"。
+  const primaryPortId = maxImages >= 1 ? 'image1' : maxVideos >= 1 ? 'video1' : maxAudios >= 1 ? 'audio1' : 'text';
+  const portClass = (portId: string): string | undefined =>
+    detailVisible || portId !== primaryPortId ? undefined : 'lab-node-handle-primary';
+
   const videoUrl = (data.videoUrl ?? '').trim();
   const hasVideoUrl = videoUrl.length > 0;
   // "视频链接"只有 video2video 有——video2audio 的输入视频是本地做理解用的，
@@ -246,6 +265,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
     (!requiresPrompt || text.trim().length > 0) &&
     (text.trim().length > 0 || hasAnyImage || !!video1 || !!video2 || audioConnected || hasAudioUrl);
 
+  const showCardDetail = useShowCardDetail();
   const [paramsOpen, setParamsOpen] = useState(false);
   const paramsRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -335,6 +355,8 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   // 展示的那一条素材去生成桥接片的，上游只有"重新生成"出来的候选时用户没法
   // 把一段已有的片子换进来。换掉的是 history[activeHistoryIndex] 这一条（连同
   // 扁平镜像），所以端口读数、下游引用、画布持久化全都跟着一起变。
+  // 详情开关同时管「模型 / 生成参数」那一段和输入端口的标签（收起后端口仍在）。
+  const detailVisible = resolveDetailVisible(data.detailVisible, showCardDetail);
   const canSwapMedia = mode === 'image' || mode === 'video';
   const swapAccept = mode === 'video' ? 'video/*' : 'image/*';
   const swapTitle = t(mode === 'video' ? 'director.lab.swapVideo' : 'director.lab.swapImage');
@@ -435,18 +457,37 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
 
   return (
     <div
-      className={`lab-node lab-node--process lab-node--process-${data.kind}`}
+      className={`lab-node lab-node--process lab-node--process-${data.kind}${detailVisible ? '' : ' lab-node--process-compact'}`}
       data-testid="lab-process-node"
       data-variant={isGenerated ? 'generated' : 'idle'}
     >
       <div className="lab-node-label">
-        {t(`director.lab.process.${data.kind}`)}
+        <span className="lab-node-label-title">{t(`director.lab.process.${data.kind}`)}</span>
+        {/* 右侧操作组：标题栏是 justify-content: space-between，直接塞三个
+            平级子元素会把开关挤到中间去，所以两个按钮包成一组靠右，开关紧挨
+            删除按钮。
+            这一段的显示开关只改这一张卡片，覆盖工具栏上的全局默认；常驻（不跟
+            其它按钮一样 hover 才出现），因为藏在 hover 里的开关在"已经收起"
+            的状态下没有任何提示，用户没法把它再打开。 */}
+        <span className="lab-node-label-actions">
+        <button
+          type="button"
+          className={`lab-node-text-delete lab-node-params-toggle ${detailVisible ? 'lab-node-params-toggle--on' : ''}`}
+          title={t(detailVisible ? 'director.lab.cardDetailHide' : 'director.lab.cardDetailShow')}
+          aria-pressed={detailVisible}
+          onClick={() => actions.patchProcessNode(id, { detailVisible: !detailVisible })}
+          data-testid="lab-process-node-toggle-params"
+          data-override={data.detailVisible === undefined ? 'inherit' : String(data.detailVisible)}
+        >
+          {paramsToggleIcon}
+        </button>
         <button type="button" className="lab-node-text-delete" title={t('director.delete.action')} onClick={() => actions.deleteNode(id)}>
           {trashIcon}
         </button>
+        </span>
       </div>
 
-      <div className="lab-node-ports">
+      <div className={`lab-node-ports${detailVisible ? '' : ' lab-node-ports--compact'}`}>
         <div
           className="lab-node-input-row lab-node-input-row--clickable nodrag"
           role="button"
@@ -461,7 +502,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
           }}
           data-testid="lab-process-node-prompt-row"
         >
-          <Handle type="target" position={Position.Left} id="text" />
+          <Handle type="target" position={Position.Left} id="text" title={t('director.lab.textPrompt')} className={portClass('text')} />
           <span className="lab-node-input-dot" />
           {t('director.lab.textPrompt')}
           {text && (
@@ -473,7 +514,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
 
         {maxImages >= 1 && (
           <div className="lab-node-input-row">
-            <Handle type="target" position={Position.Left} id="image1" />
+            <Handle type="target" position={Position.Left} id="image1" className={portClass('image1')} title={t(maxImages >= 2 ? 'director.lab.firstFrame' : 'director.lab.refImage')} />
             <span className="lab-node-input-dot" />
             {maxImages >= 2 ? t('director.lab.firstFrame') : t('director.lab.refImage')}
             {isMultiRef
@@ -485,7 +526,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
         )}
         {maxImages >= 2 && (
           <div className="lab-node-input-row">
-            <Handle type="target" position={Position.Left} id="image2" />
+            <Handle type="target" position={Position.Left} id="image2" className={portClass('image2')} title={t('director.lab.lastFrame')} />
             <span className="lab-node-input-dot" />
             {t('director.lab.lastFrame')}
             {image2 && <span className="lab-node-input-filled">✓</span>}
@@ -493,7 +534,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
         )}
         {maxVideos >= 1 && (
           <div className="lab-node-input-row">
-            <Handle type="target" position={Position.Left} id="video1" />
+            <Handle type="target" position={Position.Left} id="video1" className={portClass('video1')} title={t(maxVideos >= 2 ? 'director.lab.clipOne' : 'director.lab.inputVideo')} />
             <span className="lab-node-input-dot" />
             {maxVideos >= 2 ? t('director.lab.clipOne') : t('director.lab.inputVideo')}
             {hasVideoUrl ? (
@@ -507,7 +548,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
         )}
         {maxVideos >= 2 && (
           <div className="lab-node-input-row">
-            <Handle type="target" position={Position.Left} id="video2" />
+            <Handle type="target" position={Position.Left} id="video2" className={portClass('video2')} title={t('director.lab.clipTwo')} />
             <span className="lab-node-input-dot" />
             {t('director.lab.clipTwo')}
             {video2 && <span className="lab-node-input-filled">✓</span>}
@@ -515,7 +556,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
         )}
         {maxAudios >= 1 && (
           <div className="lab-node-input-row">
-            <Handle type="target" position={Position.Left} id="audio1" />
+            <Handle type="target" position={Position.Left} id="audio1" className={portClass('audio1')} title={t('director.lab.inputAudio')} />
             <span className="lab-node-input-dot" />
             {t('director.lab.inputAudio')}
             {hasAudioUrl ? (
@@ -529,6 +570,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
         )}
       </div>
 
+      {detailVisible && (
       <div className="lab-node-params" ref={paramsRef}>
         <div className="lab-node-param-row">
           <span>{t('director.lab.model')}</span>
@@ -747,9 +789,9 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
           </div>
         )}
       </div>
+      )}
 
       {data.status === 'error' && data.error && <div className="lab-node-error">{data.error}</div>}
-
       {isGenerated && activeEntry && (
         <div className="lab-node-process-output">
           <div className={`lab-node-media${mode === 'video' ? ' lab-node-media--video' : mode === 'audio' ? ' lab-node-media--audio' : ''}`}>

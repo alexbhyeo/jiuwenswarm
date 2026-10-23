@@ -144,6 +144,7 @@ Two fields exist specifically to avoid remount races:
 | `components/LabTabShell.tsx` | Hosts the Lab canvas + actions context. |
 | `lab/LabCanvas.tsx` | `@xyflow/react` canvas of process/image/video/text cards; debounced save. |
 | `lab/LabActionsContext.tsx` | Cross-node actions (run a process card, etc.). |
+| `lab/cardDetailPrefs.ts` | Show/hide preference for a process card's **details** — the 模型 / 生成参数 block *and* the labelled input rows (文字提示 / 图片参考 / …) with their ✓. A persisted **global default** (`localStorage`, toggled from the toolrail) plus a **per-card override** (`ProcessNodeData.detailVisible`, toggled from the sliders icon in the card header; `undefined` = follow the global default). Collapsing is presentation-only: the `<Handle>`s stay mounted as a bare-dot strip, so wiring keeps working. |
 | `lab/nodes/` | Node renderers for the Lab canvas. |
 | `components/EditTabShell.tsx` | Timeline shell (tracks, clips, undo) for the Edit tab. Clips are `image` / `video` / `audio`: image clips get a fixed default length, video and audio clips probe the real duration from a media element on drop, and all three can be moved, trimmed (image only, via handles) and split. Audio clips have no thumbnail — they render a note-icon placeholder — and the preview area shows an `<audio controls>` element whose `timeupdate` drives the playhead, exactly like video. |
 | `components/EditChatPanel.tsx` | Edit-tab chat assistant (script → designs → shot list → frames → clips). |
@@ -515,6 +516,52 @@ the opposite case: picking an already-named asset is how you get to
 `@小水獭` afterwards. This also matches the upload path, which already renames
 the uploaded file back to the card's name (`handleSwapMedia` →
 `renameAsset(..., data.name)`).
+
+**Card chrome: collapsing "details".** A process card spends ~54 px on a settings
+block whose 模型 row is display-only (its chevron opens nothing), plus a row per
+input port. Both are hideable at two levels: a toolrail toggle sets the **global
+default** (persisted in `localStorage`, so it follows the user across projects),
+and the sliders icon in each card header sets that **one card**
+(`detailVisible`; `undefined` means "follow the global default", so cards nobody
+touched keep tracking it). Pressing the **global** toggle also clears every
+per-card override (`stripDetailOverrides`) before flipping the default — otherwise
+a card whose sliders icon had been clicked stays pinned forever and the global
+toggle looks broken on exactly that card. The trade-off is deliberate: the global
+control always wins *at the moment it is pressed*, individual cards can still
+diverge afterwards, and resetting to `undefined` (rather than to the new global
+value) means the saved canvas only records choices the user actually made per
+card. The per-card value lives in the node data — not in the
+global preference — so it survives both the canvas save and 生成实验室流程图
+(`buildFlowFromChat` carries it through `preservedHistoryByAssetId`); losing it
+there would silently undo a user's per-card setup on every rebuild.
+
+The input rows are **not** just labels: every `<Handle>` is nested inside its row,
+so `display:none`-ing the block would leave the card impossible to wire. Collapsing
+instead zeroes each row's height, hides its element children
+(`.lab-node-ports--compact .lab-node-input-row > *:not(.react-flow__handle)`) and
+zeros the row's font-size, then absolutely positions **every** input handle on one
+point at the card's left edge — so the card shows a **single dot** and all wires
+converge on it. The font-size rule is not cosmetic: the port names are raw text
+nodes inside the row, which no element selector can reach, so without it the labels
+keep overflowing out of the zero-height row and stay visible.
+
+Every handle is kept mounted rather than rendering only a "primary" one, because
+React Flow attaches each edge through its handle element — dropping the others
+would leave edges pointing at `image2` / `片段二` with nothing to anchor to (still
+in state, invisible on canvas). Since the stacked handles compete for hit-testing,
+`ProcessNode` marks the primary port (`image1` → `video1` → `audio1` → `text`, i.e.
+the most-used input, not the first in DOM order) with `.lab-node-handle-primary`
+and `z-index: 3`, so a new connection made on the collapsed dot lands on that
+port. Wiring any other port needs the card expanded.
+
+The strip also changes the vertical centre the output handle aligns to, so
+`.lab-node--process` exposes `--lab-process-ports-h` (78 px, or 26 px when
+compact) and the right handle's `top` is `calc(header + ports/2)` rather than the
+previous hard-coded `79px`.
+
+Two consequences worth knowing: while collapsed the 文字提示 row is 0 px tall, so
+its click-to-edit affordance is gone (re-expand with the same header icon); and
+ports beyond the primary one can only be wired while the card is expanded.
 
 ### 8.2b Save to project (timeline → one clip)
 

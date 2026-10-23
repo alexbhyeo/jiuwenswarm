@@ -280,4 +280,14 @@ export interface ProcessNodeData {
    *  这个问题。手动在画布上新建的卡片（不是由聊天记录摆出来的）这个字段
    *  是 null。 */
   originAssetId: string | null;
+  /** 这一张卡片要不要展示"详情"——「模型 / 生成参数」那一段，以及输入端口那
+   *  一排名字（`undefined`＝跟随工具栏上的全局开关，见 cardDetailPrefs.ts）。
+   *  收起后端口本身仍然存在（退化成卡片左边缘的裸圆点，见 ProcessNode 的
+   *  lab-node-ports--compact），只是不再显示标签。
+   *
+   *  放在节点数据里而不是别的什么全局表：它描述的是"这一张卡片长什么样"，
+   *  得跟着画布一起持久化，也要在清空重建（生成实验室流程图）后由
+   *  preservedHistoryByAssetId 一起恢复，否则用户逐卡调好的显示状态每次
+   *  重建都会被抹掉。 */
+  detailVisible?: boolean;
 }

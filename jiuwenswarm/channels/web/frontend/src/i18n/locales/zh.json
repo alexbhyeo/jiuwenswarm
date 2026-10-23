@@ -209,7 +209,11 @@
       },
       "audioOutputFromRefHint": "成片是否带上连进来的参考音频；关掉就只保留画面。",
       "audioOutputFromSourceHint": "成片是否带音轨：源片本身有声音就保留它，源片本身没有声音则由生成模型配一条。关掉就只保留画面。",
-      "audioOutputGeneratedHint": "「有声音」让生成模型自己配一条音轨（环境音/人声）；「无声音」只出画面。"
+      "audioOutputGeneratedHint": "「有声音」让生成模型自己配一条音轨（环境音/人声）；「无声音」只出画面。",
+      "cardDetailShow": "显示详情（参数与输入名称）",
+      "cardDetailHide": "隐藏详情（参数与输入名称）",
+      "cardDetailShowAll": "在卡片上显示详情（参数与输入名称）",
+      "cardDetailHideAll": "在卡片上隐藏详情（参数与输入名称）"
     },
     "edit": {
       "breadcrumb": "剪辑",

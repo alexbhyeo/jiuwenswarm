@@ -137,7 +137,8 @@
     "test:director-bridge-prompt": "esbuild src/features/director/lab/labTypes.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/director-bridge-prompt/labTypes.js && node --test tests/directorBridgePromptInline.test.mjs",
     "test:director-rebuild-switch": "esbuild src/features/director/lab/rebuildSwitch.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/director-rebuild-switch/rebuildSwitch.js && node --test tests/directorRebuildRegeneratedAsset.test.mjs",
     "test:director-rebuild-layout": "esbuild src/features/director/lab/rebuildLayout.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/director-rebuild-layout/rebuildLayout.js && node --test tests/directorRebuildLayout.test.mjs",
-    "test:director-video-swap": "esbuild src/features/director/lab/swapAssets.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/director-video-swap/swapAssets.js && node --test tests/directorVideoSwap.test.mjs"
+    "test:director-video-swap": "esbuild src/features/director/lab/swapAssets.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/director-video-swap/swapAssets.js && node --test tests/directorVideoSwap.test.mjs",
+    "test:director-card-detail": "esbuild src/features/director/lab/cardDetailPrefs.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/director-card-detail/cardDetailPrefs.js && node --test tests/directorCardDetailVisibility.test.mjs"
   },
   "dependencies": {
     "@a2ui/react": "0.8.0",
