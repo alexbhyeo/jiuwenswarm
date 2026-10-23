@@ -133,7 +133,11 @@
     "test:trajectory-sequences": "esbuild src/features/trajectory/trajectorySequences.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/trajectory-sequences/trajectorySequences.mjs && node --test tests/trajectorySequences.test.mjs",
     "test:permission-text-i18n": "tsc src/components/InteractionSlot/permissionTextI18n.ts --target ES2020 --module ES2020 --moduleResolution Bundler --rootDir src --outDir node_modules/.cache/permission-text-i18n --skipLibCheck --noEmitOnError && node --test tests/permissionTextI18n.test.mjs",
     "test:director-lab-audio": "esbuild src/features/director/lab/labTypes.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/director-lab-audio/labTypes.js && node --test tests/directorLabAudioOption.test.mjs",
-    "test:director-swap-popover": "esbuild src/features/director/lab/nodes/MediaFrame.tsx --bundle --platform=node --format=esm --loader:.tsx=tsx --outfile=node_modules/.cache/director-swap-popover/MediaFrame.js && node --test tests/directorSwapPopoverSize.test.mjs"
+    "test:director-swap-popover": "esbuild src/features/director/lab/nodes/MediaFrame.tsx --bundle --platform=node --format=esm --loader:.tsx=tsx --outfile=node_modules/.cache/director-swap-popover/MediaFrame.js && node --test tests/directorSwapPopoverSize.test.mjs",
+    "test:director-bridge-prompt": "esbuild src/features/director/lab/labTypes.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/director-bridge-prompt/labTypes.js && node --test tests/directorBridgePromptInline.test.mjs",
+    "test:director-rebuild-switch": "esbuild src/features/director/lab/rebuildSwitch.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/director-rebuild-switch/rebuildSwitch.js && node --test tests/directorRebuildRegeneratedAsset.test.mjs",
+    "test:director-rebuild-layout": "esbuild src/features/director/lab/rebuildLayout.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/director-rebuild-layout/rebuildLayout.js && node --test tests/directorRebuildLayout.test.mjs",
+    "test:director-video-swap": "esbuild src/features/director/lab/swapAssets.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/director-video-swap/swapAssets.js && node --test tests/directorVideoSwap.test.mjs"
   },
   "dependencies": {
     "@a2ui/react": "0.8.0",

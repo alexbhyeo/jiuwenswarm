@@ -27,6 +27,9 @@ import { TextNode } from './nodes/TextNode';
 import { ProcessNode } from './nodes/ProcessNode';
 import { DEFAULT_AUDIO_VOICE } from '../audioVoices';
 import { DEFAULT_AUDIO_STYLE } from '../audioStyles';
+import { pickSwitchTargets } from './rebuildSwitch';
+import { swappedEntryName } from './swapAssets';
+import { resolveDepths } from './rebuildLayout';
 import type { GenerationEntry, ImageNodeData, ProcessKind, ProcessMode, ProcessNodeData } from './labTypes';
 import {
   DEFAULT_VIDEO_BRIDGE_PROMPT,
@@ -259,18 +262,25 @@ function LabCanvasInner() {
   // "替换"只对图片类卡片有意义——独立卡片一直只有 ImageNode 带这个按钮
   // （VideoNode/AudioNode 没有），合并卡片这里同样只在 mode==='image' 时
   // 才生效（kind 决定 mode，见 PROCESS_KIND_MODE）。
-  const handleSwapImage = useCallback(
+  const handleSwapMedia = useCallback(
     async (nodeId: string, file: File) => {
       if (!selectedProjectId) return;
       const node = nodes.find((n) => n.id === nodeId);
       if (!node) return;
-      const isMergedImageCard =
-        node.type === 'process' && PROCESS_KIND_MODE[(node.data as ProcessNodeData).kind] === 'image';
-      if (node.type !== 'image' && !isMergedImageCard) return;
+      // 合并处理卡片里，图片卡片和视频卡片都能换（音频卡片没有"换一段音频"
+      // 的实际用途，暂不开放）。判据是产物类型而不是节点类型，见
+      // PROCESS_KIND_MODE。
+      const mergedMode =
+        node.type === 'process' ? PROCESS_KIND_MODE[(node.data as ProcessNodeData).kind] : null;
+      const isMergedSwappableCard = mergedMode === 'image' || mergedMode === 'video';
+      if (node.type !== 'image' && !isMergedSwappableCard) return;
       const data = node.data as ImageNodeData | ProcessNodeData;
       const project = useDirectorStore.getState().projects.find((p) => p.project_id === selectedProjectId);
       const originalAsset = data.assetId ? project?.assets.find((a) => a.asset_id === data.assetId) : undefined;
-      const assetType = originalAsset?.type === 'character' ? 'character' : 'image';
+      // 上传分类必须跟卡片产物类型一致：视频卡片传 image 会被服务端按扩展名
+      // 反推成 video，但显式传错类型会直接 400（见 director_multipart_http）。
+      const assetType =
+        mergedMode === 'video' ? 'video' : originalAsset?.type === 'character' ? 'character' : 'image';
 
       try {
         const { directorAssetUpload } = await import('../directorApi');
@@ -284,10 +294,10 @@ function LabCanvasInner() {
         setNodes((nds) =>
           nds.map((n) => {
             if (n.id !== nodeId) return n;
-            if (isMergedImageCard) {
+            if (isMergedSwappableCard) {
               // 换的是合并卡片当前展示的那一条历史记录——同时改
               // history[activeHistoryIndex] 和扁平镜像字段，不然切到别的
-              // 历史记录再切回来，换上去的图又变回原来生成的那张。
+              // 历史记录再切回来，换上去的内容又变回原来生成的那一个。
               const pd = n.data as ProcessNodeData;
               const history = pd.history.map((entry, i) =>
                 i === pd.activeHistoryIndex
@@ -314,29 +324,33 @@ function LabCanvasInner() {
     [selectedProjectId, nodes, setNodes]
   );
 
-  // 用素材库里已经存在的图片/角色素材替换一张图片卡片当前展示的内容——
-  // 不经过上传，直接拿这个素材自己的 assetId/filePath。跟上面
-  // handleSwapImage（本地上传一个新文件）刻意反过来：那边是新文件没有
-  // 身份，所以把它改名成卡片原来的名字；这里的素材本来就有自己的名字
-  // （用户在 素材 面板里起的，可能已经被别的卡片的提示词用 "@名字" 引用
-  // 着），换上去之后卡片应该改用这个素材自己的名字，而不是反过来把这个
-  // 已经有身份的素材强行改名成卡片原来的名字——那样会把它在别处的引用
-  // 对不上。
-  const handleSwapImageFromAsset = useCallback(
+  // 用素材库里已经存在的图片/角色/视频素材替换一张图片或视频卡片当前展示
+  // 的内容——不经过上传，直接拿这个素材自己的 assetId/filePath。
+  //
+  // 换完之后卡片叫什么名字，按产物类型分开（见 swapAssets.swappedEntryName）：
+  // 视频卡片保住卡片自己的名字——那是它在流程图里的身份，下游卡片/历史记录/
+  // 重建流程图都按它认这张卡；图片卡片仍改用素材自己的名字（挑一张起好名字的
+  // 素材本来就是为了之后 `@名字` 引用它，而且后端只把 image/character 的名字
+  // 当参考图解析，视频名字换成什么都不影响解析，只会白丢卡片身份）。
+  const handleSwapMediaFromAsset = useCallback(
     (nodeId: string, asset: { assetId: string | null; filePath: string; name: string }) => {
       setNodes((nds) =>
         nds.map((n) => {
           if (n.id !== nodeId) return n;
-          const isMergedImageCard =
-            n.type === 'process' && PROCESS_KIND_MODE[(n.data as ProcessNodeData).kind] === 'image';
-          if (n.type !== 'image' && !isMergedImageCard) return n;
-          if (isMergedImageCard) {
+          const mergedMode =
+            n.type === 'process' ? PROCESS_KIND_MODE[(n.data as ProcessNodeData).kind] : null;
+          const isMergedSwappableCard = mergedMode === 'image' || mergedMode === 'video';
+          if (n.type !== 'image' && !isMergedSwappableCard) return n;
+          if (isMergedSwappableCard) {
             const pd = n.data as ProcessNodeData;
+            const name = swappedEntryName(pd.name, asset.name, mergedMode as 'image' | 'video');
             const history = pd.history.map((entry, i) =>
-              i === pd.activeHistoryIndex ? { ...entry, assetId: asset.assetId, filePath: asset.filePath, name: asset.name } : entry
+              i === pd.activeHistoryIndex ? { ...entry, assetId: asset.assetId, filePath: asset.filePath, name } : entry
             );
-            return { ...n, data: { ...pd, history, assetId: asset.assetId, filePath: asset.filePath, name: asset.name } };
+            return { ...n, data: { ...pd, history, assetId: asset.assetId, filePath: asset.filePath, name } };
           }
+          // 独立的参考图片卡片（node.type === 'image'）没有"卡片自己的名字"
+          // 这层身份，直接显示素材名。
           return { ...n, data: { ...n.data, assetId: asset.assetId, filePath: asset.filePath, name: asset.name } };
         })
       );
@@ -388,28 +402,17 @@ function LabCanvasInner() {
         name: '',
         // 手动在画布上新建的卡片不对应聊天记录里的任何素材。
         originAssetId: null,
+        // 视频连视频：FLF2V 只拿到两张静态图，没有提示词模型无从得知该怎么
+        // 从第一张"动"到第二张（见 requiresPrompt）。默认过渡提示词直接写进
+        // 卡片自带的「文字提示」弹窗——与文生图/图生图等卡片完全同一处，
+        // 不再额外摆一张文本卡片+连线：那要多一张卡、多一条线，而且用户得
+        // 在两张卡片之间来回看才知道提示词是什么。用户点开「文字提示」就能
+        // 改写或清空，这里只是给一个经过验证的起点，不是写死的唯一文案。
+        prompt: kind === 'videoBridge' ? DEFAULT_VIDEO_BRIDGE_PROMPT : '',
       };
       addNode({ id, type: 'process', position, data });
-      // 视频连视频：FLF2V 只拿到两张静态图，没有提示词模型无从得知该怎么
-      // 从第一张"动"到第二张（见 requiresPrompt），所以这张卡片落到画布时
-      // 自动带一个预填好默认过渡提示词的文本节点，直接连到它的 text 端口
-      // ——用户仍然可以在文本节点里改写或清空它，这里只是给一个已经验证过
-      // 能用的起点，不是强制唯一的文案。摆在卡片左侧，与 text 端口在左边
-      // 的朝向一致（同 handleAddText 的默认摆放习惯）。
-      if (kind === 'videoBridge') {
-        const textNodeId = nextNodeId('text');
-        addNode({
-          id: textNodeId,
-          type: 'text',
-          position: { x: position.x - 280, y: position.y },
-          data: { text: DEFAULT_VIDEO_BRIDGE_PROMPT },
-        });
-        setEdges((eds) =>
-          addEdge({ id: nextNodeId('edge'), source: textNodeId, sourceHandle: 'text', target: id, targetHandle: 'text' }, eds)
-        );
-      }
     },
-    [addNode, setEdges]
+    [addNode]
   );
 
   const setProcessNodeState = useCallback(
@@ -877,6 +880,16 @@ function LabCanvasInner() {
     const videoNodeIdByPath = new Map<string, string>();
     // 音频卡片也能当输入（图音生视频的 audio1 端口），同样单独一张表。
     const audioNodeIdByPath = new Map<string, string>();
+    // 素材 id -> { 产出它的处理卡片, 是这张卡片的第几条历史记录 }。下游
+    // 连到某条"重新生成"出来的素材时靠它把上游卡片切到那一条（见循环
+    // 结束后的统一应用）。
+    const entryPointerByAssetId = new Map<string, { nodeId: string; index: number }>();
+    // 需要切换"当前展示哪一条历史记录"的卡片：nodeId -> (history 下标 -> 被
+    // 下游引用了几次)。一张卡片只能显示一条记录，但同一张卡片的不同历史条目
+    // 可能被不同下游分别引用（比如 319_11 引用第 0 条、320_13 引用第 5 条），
+    // 这时没有能让所有人都对上的解；记票数是为了挑"引用次数最多"的那一条，
+    // 而不是让摆放顺序决定结果。
+    const pendingSwitchVotes = new Map<string, Map<number, number>>();
 
     // 画布已经整体清空，聊天记录里出现过的素材这次都要重新摆一遍。
     const newAssetIds = orderedAssetIds;
@@ -916,9 +929,30 @@ function LabCanvasInner() {
     // 设计下往往跟另一个深度的处理列是同一个物理 x（见上面 GROUP_STEP 和
     // refColumnKey 注释），不经避让检查就可能和那一列已经摆好的处理卡片
     // 叠在一起。
+    /** 下游引用某条素材时，把产出它的卡片切到那一条（若当前不是那一条）。
+     *
+     *  上游卡片点过"重新生成"之后，下游引用的通常是新生成的那条素材；连线
+     *  要落在上游卡片上，上游卡片也得显示那条素材，两边才是同一份画面。
+     *  只在"引用的是这张卡片自己产出的历史条目"时才登记——被"替换图片"
+     *  借用了别人那张图的条目不算（entryPointerByAssetId 只收录本卡片
+     *  history 里的 assetId）。 */
+    const requestEntrySwitch = (filePath: string): void => {
+      if (!filePath) return;
+      const assetId = assetIdByFilePath.get(filePath);
+      if (!assetId) return;
+      const pointer = entryPointerByAssetId.get(assetId);
+      if (!pointer) return;
+      const votes = pendingSwitchVotes.get(pointer.nodeId) ?? new Map<number, number>();
+      votes.set(pointer.index, (votes.get(pointer.index) ?? 0) + 1);
+      pendingSwitchVotes.set(pointer.nodeId, votes);
+    };
+
     const ensureImageRefNode = (filePath: string, x: number, y: number, columnKey: string): string => {
       const existing = imageNodeIdByPath.get(filePath);
-      if (existing) return existing;
+      if (existing) {
+        requestEntrySwitch(filePath);
+        return existing;
+      }
       const matchingAsset = project.assets.find((a) => a.file_path === filePath);
       const id = nextNodeId('ref');
       addNode({
@@ -940,11 +974,15 @@ function LabCanvasInner() {
     // 一次 build 留下的那张。实在找不到才新建一张视频卡片。
     const ensureVideoNode = (filePath: string, x: number, y: number, columnKey: string): string => {
       const existing = videoNodeIdByPath.get(filePath);
-      if (existing) return existing;
+      if (existing) {
+        requestEntrySwitch(filePath);
+        return existing;
+      }
       const placedAssetId = assetIdByFilePath.get(filePath);
       const placedNodeId = placedAssetId ? outputNodeIdByAsset.get(placedAssetId) : undefined;
       if (placedNodeId) {
         videoNodeIdByPath.set(filePath, placedNodeId);
+        requestEntrySwitch(filePath);
         return placedNodeId;
       }
       const matchingAsset = project.assets.find((a) => a.file_path === filePath);
@@ -967,11 +1005,15 @@ function LabCanvasInner() {
     // 该音频素材自己的输出卡片，找不到才新建一张音频卡片。
     const ensureAudioNode = (filePath: string, x: number, y: number, columnKey: string): string => {
       const existing = audioNodeIdByPath.get(filePath);
-      if (existing) return existing;
+      if (existing) {
+        requestEntrySwitch(filePath);
+        return existing;
+      }
       const placedAssetId = assetIdByFilePath.get(filePath);
       const placedNodeId = placedAssetId ? outputNodeIdByAsset.get(placedAssetId) : undefined;
       if (placedNodeId) {
         audioNodeIdByPath.set(filePath, placedNodeId);
+        requestEntrySwitch(filePath);
         return placedNodeId;
       }
       const matchingAsset = project.assets.find((a) => a.file_path === filePath);
@@ -1101,27 +1143,29 @@ function LabCanvasInner() {
     // 层素材的排到第 N+1 层，横向摆到它右边一组。依赖的是已经在画布上的
     // 老素材（不在这次 plans 里）时按第 0 层处理——同样让依赖方至少排到
     // 第 1 层，从老素材右边开一组，而不是继续纵向摞在最下面。
-    const depthCache = new Map<string, number>();
-    const resolving = new Set<string>();
-    const depthOf = (assetId: string): number => {
-      const cached = depthCache.get(assetId);
-      if (cached !== undefined) return cached;
-      const plan = plans.get(assetId);
-      if (!plan || plan.depAssetIds.length === 0) {
-        depthCache.set(assetId, 0);
-        return 0;
+    //
+    // "依赖的是哪张卡片"不能直接拿 depAssetIds 去查 plans：下游引用的常常
+    // 是上游点过"重新生成"之后的那条素材，它不在 plans 的键里（plans 只收
+    // 聊天记录里的原始素材），但**确实由某张 plans 卡片产出**（登记在它的
+    // history 里）。只认 plans 的键会把它当成"画布外的老素材"，深度算成 0，
+    // 依赖方于是跟自己的上游落在同一列、连线变成一条竖线穿过去，看起来就是
+    // 一堆卡片堆在一列里往下排。这里先把"任意素材 id -> 产出它的那张 plan
+    // 卡片"整理出来，深度按产出卡片算。
+    const producerKeyByAssetId = new Map<string, string>();
+    for (const [planAssetId, plan] of plans) {
+      producerKeyByAssetId.set(planAssetId, planAssetId);
+      const preserved = preservedHistoryByAssetId.get(plan.asset.asset_id);
+      for (const entry of preserved?.history ?? []) {
+        if (entry.assetId && !producerKeyByAssetId.has(entry.assetId)) {
+          producerKeyByAssetId.set(entry.assetId, planAssetId);
+        }
       }
-      if (resolving.has(assetId)) return 0; // 循环依赖兜底，理论上不会出现
-      resolving.add(assetId);
-      let maxDepDepth = -1;
-      for (const depId of plan.depAssetIds) {
-        maxDepDepth = Math.max(maxDepDepth, plans.has(depId) ? depthOf(depId) : 0);
-      }
-      resolving.delete(assetId);
-      const depth = maxDepDepth + 1;
-      depthCache.set(assetId, depth);
-      return depth;
-    };
+    }
+
+    const depAssetIdsByKey = new Map<string, string[]>();
+    for (const [planAssetId, plan] of plans) depAssetIdsByKey.set(planAssetId, plan.depAssetIds);
+    const depthByAssetId = resolveDepths(plans.keys(), depAssetIdsByKey, producerKeyByAssetId);
+    const depthOf = (assetId: string): number => depthByAssetId.get(assetId) ?? 0;
 
     // 避免同一列里多张卡片的 y 算出来太接近而叠在一起——按"离这一列上一张
     // 卡片至少一个 ROW_HEIGHT"单调往下顺延，而不是拿 desired 挨个跟所有
@@ -1315,10 +1359,59 @@ function LabCanvasInner() {
       // processNodeId → outputNodeId 的自连线。本次 build 刚摆出来的卡片
       // 立刻进索引表：排在后面的素材（比如引用这段视频写解说的那张音频
       // 卡片）要能把它当参考复用，而不是再摆一张独立的参考卡片。
-      outputNodeIdByAsset.set(asset.asset_id, processNodeId);
-      if (mode === 'image') imageNodeIdByPath.set(asset.file_path as string, processNodeId);
-      if (mode === 'video') videoNodeIdByPath.set(asset.file_path as string, processNodeId);
-      if (mode === 'audio') audioNodeIdByPath.set(asset.file_path as string, processNodeId);
+      //
+      // 这里登记的是**整条 history**，不只是聊天记录里的原始素材：卡片上
+      // 点过"重新生成"之后，后续卡片引用的往往是某一条重新生成出来的素材
+      // （assets 里是全新的 asset_id + file_path），只登记原始那条的话，
+      // 下游按文件路径查不到→ensureImageRefNode 判定"没有现成节点"→在参考
+      // 列凭空多摆一张一模一样的图片卡片，与上游处理卡片并存、看起来像
+      // 两套重复的素材。登记全部历史条目之后，下游一律连回上游那张处理
+      // 卡片本身。
+      //
+      // 每条路径只在**没有被占用**时登记（先到先得）：被"替换图片"改成
+      // 别的卡片那张图的条目不会反过来抢走那张图真正的主人。
+      for (const [entryIndex, histEntry] of history.entries()) {
+        if (histEntry.assetId) outputNodeIdByAsset.set(histEntry.assetId, processNodeId);
+        // 记住"这条素材由哪张卡片的第几条历史记录产出"——下游连到某条
+        // 重新生成的素材时，要把上游卡片切到那一条，画面才和引用对得上
+        // （见 pendingActiveSwitch / 循环结束后的统一应用）。
+        if (histEntry.assetId) entryPointerByAssetId.set(histEntry.assetId, { nodeId: processNodeId, index: entryIndex });
+        if (!histEntry.filePath) continue;
+        if (mode === 'image' && !imageNodeIdByPath.has(histEntry.filePath)) {
+          imageNodeIdByPath.set(histEntry.filePath, processNodeId);
+        }
+        if (mode === 'video' && !videoNodeIdByPath.has(histEntry.filePath)) {
+          videoNodeIdByPath.set(histEntry.filePath, processNodeId);
+        }
+        if (mode === 'audio' && !audioNodeIdByPath.has(histEntry.filePath)) {
+          audioNodeIdByPath.set(histEntry.filePath, processNodeId);
+        }
+      }
+    }
+
+    // 下游引用的若是上游卡片的**非当前**历史条目（典型场景：上游点过
+    // "重新生成"，下游是按最新那条重建出来的），把上游卡片切到那一条——
+    // 用户看到的就是"后续卡片连在前一张卡片上，前一张卡片显示的是被引用
+    // 的那个重新生成结果"。放在最后一次性应用：摆放过程中卡片还在陆续
+    // 加入，逐个 setNodes 会互相覆盖。
+    //
+    // 引用票数最多的那条胜出；票数相同时取下标更大的（更晚生成、也就是
+    // 卡片自己"重新生成"后本来会显示的那一条），保证结果与摆放顺序无关。
+    if (pendingSwitchVotes.size > 0) {
+      const targetByNode = pickSwitchTargets(pendingSwitchVotes);
+      setNodes((nds) =>
+        nds.map((n) => {
+          const target = targetByNode.get(n.id);
+          if (target === undefined) return n;
+          const data = n.data as ProcessNodeData;
+          const entry = data.history[target];
+          if (!entry) return n;
+          return {
+            ...n,
+            data: { ...data, activeHistoryIndex: target, assetId: entry.assetId, filePath: entry.filePath, name: entry.name },
+          };
+        })
+      );
     }
   }, [selectedProjectId, setNodes, addNode, setEdges]);
 
@@ -1436,8 +1529,8 @@ function LabCanvasInner() {
         patchProcessNode: setProcessNodeState,
         buildFlowFromChat,
         renameNode: handleRenameNode,
-        swapImage: handleSwapImage,
-        swapImageFromAsset: handleSwapImageFromAsset,
+        swapMedia: handleSwapMedia,
+        swapMediaFromAsset: handleSwapMediaFromAsset,
         swapHistory: handleSwapHistory,
       }}
     >

@@ -125,7 +125,7 @@ export function ImageNode({ id, data }: NodeProps & { data: ImageNodeData }) {
                           title={asset.name || asset.prompt || ''}
                           onClick={() => {
                             setSwapOpen(false);
-                            actions.swapImageFromAsset(id, {
+                            actions.swapMediaFromAsset(id, {
                               assetId: asset.asset_id,
                               filePath: asset.file_path as string,
                               name: asset.name || asset.prompt || '',
@@ -154,7 +154,7 @@ export function ImageNode({ id, data }: NodeProps & { data: ImageNodeData }) {
           className="lab-node-swap-input"
           onChange={(e) => {
             const file = e.target.files?.[0];
-            if (file) actions.swapImage(id, file);
+            if (file) actions.swapMedia(id, file);
             e.target.value = '';
           }}
         />

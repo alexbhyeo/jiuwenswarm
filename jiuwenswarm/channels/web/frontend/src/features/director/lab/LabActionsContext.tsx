@@ -42,17 +42,17 @@ export interface LabActions {
    *  背后真正的 DirectorAsset.name（节点有 assetId 时），两边保持一致，
    *  "@名称" 引用和素材面板显示的名字才不会和画布上看到的对不上。 */
   renameNode: (nodeId: string, name: string) => void;
-  /** 用本地上传的文件替换一张图片节点的实际内容（文件路径/背后素材），
+  /** 用本地上传的文件替换一个图片/视频节点的实际内容（文件路径/背后素材），
    *  节点自己的名字保持不变——常用于把某个处理卡片生成出来的结果换成
-   *  用户自己上传的图片，同时让后续引用这个名字的处理卡片自动接上换后
-   *  的图片。 */
-  swapImage: (nodeId: string, file: File) => void;
-  /** 用素材库里已有的图片/角色素材替换一张图片节点的实际内容——跟
-   *  swapImage 不同，这里不是新上传一个文件，素材本身已有自己的名字，
-   *  换上去之后节点改用这个素材自己的名字（而不是像 swapImage 那样反过来
+   *  用户自己上传的图/片，同时让后续引用这个名字（或连到这个端口）的处理
+   *  卡片自动接上换后的内容。 */
+  swapMedia: (nodeId: string, file: File) => void;
+  /** 用素材库里已有的图片/角色/视频素材替换一个图片/视频节点的实际内容——
+   *  跟 swapMedia 不同，这里不是新上传一个文件，素材本身已有自己的名字，
+   *  换上去之后节点改用这个素材自己的名字（而不是像 swapMedia 那样反过来
    *  把新内容改名成节点原来的名字），因为用户是在"挑一个已经存在、已经有
    *  身份的素材"，不是拿一个新文件去填补这张卡片。 */
-  swapImageFromAsset: (nodeId: string, asset: { assetId: string | null; filePath: string; name: string }) => void;
+  swapMediaFromAsset: (nodeId: string, asset: { assetId: string | null; filePath: string; name: string }) => void;
   /** 切换处理卡片当前展示/生效的产物——挪动 data.activeHistoryIndex，不
    *  删除其它历史记录，可以来回切换。切换后卡片顶层的 assetId/filePath/
    *  name 镜像字段也会跟着更新，下游连到这张卡片的 image1/image2/video1/

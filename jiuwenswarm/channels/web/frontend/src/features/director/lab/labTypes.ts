@@ -124,15 +124,18 @@ export const PROCESS_KIND_MULTI_REF: Partial<Record<ProcessKind, boolean>> = {
   imageRef: true,
 };
 
-/** 视频连视频（videoBridge）卡片落到画布时自动带出的提示词节点内容。
+/** 视频连视频（videoBridge）卡片落到画布时预填进「文字提示」弹窗的内容。
  *
  *  FLF2V（首帧+尾帧生视频）只拿到两张静态图，模型需要文字才知道该怎么从
  *  第一张"动"到第二张——这张卡片没有提示词就没有生成目标（见
- *  director_manager.py 的 video_bridge 分支）。默认文案参考了
+ *  director_manager.py 的 video_bridge 分支）。文案落在卡片自带的
+ *  `ProcessNodeData.prompt` 上（点「文字提示」那一行弹出的小窗口），与
+ *  文生图/图生图等卡片同一处，不会额外摆一张文本卡片出来。
+ *  默认文案参考了
  *  InfinityStory（arXiv:2603.03646）论文里 FLF2V 过渡镜头的训练设定：首帧
  *  精确匹配、尾帧尽量匹配、运动连续自然、两段画面差异较大时改用镜头运动或
  *  环境过渡来衔接、角色不能在画面里突然出现/消失或从画面边缘"抠"出半个身子，
- *  以及成片要能直接拼接在两段原片之间。用户可以直接在文本节点里改写它，
+ *  以及成片要能直接拼接在两段原片之间。用户可以直接改写它，
  *  这里只是一个经过验证的起点，不是写死的唯一选项。 */
 export const DEFAULT_VIDEO_BRIDGE_PROMPT =
   'Generate a seamless cinematic transition that bridges two video clips.\n\n' +

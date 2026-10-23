@@ -147,6 +147,8 @@
       "breadcrumb": "Lab · Multi-Reference Composite",
       "refImage": "Image Reference",
       "swapImage": "Swap image",
+      "swapVideo": "Swap video",
+      "swapNoVideoAssets": "No swappable videos in the asset library yet",
       "swapUploadLocal": "Upload from device",
       "swapNoAssets": "No swappable images in the asset library yet",
       "textPrompt": "Text Prompt",

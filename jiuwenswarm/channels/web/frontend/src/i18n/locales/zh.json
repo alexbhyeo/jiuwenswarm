@@ -147,6 +147,8 @@
       "breadcrumb": "实验室 · 多参考图合成",
       "refImage": "图片参考",
       "swapImage": "替换图片",
+      "swapVideo": "替换视频",
+      "swapNoVideoAssets": "素材库里还没有可替换的视频",
       "swapUploadLocal": "从本地上传",
       "swapNoAssets": "素材库里还没有可替换的图片",
       "textPrompt": "文字提示",

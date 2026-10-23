@@ -18,6 +18,7 @@ import {
   supportsAudioOutput,
 } from '../labTypes';
 import { MediaFrame, popoverPositionFromTrigger } from './MediaFrame';
+import { filterSwappableAssets } from '../swapAssets';
 import { NodeNameLabel } from './NodeNameLabel';
 import { PromptTextarea } from './PromptTextarea';
 import { renderWithImageChips } from './promptChips';
@@ -188,20 +189,14 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
 
   // "替换"弹层里挑素材用的列表——跟上面 namedImageAssets 不同，这里不按
   // 名字去重（@ 提及自动补全要去重是为了候选不重复，这里是要把素材库里
-  // 每一张图都列出来让用户选），排除当前卡片正展示的这一条（选它等于
-  // 什么都没换），按最近更新排在前面，方便找到刚生成/刚上传的那几张。
-  const swappableAssets = useMemo(() => {
-    if (!project) return [];
-    return project.assets
-      .filter(
-        (a) =>
-          (a.type === 'image' || a.type === 'character') &&
-          a.status === 'ready' &&
-          a.file_path &&
-          a.asset_id !== data.assetId
-      )
-      .sort((a, b) => b.updated_at - a.updated_at);
-  }, [project, data.assetId]);
+  // 每一张图/每一段视频都列出来让用户选），排除当前卡片正展示的这一条
+  // （选它等于什么都没换），按最近更新排在前面，方便找到刚生成/刚上传的那
+  // 几张。候选类型跟着卡片产物类型走：图片卡片列图片/角色素材，视频卡片列
+  // 视频素材——列错类型的素材换了也放不出来。
+  const swappableAssets = useMemo(
+    () => (project ? filterSwappableAssets(project.assets, PROCESS_KIND_MODE[data.kind], data.assetId) : []),
+    [project, data.assetId, data.kind]
+  );
 
   const image1 = useConnectedImage(id, maxImages >= 1 && !isMultiRef ? 'image1' : '__none__');
   const image2 = useConnectedImage(id, maxImages >= 2 ? 'image2' : '__none__');
@@ -238,8 +233,9 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   const hasAnyImage = isMultiRef ? images.length > 0 : !!image1;
   // 视频生视频/视频连视频"改成什么样"完全由提示词指定，没有提示词就没有
   // 生成目标，所以这两张卡片的提示词是必填的（其余卡片允许只靠输入素材
-  // 出片）。视频连视频落到画布时会自动带一个预填提示词节点（见
-  // LabCanvas.handleAddProcessNode），正常情况下这条校验不会被卡到。
+  // 出片）。视频连视频落到画布时会把默认过渡提示词写进卡片自带的
+  // 「文字提示」弹窗（见 LabCanvas.handleAddProcessNode 的 data.prompt），
+  // 正常情况下这条校验不会被卡到；用户清空提示词后才会。
   const requiresPrompt = data.kind === 'video2video' || isVideoBridge;
   const canGenerate =
     data.status !== 'generating' &&
@@ -329,6 +325,113 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
       : maxAudios >= 1
         ? 'director.lab.audioOutputFromRefHint'
         : 'director.lab.audioOutputGeneratedHint';
+
+  // "替换"按钮 + 贴着它的素材弹层——图片卡片和视频卡片共用同一套交互，只是
+  // 候选素材的类型、缩略图标签、本地文件过滤、提示文案不同。抽成一个变量在
+  // 两处各渲染一次，避免复制一整块弹层 JSX（那是之前换图弹层两侧各写一份、
+  // 尺寸改了漏改一边的同类问题）。
+  //
+  // 为什么视频卡片也要能替换：下游卡片（比如视频连视频）是拿上游卡片当前
+  // 展示的那一条素材去生成桥接片的，上游只有"重新生成"出来的候选时用户没法
+  // 把一段已有的片子换进来。换掉的是 history[activeHistoryIndex] 这一条（连同
+  // 扁平镜像），所以端口读数、下游引用、画布持久化全都跟着一起变。
+  const canSwapMedia = mode === 'image' || mode === 'video';
+  const swapAccept = mode === 'video' ? 'video/*' : 'image/*';
+  const swapTitle = t(mode === 'video' ? 'director.lab.swapVideo' : 'director.lab.swapImage');
+  const swapEmptyText = t(mode === 'video' ? 'director.lab.swapNoVideoAssets' : 'director.lab.swapNoAssets');
+  const swapControl = canSwapMedia ? (
+    <div className="lab-node-media-actions">
+      <div className="lab-node-swap-wrap nodrag" ref={swapWrapRef}>
+        <button
+          type="button"
+          title={swapTitle}
+          onClick={(e) => {
+            if (swapOpen) {
+              setSwapOpen(false);
+              return;
+            }
+            setSwapPos(popoverPositionFromTrigger(e.currentTarget));
+            setSwapOpen(true);
+          }}
+          data-testid={mode === 'video' ? 'lab-process-node-swap-video' : 'lab-process-node-swap-image'}
+        >
+          {swapIcon}
+        </button>
+        {/* .lab-node-media 有 overflow:hidden 裁掉超出卡片的内容（给图片裁
+            圆角用），弹层自己比卡片高得多，不 Portal 出去会被从中间切掉——
+            同 promptOpen 那个弹窗一样挂到 body，只是那个是居中遮罩，这个是
+            贴着按钮的浮层，所以用 popoverPositionFromTrigger 算 fixed 定位
+            而不是遮罩居中。 */}
+        {swapOpen &&
+          swapPos &&
+          createPortal(
+            <div
+              className="lab-node-swap-popover nowheel"
+              ref={swapPopoverRef}
+              style={{ top: swapPos.top, left: swapPos.left }}
+              data-testid="lab-process-node-swap-popover"
+              data-variant={mode}
+            >
+              <button
+                type="button"
+                className="lab-node-swap-popover-upload"
+                onClick={() => {
+                  setSwapOpen(false);
+                  fileInputRef.current?.click();
+                }}
+                data-testid="lab-process-node-swap-upload-local"
+              >
+                {t('director.lab.swapUploadLocal')}
+              </button>
+              <div className="lab-node-swap-popover-grid">
+                {swappableAssets.length === 0 ? (
+                  <div className="lab-node-swap-popover-empty">{swapEmptyText}</div>
+                ) : (
+                  swappableAssets.map((asset) => (
+                    <button
+                      type="button"
+                      key={asset.asset_id}
+                      className="lab-node-swap-popover-item"
+                      title={asset.name || asset.prompt || ''}
+                      onClick={() => {
+                        setSwapOpen(false);
+                        actions.swapMediaFromAsset(id, {
+                          assetId: asset.asset_id,
+                          filePath: asset.file_path as string,
+                          name: asset.name || asset.prompt || '',
+                        });
+                      }}
+                      data-testid="lab-process-node-swap-asset"
+                      data-variant={asset.asset_id}
+                    >
+                      {/* 视频素材用 <video> 当缩略图：#t=0.1 让浏览器解码出
+                          第一帧当封面，不加这个片段时多数浏览器只显示一片黑。 */}
+                      {mode === 'video' ? (
+                        <video src={`${rawFileUrl(asset.file_path as string)}#t=0.1`} muted playsInline preload="metadata" />
+                      ) : (
+                        <img src={rawFileUrl(asset.file_path as string)} alt={asset.name || ''} />
+                      )}
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>,
+            document.body
+          )}
+      </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={swapAccept}
+        className="lab-node-swap-input"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) actions.swapMedia(id, file);
+          e.target.value = '';
+        }}
+      />
+    </div>
+  ) : null;
 
   return (
     <div
@@ -651,11 +754,8 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
         <div className="lab-node-process-output">
           <div className={`lab-node-media${mode === 'video' ? ' lab-node-media--video' : mode === 'audio' ? ' lab-node-media--audio' : ''}`}>
             <MediaFrame ref={mediaImgRef} mode={mode} filePath={activeEntry.filePath} name={activeEntry.name} className={mode === 'image' ? 'nodrag' : undefined} />
-            {/* 放大/下载/替换都只对图片类卡片有意义，跟素材面板的
-                EnlargeableImage/视频原生控件同一个取舍——VideoNode/AudioNode
-                从来就没有这几个按钮（视频靠原生播放器控件自带的全屏/下载），
-                合并卡片这里保持同一个取舍（见 LabCanvas.handleSwapImage 的
-                注释）。 */}
+            {/* 放大/下载只对图片有意义（视频靠原生播放器控件自带的全屏/下载），
+                替换则图片和视频都有——见下面 swapControl 的注释。 */}
             {mode === 'image' && (
               <div className="lab-node-media-actions">
                 <button
@@ -676,90 +776,9 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
                 >
                   {downloadIcon}
                 </a>
-                <div className="lab-node-swap-wrap nodrag" ref={swapWrapRef}>
-                  <button
-                    type="button"
-                    title={t('director.lab.swapImage')}
-                    onClick={(e) => {
-                      if (swapOpen) {
-                        setSwapOpen(false);
-                        return;
-                      }
-                      setSwapPos(popoverPositionFromTrigger(e.currentTarget));
-                      setSwapOpen(true);
-                    }}
-                    data-testid="lab-process-node-swap-image"
-                  >
-                    {swapIcon}
-                  </button>
-                  {/* .lab-node-media 有 overflow:hidden 裁掉超出卡片的内容
-                      （给图片裁圆角用），弹层自己比卡片高得多，不 Portal 出去
-                      会被从中间切掉——同 promptOpen 那个弹窗一样挂到 body，
-                      只是那个是居中遮罩，这个是贴着按钮的浮层，所以用
-                      popoverPositionFromTrigger 算 fixed 定位而不是遮罩居中。 */}
-                  {swapOpen &&
-                    swapPos &&
-                    createPortal(
-                      <div
-                        className="lab-node-swap-popover nowheel"
-                        ref={swapPopoverRef}
-                        style={{ top: swapPos.top, left: swapPos.left }}
-                        data-testid="lab-process-node-swap-popover"
-                      >
-                        <button
-                          type="button"
-                          className="lab-node-swap-popover-upload"
-                          onClick={() => {
-                            setSwapOpen(false);
-                            fileInputRef.current?.click();
-                          }}
-                          data-testid="lab-process-node-swap-upload-local"
-                        >
-                          {t('director.lab.swapUploadLocal')}
-                        </button>
-                        <div className="lab-node-swap-popover-grid">
-                          {swappableAssets.length === 0 ? (
-                            <div className="lab-node-swap-popover-empty">{t('director.lab.swapNoAssets')}</div>
-                          ) : (
-                            swappableAssets.map((asset) => (
-                              <button
-                                type="button"
-                                key={asset.asset_id}
-                                className="lab-node-swap-popover-item"
-                                title={asset.name || asset.prompt || ''}
-                                onClick={() => {
-                                  setSwapOpen(false);
-                                  actions.swapImageFromAsset(id, {
-                                    assetId: asset.asset_id,
-                                    filePath: asset.file_path as string,
-                                    name: asset.name || asset.prompt || '',
-                                  });
-                                }}
-                                data-testid="lab-process-node-swap-asset"
-                                data-variant={asset.asset_id}
-                              >
-                                <img src={rawFileUrl(asset.file_path as string)} alt={asset.name || ''} />
-                              </button>
-                            ))
-                          )}
-                        </div>
-                      </div>,
-                      document.body
-                    )}
-                </div>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="lab-node-swap-input"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) actions.swapImage(id, file);
-                    e.target.value = '';
-                  }}
-                />
               </div>
             )}
+            {swapControl}
           </div>
           {data.history.length > 1 && (
             <div className="lab-node-history-bar nodrag" data-testid="lab-process-node-history-bar">

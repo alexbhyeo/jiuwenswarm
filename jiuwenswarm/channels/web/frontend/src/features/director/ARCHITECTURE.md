@@ -355,7 +355,7 @@ Lab process card kinds (`labTypes.ts`):
 | `video2audio` | audio | 0 | 1 | 0 | 视频生音频: chains two existing capabilities — `video_understanding` writes a narration script from the connected video, then `generate_audio` speaks it. The `video1` port accepts video nodes only, and the optional text node's content is appended to the narration prompt as extra requirements. Its persisted asset is an **`audio`** asset (not `video2audio`) whose `params` carry `script` / `input_video_path`; `buildFlowFromChat` uses `input_video_path` to redraw the dependency edge. Needs **both** the 语音生成 and 视频理解 slots configured. On the wire it is its **own `mode`**: the Lab sends `mode="video2audio"` explicitly (a plain `mode="audio"` would take the TTS-only branch and feed the empty prompt straight to `generate_audio`), and the backend also normalises `mode="audio"` + an input video to it so no client can land in the wrong branch. |
 | `imageAudio2video` | video | 1 | 0 | 1 | 图音生视频: one reference-to-video call with **both** references in `input_references` — the image as `image_url` (deliberately *not* a first frame: OpenRouter drops `input_references` when `frame_images` is also present) and the audio as `audio_url`, which the model lip-syncs to. The `audio1` port accepts audio nodes only. Its own `mode` on the wire (`image_audio2video`); the persisted asset is a **`video`** asset whose `params` carry `reference_image_path` / `input_audio_path` / `generate_audio`, and `buildFlowFromChat` redraws both dependency edges from those. The card exposes a 有声音/无声音 picker (`generateAudio`) because Seedance returns a silent clip unless the request asks for audio output, plus an 音频链接 text field: a public HTTPS audio URL can be typed directly as the reference instead of wiring an audio clip, in which case it wins (`input_audio_url` on the wire, `input_audio_path` in `params`) and the 参考音频 row shows 链接 instead of ✓. The field exists because the app can't host local files publicly — the provider must fetch the audio itself. Other provider constraints: OpenRouter only accepts an **HTTPS URL** for an audio reference (base64/data URIs are rejected), and BytePlus rejects reference images containing real people. |
 | `video2video` | video | 0 | 1 | 0 | 视频生视频: one reference-to-video call whose reference is **the source clip itself** (`video_url` in `input_references`, see `_resolve_video_reference`) — the model re-renders the clip per the prompt while keeping its subject and motion. The `video1` port accepts video nodes only, and the prompt is **required** (it is the whole description of the intended change). Its own `mode` on the wire (`video2video`); the persisted asset is a **`video`** asset whose `params` carry `input_video_path` / `generate_audio`, and `buildFlowFromChat` restores either the 视频链接 field (HTTPS input) or the dependency edge (local input). Audio defaults to **有声音** (`defaultGenerateAudio`) so re-rendering a picture doesn't silently mute the source clip, with a source-specific hint string. **Only a public HTTPS URL can actually be generated from**: the provider fetches reference videos itself and rejects local files / data: URIs, so a wired clip fails fast with an actionable 视频链接 message instead of a wasted upload. |
-| `videoBridge` | video | 0 | 2 | 0 | 视频连视频: a FLF2V (first/last-frame-to-video) bridge between **two** source clips — `video1` ("片段一") and `video2` ("片段二") are both required video-node-only ports. The backend (`director_frame_extract.extract_frame`, ffmpeg via `resolve_ffmpeg`/`probe_media` from `director_clip_compose`) grabs 片段一's **last** frame and 片段二's **first** frame into two temp PNGs, then calls the same `generate_video(first_frame_path=…, last_frame_path=…)` path `image2video` already uses — the only difference from `image2video` is that the two frames are extracted automatically instead of picked by the user. The prompt is **required** (FLF2V has no other way to know how to move between the two static frames), so `handleAddProcessNode` auto-creates and wires a pre-filled text node (`DEFAULT_VIDEO_BRIDGE_PROMPT` in `labTypes.ts`) to the card's `text` port the moment it's dropped on the canvas — informed by the InfinityStory paper (arXiv:2603.03646)'s FLF2V transition-training setup: lock the first frame, approximate the last, keep motion continuous, fall back to camera/environmental motion when the two frames depict different scenes, and never let a character appear/disappear abruptly or cut in half at a frame edge. Its own `mode` on the wire (`video_bridge`); the persisted asset is a **`video`** asset whose `params` carry `bridge_clip1_path` / `bridge_clip2_path` (both source clips, for `buildFlowFromChat` to redraw both dependency edges — see `isValidConnection`'s `video1`/`video2` branch). Audio defaults to **无声音**: a synthesized transition has no source track to preserve, unlike `video2video`. Both clips **must** be local, ready video assets — there is no HTTPS-URL alternative (unlike `video2video`'s 视频链接), because frame extraction runs on the local file path server-side, not through the generation API's reference-video fetch. |
+| `videoBridge` | video | 0 | 2 | 0 | 视频连视频: a FLF2V (first/last-frame-to-video) bridge between **two** source clips — `video1` ("片段一") and `video2` ("片段二") are both required video-node-only ports. The backend (`director_frame_extract.extract_frame`, ffmpeg via `resolve_ffmpeg`/`probe_media` from `director_clip_compose`) grabs 片段一's **last** frame and 片段二's **first** frame into two temp PNGs, then calls the same `generate_video(first_frame_path=…, last_frame_path=…)` path `image2video` already uses — the only difference from `image2video` is that the two frames are extracted automatically instead of picked by the user. The prompt is **required** (FLF2V has no other way to know how to move between the two static frames), so `handleAddProcessNode` pre-fills `DEFAULT_VIDEO_BRIDGE_PROMPT` (in `labTypes.ts`) into the card's own `ProcessNodeData.prompt` — the 文字提示 popover every card already has, opened from the card's 文字提示 row — rather than spawning a separate text card and edge. It is informed by the InfinityStory paper (arXiv:2603.03646)'s FLF2V transition-training setup: lock the first frame, approximate the last, keep motion continuous, fall back to camera/environmental motion when the two frames depict different scenes, and never let a character appear/disappear abruptly or cut in half at a frame edge. The 文字提示 port stays available and still wins over nothing — `data.prompt` takes precedence over it (`text = inlinePrompt || connectedText`), so wiring a text node without clearing the popover has no effect; `buildFlowFromChat` likewise restores the asset's prompt into `data.prompt` and draws no text node. Its own `mode` on the wire (`video_bridge`); the persisted asset is a **`video`** asset whose `params` carry `bridge_clip1_path` / `bridge_clip2_path` (both source clips, for `buildFlowFromChat` to redraw both dependency edges — see `isValidConnection`'s `video1`/`video2` branch). Audio defaults to **无声音**: a synthesized transition has no source track to preserve, unlike `video2video`. Both clips **must** be local, ready video assets — there is no HTTPS-URL alternative (unlike `video2video`'s 视频链接), because frame extraction runs on the local file path server-side, not through the generation API's reference-video fetch. |
 
 Port capacity is declared by `PROCESS_KIND_MAX_IMAGES` / `PROCESS_KIND_MAX_VIDEOS` /
 `PROCESS_KIND_MAX_AUDIOS`,
@@ -445,7 +445,78 @@ the RPC), so the spinner has to span both phases. Its `title` switches to
 3. On remount, the canvas restores from the in-memory copy first, avoiding the
    race where the debounced RPC has not landed yet.
 
-### 8.2a Save to project (timeline → one clip)
+### 8.2a Lab canvas rebuild (生成实验室流程图)
+
+`buildFlowFromChat` throws the canvas away and re-derives it from the chat's
+asset list, so it has to reconstruct the same graph the user built by hand.
+
+**Reusing the upstream process card.** A card is itself its own output — there
+is no separate output node any more — so when a downstream card references an
+asset, the edge must land on the card that produced it. The index maps that make
+this possible (`outputNodeIdByAsset`, `image/video/audioNodeIdByPath`,
+`entryPointerByAssetId`) are filled from **the whole `history`** of each card,
+not just the asset the chat message mentions: after the user clicks 重新生成 the
+downstream reference points at a *regenerated* asset with a brand-new
+`asset_id` + `file_path`, and an index built from the origin entry alone misses
+it — `ensureImageRefNode` then concludes "no existing node" and spawns a
+duplicate `ref_` card next to the process card showing the very same picture.
+
+Path registration is **first-wins** (`!map.has(...)`): a card whose picture was
+replaced with another card's asset must not steal that path from its true owner.
+
+**Showing the referenced regeneration.** Reusing the card is only half of it —
+the card also has to *display* the entry the downstream card is wired to
+(`entryPointerByAssetId` → `pendingSwitchVotes` → one `setNodes` pass after the
+placement loop, which rewrites `activeHistoryIndex` plus the `assetId` /
+`filePath` / `name` mirrors that downstream ports read).
+
+**Placing dependents in the next column.** Cards are layered by dependency
+depth: `x = COL_PROCESS_X + depth * GROUP_STEP`, and a card that depends on
+material at depth *N* goes to depth *N+1* — so a downstream card always sits one
+column to the **right** of what it references and every edge runs left→right. The
+depth lookup resolves a dependency through a `producerKeyByAssetId` map (any
+asset id → the card that produced it) rather than `plans.has(depAssetId)`:
+downstream cards usually reference the upstream card's **regenerated** entry,
+which is not a `plans` key, so the naive lookup treated it as an off-canvas
+legacy asset, gave the dependent depth 1, and dumped it into the *same* column as
+its producer — 9 of 32 edges in the `christmas` project became vertical lines
+running through a 12-card column. `resolveDepths` (`lab/rebuildLayout.ts`) holds
+the rule, including the cycle / self-reference guards.
+
+One card can only show one entry, so references to *different* entries of the
+same card are unsatisfiable. The winner is decided by `pickSwitchTargets`
+(`lab/rebuildSwitch.ts`): most references wins, ties go to the **later** entry.
+That keeps the result independent of placement order — otherwise the same project
+could rebuild differently on every click.
+
+**Swapping what a card shows.** Every image *and video* process card has a 替换
+button over its preview (`.lab-node-media-actions`, `swapMedia` /
+`swapMediaFromAsset`): an uploaded local file or a pick from the asset library.
+The candidate list is filtered by the card's **output type** (`filterSwappableAssets`
+in `lab/swapAssets.ts` — video cards list only video assets, image cards list
+image/character assets, current entry excluded, ready-only, newest first), and a
+local upload is posted with the matching `asset_type` (`video` for video cards —
+mismatching it is a 400 from the upload endpoint). A swap rewrites
+`history[activeHistoryIndex]` **and** the flattened `assetId` / `filePath`
+mirrors together, which is what makes it visible to downstream cards: the
+`video1` / `video2` ports read those mirrors, so a swapped clip is what a
+视频连视频 / 视频生视频 / 视频生音频 card resolves and sends. Swap is deliberately
+not offered on audio cards (there is no useful "swap in another audio" flow yet),
+and video keeps its native controls instead of gaining the enlarge/download
+buttons it already has there.
+
+The **name** after a swap follows `swappedEntryName` (`lab/swapAssets.ts`): a
+video card keeps its own name, an image card adopts the picked asset's name. The
+card name is the card's identity on the canvas, and video names are never
+resolved as `@name` references (the backend only resolves `image` / `character`
+names into reference images), so borrowing the library name there buys nothing
+and costs the user the ability to tell which card holds which clip. Images are
+the opposite case: picking an already-named asset is how you get to
+`@小水獭` afterwards. This also matches the upload path, which already renames
+the uploaded file back to the card's name (`handleSwapMedia` →
+`renameAsset(..., data.name)`).
+
+### 8.2b Save to project (timeline → one clip)
 
 The button's **appearance carries its state**: 保存到项目 is disabled (grey pill,
 `not-allowed` cursor) only while the timeline is empty, and once a clip is dragged
@@ -506,7 +577,7 @@ stderr (`director_clip_compose.probe_media`).
 4. The assistant text plus the new `asset_id`s are appended to
    `edit_chat_messages`, which persists with the project.
 5. The model is explicitly told it **cannot** perform final edit/assembly itself
-   — it hands the user a timeline, and 保存到项目 (§8.2a) is what actually turns
+   — it hands the user a timeline, and 保存到项目 (§8.2b) is what actually turns
    that timeline into a single clip.
 
 **One stage per turn is the assistant's own contract, not an engine rule.** The

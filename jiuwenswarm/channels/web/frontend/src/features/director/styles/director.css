@@ -2800,7 +2800,8 @@
   border-color: var(--d-accent) !important;
 }
 
-.lab-node-swap-popover-item img {
+.lab-node-swap-popover-item img,
+.lab-node-swap-popover-item video {
   width: 100%;
   height: 100%;
   object-fit: cover;

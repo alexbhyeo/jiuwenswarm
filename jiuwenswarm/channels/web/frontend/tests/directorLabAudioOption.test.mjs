@@ -11,7 +11,7 @@ import {
 // 音频输入端口"。文生视频/图生视频没有参考音频，选"有声音"就是让生成模型自己
 // 配一条音轨；图音生视频的音轨来自连进来的参考音频。三者都得能选。
 test('every video-producing card offers the audio option', () => {
-  for (const kind of ['text2video', 'image2video', 'imageAudio2video']) {
+  for (const kind of ['text2video', 'image2video', 'imageAudio2video', 'video2video', 'videoBridge']) {
     assert.equal(supportsAudioOutput(kind), true, `${kind} 应该能选声音`);
   }
 });
@@ -26,7 +26,11 @@ test('non-video cards do not offer the audio option', () => {
 
 test('the option is offered for exactly the video-producing kinds', () => {
   const withOption = Object.keys(PROCESS_KIND_MODE).filter((k) => supportsAudioOutput(k));
-  assert.deepEqual(withOption.sort(), ['image2video', 'imageAudio2video', 'text2video']);
+  const videoKinds = Object.keys(PROCESS_KIND_MODE).filter((k) => PROCESS_KIND_MODE[k] === 'video');
+  // 从 kind 表推导而不是写死清单：之前写死三项，后来新增视频生视频/视频连视频
+  // 两张视频卡片时这里就悄悄过期了。
+  assert.deepEqual(withOption.sort(), videoKinds.sort());
+  assert.ok(videoKinds.length >= 3, '至少要覆盖文生视频/图生视频/图音生视频');
 });
 
 test('audio-input cards default to sound-on, others keep the silent default', () => {
