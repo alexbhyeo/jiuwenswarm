@@ -580,6 +580,57 @@ class RunCoordinator:
         if changed:
             self._store.save_graph(graph)
 
+    # ------------------------------------------------------------------
+    # revision chooser
+    # ------------------------------------------------------------------
+
+    def choose_output(self, run_id: str, node_id: str, choice: str) -> dict[str, Any]:
+        """Resolve a single-node rerun candidate (``new`` promotes it).
+
+        Legacy compatibility only: triggers no longer write ``candidate_*``
+        fields, so this resolves candidates left in run records created
+        before that change. May later be re-pointed at ``history`` picks.
+
+        A media rerun (image / video) usually left only
+        ``candidate_output_ref(s)`` and no ``candidate_text``; it is a
+        candidate all the same. Choosing again once nothing is pending (the
+        canvas may resend after a refresh) returns the run unchanged.
+        """
+        run = self._store.get_run(run_id)
+        if run is None:
+            raise ValueError(f"designer run not found: {run_id!r}")
+        states = run.setdefault("node_states", {})
+        state = states.get(node_id)
+        if state is None:
+            raise ValueError(
+                f"node '{node_id}' has no rerun candidate to choose from"
+            )
+        candidate_text = state.get("candidate_text")
+        candidate_ref = state.get("candidate_output_ref")
+        candidate_refs = [ref for ref in state.get("candidate_output_refs") or [] if ref]
+        if not (candidate_text or candidate_ref or candidate_refs):
+            return run
+        if choice == "new":
+            primary = candidate_ref or (candidate_refs[0] if candidate_refs else None)
+            entry: dict[str, Any] = {"ts": _now_ms(), "text": candidate_text or state.get("text") or ""}
+            if primary:
+                entry["output_ref"] = primary
+                state["output_ref"] = primary
+                # The canvas prefers the list over output_ref, so it must
+                # follow too or the node keeps showing the old media.
+                state["output_refs"] = candidate_refs or [primary]
+            if candidate_text:
+                state["text"] = candidate_text
+            state.setdefault("history", []).append(entry)
+            graph = self._store.get_graph(str(run.get("graph_id") or ""))
+            if graph is not None:
+                self._write_outputs_to_graph(graph, run)
+        state.pop("candidate_output_ref", None)
+        state.pop("candidate_output_refs", None)
+        state.pop("candidate_text", None)
+        self._store.save_run(run)
+        return run
+
 
 def _write_script(run_dir: Path, trigger_scope: str, source: str) -> Path:
     """Archive one trigger's compiled script next to its journal (native layout)."""

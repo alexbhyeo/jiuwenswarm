@@ -1,5 +1,13 @@
-import { LoaderCircle, PanelRight, Square, X } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { FileText, Film, Image as ImageIcon, LoaderCircle, Music, PanelRight, Square, X } from 'lucide-react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import SendPlaneIcon from '../../../assets/send_plane.svg?react';
 import { MessageList } from '../../../components/ChatPanel/MessageList';
@@ -26,6 +34,15 @@ import { useDesignerRunStore } from '../designerRunStore';
 import { useDesignerStore } from '../designerStore';
 import { useDesignerUiStore } from '../designerUiStore';
 import DesignerModelBadge from './DesignerModelBadge';
+import { designerAssetPreviewUrl } from '../designerAssetUrl';
+import {
+  collectMentionedNodes,
+  detectAtToken,
+  filterMentionOptions,
+  insertMention,
+  isPreviewableMention,
+  mentionOptions,
+} from '../designerMentions';
 import {
   DESIGNER_REF_LIMITS,
   designerReferenceKindFromMime,
@@ -102,6 +119,14 @@ function ReferenceChips({
   );
 }
 
+/** Stand-in thumbnail for an "@" option with no image preview. */
+function MentionKindIcon({ type }: { type: string }) {
+  if (type === 'video') return <Film size={14} />;
+  if (type === 'audio') return <Music size={14} />;
+  if (type === 'image') return <ImageIcon size={14} />;
+  return <FileText size={14} />;
+}
+
 const EMPTY_MESSAGES: Message[] = [];
 
 export function DesignerChatPanel() {
@@ -128,6 +153,8 @@ export function DesignerChatPanel() {
   const selectedModelName = useSessionStore((state) =>
     sessionId ? state.runtimes[sessionId]?.selectedModelName ?? null : null,
   );
+  const [atMenu, setAtMenu] = useState<{ start: number; query: string; index: number } | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const selectedModelSelection = useSessionStore((state) =>
     sessionId ? state.runtimes[sessionId]?.selectedModelSelection ?? null : null,
   );
@@ -179,6 +206,40 @@ export function DesignerChatPanel() {
       cancelled = true;
     };
   }, [sessionId, availableModelCount, configRevision, selectedModelName]);
+
+  // "@" offers the canvas nodes by label; mentioned nodes preview above the input.
+  const allMentionOptions = useMemo(() => mentionOptions(domainGraph), [domainGraph]);
+  const atCandidates = useMemo(
+    () => (atMenu ? filterMentionOptions(allMentionOptions, atMenu.query) : []),
+    [allMentionOptions, atMenu],
+  );
+  const draftMentions = useMemo(
+    () => collectMentionedNodes(domainGraph, draft).filter(isPreviewableMention),
+    [domainGraph, draft],
+  );
+
+  const chooseMention = useCallback(
+    (label: string) => {
+      if (!atMenu) return;
+      const next = insertMention(draft, atMenu, label);
+      setDraft(next.value);
+      setAtMenu(null);
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(next.caret, next.caret);
+      });
+    },
+    [atMenu, draft],
+  );
+
+  const onDraftChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>) => {
+    const { value } = event.target;
+    setDraft(value);
+    const token = detectAtToken(value, event.target.selectionStart ?? value.length);
+    setAtMenu(token ? { ...token, index: 0 } : null);
+  }, []);
 
   useEffect(() => {
     const el = bodyRef.current;
@@ -362,12 +423,31 @@ export function DesignerChatPanel() {
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.key === 'Enter' && !event.shiftKey) {
+      if (atMenu && atCandidates.length > 0) {
+        const count = atCandidates.length;
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault();
+          const step = event.key === 'ArrowDown' ? 1 : -1;
+          setAtMenu((cur) => (cur ? { ...cur, index: (cur.index + step + count) % count } : cur));
+          return;
+        }
+        if (event.key === 'Enter' || event.key === 'Tab') {
+          event.preventDefault();
+          chooseMention(atCandidates[Math.min(atMenu.index, count - 1)].label);
+          return;
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          setAtMenu(null);
+          return;
+        }
+      }
+      if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
         event.preventDefault();
         handleSend();
       }
     },
-    [handleSend],
+    [atCandidates, atMenu, chooseMention, handleSend],
   );
 
   return (
@@ -414,6 +494,15 @@ export function DesignerChatPanel() {
             removeLabel={t('designer.chat.removeAttachment')}
           />
         ) : null}
+        {draftMentions.length > 0 ? (
+          <ReferenceChips
+            items={draftMentions.map((item) => ({
+              kind: item.type === 'video' ? 'video' : 'image',
+              filename: item.label,
+              previewUrl: item.type === 'image' ? designerAssetPreviewUrl(item.uri) : null,
+            }))}
+          />
+        ) : null}
         {attachError ? (
           <p className="designer-chat-panel__attach-error" data-testid="designer-chat-panel-attach-error">
             {attachError}
@@ -452,14 +541,44 @@ export function DesignerChatPanel() {
         ) : null}
         {/* Canvas chat sidebar: hide attach control; landing prompt keeps its own attach UI. */}
         <div className="designer-chat-panel__composer-box">
+          {atMenu && atCandidates.length > 0 ? (
+            <ul className="designer-chat-panel__at-menu" role="listbox" data-testid="designer-chat-panel-at-menu">
+              {atCandidates.map((item, index) => {
+                const preview = item.type === 'image' ? designerAssetPreviewUrl(item.uri) : null;
+                return (
+                  <li key={item.nodeId} role="option" aria-selected={index === atMenu.index}>
+                    <button
+                      type="button"
+                      className={index === atMenu.index ? 'is-active' : ''}
+                      data-testid="designer-chat-panel-at-option"
+                      data-node-id={item.nodeId}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        chooseMention(item.label);
+                      }}
+                    >
+                      <span className="designer-chat-panel__at-thumb" data-kind={item.type} aria-hidden>
+                        {preview ? <img src={preview} alt="" /> : <MentionKindIcon type={item.type} />}
+                      </span>
+                      <span className="designer-chat-panel__at-label" title={item.label}>
+                        {item.label}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
           <textarea
+            ref={textareaRef}
             className="designer-chat-panel__input"
             placeholder={t('designer.chat.inputPlaceholder')}
             value={draft}
             disabled={sending}
             data-testid="designer-chat-panel-input"
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={onDraftChange}
             onKeyDown={onKeyDown}
+            onBlur={() => setAtMenu(null)}
           />
           <div className="designer-chat-panel__composer-actions">
             {sessionId ? (
