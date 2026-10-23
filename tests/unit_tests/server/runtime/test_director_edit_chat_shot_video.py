@@ -220,13 +220,13 @@ async def test_shot_video_fails_loudly_when_the_job_fails(
 
 
 @pytest.mark.asyncio
-async def test_shot_video_is_silent_by_default(
+async def test_shot_video_has_audio_by_default(
     monkeypatch: pytest.MonkeyPatch, manager: DirectorManager, tmp_path: Path
 ):
-    """没被要求声音时不能自己配上声音：历史上每条镜头视频都是无声的，
-    多一个开关不等于把默认值改掉。"""
+    """缺省就有声音：画面与人声由同一次生成产出，口型天然同步，所以用户不用
+    额外说明"这一段要有人声"——只有明确要求静音时才关掉。"""
     _configure(monkeypatch)
-    created = await manager.handle_director_projects_create({"name": "默认无声"})
+    created = await manager.handle_director_projects_create({"name": "默认有声"})
     project_id = created["project"]["project_id"]
     _add_frame(manager, project_id, "Ad Shot1")
 
@@ -236,6 +236,40 @@ async def test_shot_video_is_silent_by_default(
     monkeypatch.setattr(dm, "check_video_status", _StubTool([_CHECK_STILL_RUNNING]))
 
     _, asset_id = await _run(manager, project_id)
+
+    assert generate.calls[0]["kwargs"]["generate_audio"] is True
+    assert (
+        next(a for a in manager._store.get_project(project_id).assets if a.asset_id == asset_id)
+        .params["generate_audio"]
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_shot_video_can_turn_audio_off(
+    monkeypatch: pytest.MonkeyPatch, manager: DirectorManager, tmp_path: Path
+):
+    """用户明确要求"这一段静音/不要声音"时才关掉。"""
+    _configure(monkeypatch)
+    created = await manager.handle_director_projects_create({"name": "静音"})
+    project_id = created["project"]["project_id"]
+    _add_frame(manager, project_id, "Ad Shot1")
+
+    out_path = tmp_path / "clip.mp4"
+    generate = _StubTool([_SAVED.format(path=str(out_path))])
+    monkeypatch.setattr(dm, "generate_video", generate)
+    monkeypatch.setattr(dm, "check_video_status", _StubTool([_CHECK_STILL_RUNNING]))
+
+    _, asset_id = await manager._execute_generate_shot_video(
+        manager._store.get_project(project_id),
+        {
+            "name": "Ad Shot1 Video",
+            "first_frame_name": "Ad Shot1",
+            "description": "Silent establishing shot of the bottle on a wet windowsill.",
+            "duration_seconds": 5,
+            "generate_audio": False,
+        },
+    )
 
     assert generate.calls[0]["kwargs"]["generate_audio"] is False
     assert (
@@ -249,8 +283,8 @@ async def test_shot_video_is_silent_by_default(
 async def test_shot_video_can_turn_audio_on(
     monkeypatch: pytest.MonkeyPatch, manager: DirectorManager, tmp_path: Path
 ):
-    """用户明确要求"这一镜有声音/口播"时才打开——声音与口型由同一次生成产出，
-    所以只要开关传到 generate_video 就够了（不需要外挂参考音频）。"""
+    """显式传 generate_audio=true 与默认行为一致——显式开关不能因为缺省已经是
+    有声就被忽略掉（模型仍可能主动写这个参数）。"""
     _configure(monkeypatch)
     created = await manager.handle_director_projects_create({"name": "有人声"})
     project_id = created["project"]["project_id"]

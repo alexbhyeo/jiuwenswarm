@@ -213,15 +213,39 @@ async def test_bridge_extracts_last_of_clip1_and_first_of_clip2(
     assert kwargs["first_frame_path"] == str(clip1_call["output_path"])
     assert kwargs["last_frame_path"] == str(clip2_call["output_path"])
     assert kwargs["prompt"] == "camera drifts gently from the garden into the house"
-    assert kwargs["generate_audio"] is False
+    # 过渡片段默认也有声：两段镜头视频都有声音时，中间夹一段静音过渡会在成片里
+    # 出现突兀的无声空隙。
+    assert kwargs["generate_audio"] is True
 
     assert asset_id is not None
     asset = next(a for a in manager._store.get_project(project_id).assets if a.asset_id == asset_id)
     assert asset.type == "video"
     assert asset.status == "ready"
+    assert asset.params["generate_audio"] is True
     assert asset.params["bridge_clip1_path"] == clip1_path
     assert asset.params["bridge_clip2_path"] == clip2_path
     assert "过渡" in result_text
+
+
+@pytest.mark.asyncio
+async def test_bridge_can_turn_audio_off(
+    monkeypatch: pytest.MonkeyPatch, manager: DirectorManager, tmp_path: Path
+):
+    """用户明确要求过渡段静音时才关掉。"""
+    _configure(monkeypatch)
+    created = await manager.handle_director_projects_create({"name": "桥接静音"})
+    project_id = created["project"]["project_id"]
+    _add_shot_video(manager, project_id, asset_id="clip-1", name="Scene1 Shot1-1 Video")
+    _add_shot_video(manager, project_id, asset_id="clip-2", name="Scene1 Shot1-2 Video")
+    _stub_extractor(monkeypatch)
+    video_stub = _StubTool([_SAVED.format(path=str(tmp_path / "out.mp4"))])
+    monkeypatch.setattr(dm, "generate_video", video_stub)
+
+    _, asset_id = await _run(manager, project_id, generate_audio=False)
+
+    assert video_stub.calls[0]["kwargs"]["generate_audio"] is False
+    asset = next(a for a in manager._store.get_project(project_id).assets if a.asset_id == asset_id)
+    assert asset.params["generate_audio"] is False
 
 
 @pytest.mark.asyncio

@@ -270,9 +270,9 @@ _EDIT_CHAT_TOOLS_SCHEMA: list[dict[str, Any]] = [
             "name": "generate_shot_video",
             "description": (
                 "把一张已经生成的分镜关键帧真实转成一段视频片段（调用视频生成模型），"
-                "保存为该项目的素材。生成后可以用 @名称 引用这段视频。默认生成**无声**"
-                "片段；只有用户明确要求这一段要有声音/口播/台词时，才把 generate_audio "
-                "设为 true。"
+                "保存为该项目的素材。生成后可以用 @名称 引用这段视频。默认生成**有声**"
+                "片段（画面与人声/环境音同一次生成，天然同步）；只有用户明确说这一段"
+                "要静音时，才把 generate_audio 设为 false。"
             ),
             "parameters": {
                 "type": "object",
@@ -295,16 +295,19 @@ _EDIT_CHAT_TOOLS_SCHEMA: list[dict[str, Any]] = [
                     },
                     "duration_seconds": {
                         "type": "integer",
-                        "description": "视频时长（秒），跟分镜列表里这一镜的时长保持一致，不确定时用 5",
+                        "description": (
+                            "视频时长（秒），可选 4-15，跟分镜列表里这一镜的时长保持一致，"
+                            "不确定时用 5。超出 4-15 会被服务商夹到边界值。"
+                        ),
                     },
                     "generate_audio": {
                         "type": "boolean",
                         "description": (
-                            "这一段是否要有声音，默认 false（无声片段）。设为 true 时由"
-                            "视频模型在生成画面的同时生成人声/台词，口型和声音是同一次"
-                            "生成出来的，因此天然同步——想让画面里的人开口说话就打开它，"
-                            "并把要说的台词写进 description。只有用户明确要求这一段有"
-                            "声音/口播/台词时才打开；用户没提就保持默认的无声。"
+                            "这一段是否要有声音，默认 true（有声片段）。打开时由视频模型在"
+                            "生成画面的同时生成人声/台词/环境音，口型和声音是同一次生成"
+                            "出来的，因此天然同步——想让画面里的人开口说话就把要说的台词"
+                            "写进 description。只有用户明确要求这一段静音/不要声音时，才"
+                            "设为 false。"
                         ),
                     },
                 },
@@ -345,7 +348,18 @@ _EDIT_CHAT_TOOLS_SCHEMA: list[dict[str, Any]] = [
                     },
                     "duration_seconds": {
                         "type": "integer",
-                        "description": "过渡视频时长（秒），不确定时用 5",
+                        "description": (
+                            "过渡视频时长（秒），可选 4-15，不确定时用 5。"
+                            "超出 4-15 会被服务商夹到边界值。"
+                        ),
+                    },
+                    "generate_audio": {
+                        "type": "boolean",
+                        "description": (
+                            "过渡片段是否要有声音，默认 true（与两段镜头视频一致，避免拼接"
+                            "时出现一段突兀的静音）。只有用户明确要求过渡段静音时才设为 "
+                            "false。"
+                        ),
                     },
                 },
                 "required": ["name", "clip1_name", "clip2_name"],
@@ -1361,13 +1375,13 @@ class DirectorManager:
             duration_seconds = int(args.get("duration_seconds") or 5)
         except (TypeError, ValueError):
             duration_seconds = 5
-        # 「这一段要不要有声音」由模型按用户这一轮的要求决定，缺省是无声：这是
-        # 剪辑助手原有的行为（历史上每一条镜头视频都是无声的），不能因为多了这个
-        # 开关就悄悄给所有片段配上声音。参考音频驱动的口型同步走不通——OpenRouter
-        # 只接受 HTTPS 的音频引用（本地 TTS 文件只能编成 data: URI，实测被 400
-        # 拒绝），所以这里走的是"视频模型在生成画面的同时生成人声"，口型与声音
-        # 同源、天然同步，不需要外挂音轨。
-        generate_audio_flag = bool(args.get("generate_audio") or False)
+        # 「这一段要不要有声音」缺省是**有声**：画面与人声/环境音由同一次生成产出，
+        # 口型天然同步。只有用户明确说这一段要静音时才关掉（generate_audio=false）。
+        # 参考音频驱动的口型同步仍然走不通——OpenRouter 只接受 HTTPS 的音频引用
+        # （本地 TTS 文件只能编成 data: URI，实测被 400 拒绝），所以这里走的是
+        # "视频模型在生成画面的同时生成声音"，不需要外挂音轨。
+        raw_generate_audio = args.get("generate_audio")
+        generate_audio_flag = True if raw_generate_audio is None else bool(raw_generate_audio)
 
         if not video_name or not first_frame_name:
             return "缺少 name 或 first_frame_name，生成失败。", None
@@ -1485,6 +1499,11 @@ class DirectorManager:
             duration_seconds = int(args.get("duration_seconds") or 5)
         except (TypeError, ValueError):
             duration_seconds = 5
+        # 与 _execute_generate_shot_video 同一个默认：过渡片段默认**有声**。两段
+        # 镜头视频都有声音时，中间夹一段静音的过渡，成片里会出现一段突兀的无声
+        # 空隙；只有用户明确要求过渡段静音时才关掉。
+        raw_generate_audio = args.get("generate_audio")
+        generate_audio_flag = True if raw_generate_audio is None else bool(raw_generate_audio)
 
         if not bridge_name or not clip1_name or not clip2_name:
             return "缺少 name、clip1_name 或 clip2_name，生成失败。", None
@@ -1534,7 +1553,7 @@ class DirectorManager:
                     aspect_ratio="16:9",
                     resolution="720p",
                     duration_seconds=duration_seconds,
-                    generate_audio=False,
+                    generate_audio=generate_audio_flag,
                     save_dir=save_dir,
                 )
             except DirectorRpcError as exc:
