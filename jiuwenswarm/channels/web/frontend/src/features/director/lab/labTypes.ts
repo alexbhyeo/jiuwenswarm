@@ -248,8 +248,9 @@ export interface ProcessNodeData {
    *  另开一张输出节点，而是往这里追加一条 GenerationEntry。空数组＝还没
    *  生成过（渲染态＝"idle"，跟今天的处理卡片一样只有提示词/参数/生成
    *  按钮）；非空＝渲染态＝"generated"，展示 history[activeHistoryIndex]
-   *  这一条的预览图/视频/音频，外加"‹ N/M ›"切换条（entries 不止一条
-   *  才显示）。 */
+   *  这一条的预览图/视频/音频，外加"‹ N/M ›"切换条。切换条只要生成过就
+   *  显示——只有一条记录时也显示 "1/1"（两个按钮都禁用），这样所有已生成
+   *  卡片的高度一致、不会因为"有没有多份结果"而错位。 */
   history: GenerationEntry[];
   /** history 里当前生效的下标——决定预览里展示哪一条，也决定下游卡片的
    *  image1/image2/video1/audio1 连线实际读到哪一条产物（见下面的扁平

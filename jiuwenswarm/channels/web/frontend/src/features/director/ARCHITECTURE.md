@@ -517,6 +517,13 @@ the opposite case: picking an already-named asset is how you get to
 the uploaded file back to the card's name (`handleSwapMedia` →
 `renameAsset(..., data.name)`).
 
+**Card chrome: the ‹ N/M › bar.** It is rendered for any card that has produced
+something (`history.length > 0`), not only for cards with several results — a
+single-result card shows `1/1` with both arrows disabled. Hiding it below two
+entries made neighbouring cards differ in height by the bar's ~24 px, which
+knocked the name row and generate button out of line down a whole column;
+consistent card geometry matters more than those pixels.
+
 **Card chrome: collapsing "details".** A process card spends ~54 px on a settings
 block whose 模型 row is display-only (its chevron opens nothing), plus a row per
 input port. Both are hideable at two levels: a toolrail toggle sets the **global

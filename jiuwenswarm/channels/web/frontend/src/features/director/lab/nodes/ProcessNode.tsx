@@ -822,7 +822,11 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
             )}
             {swapControl}
           </div>
-          {data.history.length > 1 && (
+          {/* 只要已经生成过就显示这条 ‹ N/M ›——只有一份产物时也照样显示
+              "1/1"（左右按钮都是禁用态）。原来 >1 才渲染，导致同一列里
+              "只有一份结果的卡片"和"有多份结果的卡片"高度不一样、下半部分
+              错开，看起来不整齐；一致性比省下这 20 多像素更重要。 */}
+          {data.history.length > 0 && (
             <div className="lab-node-history-bar nodrag" data-testid="lab-process-node-history-bar">
               <button
                 type="button"
