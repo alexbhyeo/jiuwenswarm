@@ -12,7 +12,7 @@ import pytest
 from jiuwenswarm.common.e2a.models import E2AEnvelope
 from jiuwenswarm.common.schema.agent import AgentResponse, AgentResponseChunk
 from jiuwenswarm.common.schema.message import ReqMethod
-from jiuwenswarm.extensions.agentos.agentos_router.agent_manager import (
+from gateway.extensions.agentos.agentos_router.agent_manager import (
     AgentCreating,
     AgentManager,
     AgentRuntime,
@@ -31,12 +31,13 @@ from jiuwenswarm.extensions.yuanrong_frontend_client import (
     RuntimeProbeSettings,
 )
 from jiuwenswarm.extensions.agentos.agentos_router.extension import AgentOSRouter
-from jiuwenswarm.extensions.agentos.agentos_router.models import (
+from gateway.extensions.agentos.agentos_router.models import (
     AgentInfo,
     AgentStatus,
     ImageInfo,
 )
 from jiuwenswarm.extensions.agentos.agentos_router.registry_client import (
+    LaunchSpec,
     RegistryConflictError,
     RegistryConnectionError,
     RegistryValidationError,
@@ -450,7 +451,7 @@ async def test_swarm_request_creates_builtin_supervisor_runtime() -> None:
 
 @pytest.mark.asyncio
 async def test_web_moa_status_routes_to_authenticated_user_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
-    from jiuwenswarm.gateway.channel_manager.web.app_web_handlers import WebHandlersBindParams, _register_web_handlers
+    from gateway.channel_manager.web.app_web_handlers import WebHandlersBindParams, _register_web_handlers
 
     yuanrong = FakeYuanRongClient()
     manager = AgentManager()
@@ -1620,7 +1621,7 @@ async def test_idle_reaper_task_lifecycle_on_connect_disconnect() -> None:
 
 @pytest.mark.asyncio
 async def test_unsupported_third_agent_returns_unsupported() -> None:
-    from jiuwenswarm.gateway.routing.third_agent import get_unsupported_third_agent
+    from gateway.routing.third_agent import get_unsupported_third_agent
 
     third = get_unsupported_third_agent()
     listed = await third.thirdagent_list(user_id="u1", current_agent_type="jiuwenswarm")
@@ -2108,6 +2109,70 @@ async def test_sandbox_prewarm_lifecycle_protected_during_warmup(monkeypatch) ->
 
     assert await agent_manager.get_agent("u1", "jiuwenswarm") is None
     assert yuanrong.delete_calls == ["sbx-1"]
+    await client.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_leader_cancel_wakes_follower_and_clears_inflight() -> None:
+    """Cancelling a leader must settle the inflight Future and wake followers."""
+
+    gate = asyncio.Event()
+
+    class GatedWsClient(FakeAgentWsClient):
+        def __init__(self, yuanrong: FakeYuanRongClient) -> None:
+            super().__init__(yuanrong)
+            self.gate = gate
+
+        async def connect(self, uri: str) -> None:
+            await self.gate.wait()
+            await super().connect(uri)
+
+    yuanrong = FakeYuanRongClient()
+    agent_manager = AgentManager()
+    gated_clients: list[GatedWsClient] = []
+
+    def ws_factory() -> GatedWsClient:
+        gated = GatedWsClient(yuanrong)
+        gated_clients.append(gated)
+        return gated
+
+    client = _router_client(
+        yuanrong,
+        agent_manager=agent_manager,
+        ws_client_factory=ws_factory,
+    )
+
+    await client._on_channel_event(_channel_event("u1", "connected", "web"))
+    warmup_task = client._warmup_tasks.get("u1")
+    assert warmup_task is not None
+
+    runtime = None
+    for _ in range(500):
+        runtime = await agent_manager.get_agent("u1", "jiuwenswarm")
+        if runtime is not None and runtime.is_ready():
+            break
+        await asyncio.sleep(0.01)
+    assert runtime is not None and runtime.is_ready()
+    assert gated_clients
+
+    follower_task = asyncio.create_task(client._get_ws_client(runtime))
+    await asyncio.sleep(0.05)
+    assert not follower_task.done()
+    assert client._ws_connecting
+
+    warmup_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await warmup_task
+
+    with pytest.raises(RuntimeError, match="leader cancelled"):
+        await asyncio.wait_for(follower_task, timeout=1.0)
+
+    assert gated_clients[0].disconnected is True
+    assert client._ws_connecting == {}
+
+    gate.set()
+    connected = await asyncio.wait_for(client._get_ws_client(runtime), timeout=1.0)
+    assert connected is not None
     await client.shutdown()
 
 
@@ -3945,3 +4010,24 @@ async def test_resolve_web_endpoint_waits_for_running_after_create() -> None:
         yuanrong.release()
         await _drain_tasks(tasks)
         await client.shutdown()
+
+
+def test_launch_spec_uses_version_when_framework_version_missing() -> None:
+    spec = LaunchSpec.from_dict(
+        {
+            "framework": "dsh",
+            "version": "0.2.0-rc.2-20261013T091246Z",
+        }
+    )
+    assert spec.framework_version == "0.2.0-rc.2-20261013T091246Z"
+
+
+def test_launch_spec_prefers_framework_version() -> None:
+    spec = LaunchSpec.from_dict(
+        {
+            "framework": "dsh",
+            "version": "registry-version",
+            "framework_version": "card-version",
+        }
+    )
+    assert spec.framework_version == "card-version"

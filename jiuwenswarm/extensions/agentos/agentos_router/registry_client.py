@@ -19,11 +19,11 @@ from urllib.parse import quote
 
 import httpx
 
-from jiuwenswarm.extensions.agentos.agentos_router.agent_manager import (
+from gateway.extensions.agentos.agentos_router.agent_manager import (
     BUILTIN_AGENT_TYPE,
 )
-from jiuwenswarm.extensions.agentos.agentos_router.models import AgentInfo, ImageInfo
-from jiuwenswarm.extensions.agentos.registry_watcher.decode import (
+from gateway.extensions.agentos.agentos_router.models import AgentInfo, ImageInfo
+from gateway.extensions.agentos.registry_watcher.decode import (
     parse_access_mode,
     port_from_access_mode,
 )
@@ -71,7 +71,9 @@ class LaunchSpec:
         env_vars = payload.get("env_vars")
         return cls(
             framework=str(payload.get("framework") or "").strip(),
-            framework_version=str(payload.get("framework_version") or "").strip(),
+            framework_version=str(
+                payload.get("framework_version") or payload.get("version") or ""
+            ).strip(),
             runtime_spec=dict(runtime_spec)
             if isinstance(runtime_spec, dict)
             else {},

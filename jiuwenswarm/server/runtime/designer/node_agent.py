@@ -20,6 +20,7 @@ from jiuwenswarm.common.schema.designer_graph import (
     AssetRef,
     DesignerExecutionGraph,
     DesignerGraphNode,
+    clip_order_problems,
     data_predecessors,
     is_compose_sink_node,
     node_agent_template,
@@ -383,10 +384,19 @@ class DesignerNodeSpawner(Protocol):
 
 def _graph_patch_summary(graph: DesignerExecutionGraph) -> dict[str, Any]:
     """Shape returned to the leader after a canvas patch is saved."""
-    return {
+    summary: dict[str, Any] = {
         "graph_id": graph.get("graph_id"),
         "nodes": [node.get("id") for node in graph.get("nodes") or []],
     }
+    problems = clip_order_problems(graph)
+    if problems:
+        summary["clip_order_warning"] = (
+            "Each clip films the storyboard row at its config.clip_index and the final "
+            "film follows that order, so patch the clip nodes again: number them 1..N "
+            "in shot order (keep their ids) and wire each clip after the previous one. "
+            "Problems: " + "; ".join(problems)
+        )
+    return summary
 
 
 def designer_agent_group_dir() -> Path:
@@ -419,10 +429,7 @@ def parse_agent_template_ref(ref: str) -> tuple[str | None, str]:
 
 
 def flatten_template_prompt(template: Any, *, language: str = "cn") -> str:
-    from jiuwenswarm.agents.swarm.assembly import (
-        _render_prompt_text,
-        _select_prompt_content,
-    )
+    from openjiuwen.harness.resources import render_prompt_content
 
     sections = list(getattr(template, "prompt_sections", None) or [])
     rendered: list[str] = []
@@ -436,10 +443,7 @@ def flatten_template_prompt(template: Any, *, language: str = "cn") -> str:
             "workspace": workspace,
             **dict(getattr(section, "render_params", None) or {}),
         }
-        text = _render_prompt_text(
-            _select_prompt_content(content, language),
-            params,
-        ).strip()
+        text = render_prompt_content(content, language=language, params=params).strip()
         if text:
             rendered.append(text)
     return "\n\n".join(rendered)
@@ -481,7 +485,7 @@ def load_node_agent_template(node: DesignerGraphNode) -> Any | None:
     if group_name is None and member_id in _DESIGNER_MEMBERS:
         group_name = DESIGNER_AGENT_GROUP_NAME
     if group_name:
-        from jiuwenswarm.agents.swarm.agent_group import load_agent_group_package
+        from openjiuwen.agent_teams.experts import load_agent_group_package
 
         package_dir = _resolve_group_package_dir(group_name)
         if package_dir is None:
@@ -1066,6 +1070,7 @@ class DesignerGraphToolkit:
             edge_video_inputs,
             first_connected_video_file,
             generate_clip_video,
+            note_video_duration,
             video_duration_seconds,
         )
         from jiuwenswarm.common.schema.designer_graph import node_clip_index
@@ -1250,6 +1255,7 @@ class DesignerGraphToolkit:
             except Exception:  # noqa: BLE001
                 logger.debug("call_video_model early prompt handoff failed", exc_info=True)
         dur = video_duration_seconds(self.ctx, node)
+        note_video_duration(self.ctx, node, dur)
         from jiuwenswarm.server.runtime.designer.audio_locks import video_gen_family_label
 
         beat = asyncio.create_task(
@@ -1917,7 +1923,9 @@ def _node_execute_timeout_sec(node: DesignerGraphNode) -> float:
         return max(1800.0, video_tool_timeout_seconds())
     if pipeline == NODE_ROLE_COMPOSE:
         return 1800.0
-    return 1200.0
+    from jiuwenswarm.server.runtime.designer.media_generation import image_tool_timeout_seconds
+
+    return image_tool_timeout_seconds()
 
 
 class NodeAgentHost:

@@ -1,4 +1,4 @@
-import { PanelRight, X } from 'lucide-react';
+import { LoaderCircle, PanelRight, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import SendPlaneIcon from '../../../assets/send_plane.svg?react';
@@ -9,6 +9,7 @@ import { InteractionSlot } from '../../../components/InteractionSlot';
 import { webClient } from '../../../services/webClient';
 import { useChatStore } from '../../../stores/chatStore';
 import { resolveChatModelSelection, useSessionStore } from '../../../stores/sessionStore';
+import { buildConversationModelPayload } from '../../../multi-session/state/conversationModelSelection';
 import type { Message, UserAnswer } from '../../../types';
 import {
   DESIGNER_TEAM_MODE,
@@ -115,9 +116,15 @@ export function DesignerChatPanel() {
   const [attachError, setAttachError] = useState('');
   const [sending, setSending] = useState(false);
   const activeSessionId = useChatStore((state) => state.activeSessionId);
+  // The canvas session owns the model the leader runs with; the binding above
+  // makes activeSessionId agree, but the graph's session id wins if they diverge.
+  const modelSessionId = sessionId ?? activeSessionId ?? '';
   const chatAvailableModels = useSessionStore((state) => state.chatAvailableModels);
   const selectedModelName = useSessionStore(
-    (state) => state.runtimes[activeSessionId ?? '']?.selectedModelName ?? null,
+    (state) => state.runtimes[modelSessionId]?.selectedModelName ?? null,
+  );
+  const selectedModelSelection = useSessionStore(
+    (state) => state.runtimes[modelSessionId]?.selectedModelSelection ?? null,
   );
   const defaultModelName = useSessionStore((state) => state.defaultModelName);
   const selectedModel = useMemo(
@@ -250,6 +257,11 @@ export function DesignerChatPanel() {
           mode: DESIGNER_TEAM_MODE,
           request_id: requestId,
           answers,
+          ...buildConversationModelPayload({
+            mode: DESIGNER_TEAM_MODE,
+            selectedModelName,
+            selectedModelSelection,
+          }),
           ...(source ? { source } : {}),
         });
         if (pendingQuestion) {
@@ -260,7 +272,7 @@ export function DesignerChatPanel() {
         return false;
       }
     },
-    [sessionId],
+    [sessionId, selectedModelName, selectedModelSelection],
   );
 
   const onKeyDown = useCallback(
@@ -365,10 +377,23 @@ export function DesignerChatPanel() {
               className="designer-chat-panel__send"
               disabled={chatBusy || !canSend}
               onClick={handleSend}
-              aria-label={t('designer.chat.send')}
+              aria-label={chatBusy ? t('designer.chat.running') : t('designer.chat.send')}
+              aria-busy={chatBusy}
+              title={chatBusy ? t('designer.chat.running') : undefined}
               data-testid="designer-chat-panel-send"
+              data-variant={chatBusy ? 'running' : 'idle'}
             >
-              <SendPlaneIcon className="designer-chat-panel__send-icon" aria-hidden />
+              {/* A leader round can run for minutes (graph autorun); the button
+                  must read as "working", never as the idle send plane (#5410). */}
+              {chatBusy ? (
+                <LoaderCircle
+                  className="designer-chat-panel__send-spinner animate-spin"
+                  size={18}
+                  aria-hidden
+                />
+              ) : (
+                <SendPlaneIcon className="designer-chat-panel__send-icon" aria-hidden />
+              )}
             </button>
           </div>
         </div>
