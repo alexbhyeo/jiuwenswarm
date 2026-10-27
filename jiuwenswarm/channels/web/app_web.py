@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 from urllib.parse import ParseResult, parse_qs, quote, unquote, urlencode, urlparse
 
+import httpx
+
 # --- Early --dotenv parsing (before jiuwenswarm imports) ---
 from jiuwenswarm.dotenv_early import parse_dotenv_early
 parse_dotenv_early("jiuwenswarm-web")
@@ -162,6 +164,35 @@ def _parse_single_byte_range(
     if start >= file_size or end < start:
         return None
     return start, min(end, file_size - 1)
+
+
+_DIRECTOR_ASSETS_PATH_HINT = "/director/projects/"
+
+
+def _resolve_director_cloud_url(path: str) -> str | None:
+    """若这个本地绝对路径是某个已镜像到云存储的 Director 素材,返回其云端直链.
+
+    只在路径看起来像 Director 素材时才去扫 director_state.json——这个静态
+    文件服务器的 /file-api/raw-file 同时服务 ArtifactsPanel/SkillPanel/
+    ChatPanel 等一切跟 Director 毫无关系的本地文件,它们的路径永远不会
+    命中 _DIRECTOR_ASSETS_PATH_HINT 这个前缀,直接跳过,不产生任何额外开销。
+
+    与 container_file_http.py（AgentOS 路由模式下的另一套 /file-api 实现）
+    里同名逻辑重复,是有意为之——这两套服务器本来就各自独立维护本地文件
+    读取的那一份实现（见 _parse_single_byte_range 的同款说明），不值得为
+    这一个小函数在两者之间引入跨模块依赖。
+    """
+    if _DIRECTOR_ASSETS_PATH_HINT not in path:
+        return None
+    try:
+        from jiuwenswarm.server.runtime.director.director_store import DirectorStore
+
+        return DirectorStore().find_asset_cloud_url(path)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception(
+            "[file-api/raw-file] director cloud_url lookup failed for %s", path
+        )
+        return None
 
 
 def _get_agent_teams_root(project_root: Path) -> Path:
@@ -1010,6 +1041,44 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
         except (OSError, ValueError) as exc:
             raise _BadRequestError("invalid_path") from exc
 
+    def _serve_from_cloud(self, cloud_url: str) -> bool:
+        """把 /file-api/raw-file 的响应直接代理到云存储直链，成功返回 True。
+
+        传入请求自带的 Range 头原样转发给云端（COS 本身支持 Range），响应的
+        状态码/Content-Type/Content-Range 原样转发给浏览器——视频/音频预览
+        的拖动播放头要靠这个才能工作。任何失败（网络问题、ACL 修复前上传的
+        私有对象返回 403……）都返回 False，调用方据此退回本地文件读取，云端
+        代理只应该是"有更快/更新鲜的路就走，没有就还是原来那条路"，绝不能
+        让素材因此变得不可用。
+        """
+        range_header = self.headers.get("Range")
+        headers = {"Range": range_header} if range_header else {}
+        try:
+            with httpx.Client(timeout=15.0) as http_client:
+                resp = http_client.get(cloud_url, headers=headers)
+            if resp.status_code not in (200, 206):
+                resp.raise_for_status()
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).warning(
+                "[file-api/raw-file] cloud proxy failed for %s, falling back to local: %s",
+                cloud_url, exc,
+            )
+            return False
+
+        body = resp.content
+        self.send_response(resp.status_code)
+        self.send_header("Content-Type", resp.headers.get("Content-Type") or "application/octet-stream")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "no-store")
+        content_range = resp.headers.get("Content-Range")
+        if content_range:
+            self.send_header("Content-Range", content_range)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+        return True
+
     def _write_json(self, status: int, payload: dict) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -1335,6 +1404,11 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
             if not self._is_path_under_allowed_root(full_path):
                 self._write_json(403, {"error": "forbidden_path"})
                 return
+
+            cloud_url = _resolve_director_cloud_url(str(full_path))
+            if cloud_url and self._serve_from_cloud(cloud_url):
+                return
+
             if not full_path.is_file():
                 self._write_json(404, {"error": "file_not_found"})
                 return

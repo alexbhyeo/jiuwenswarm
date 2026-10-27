@@ -12,6 +12,7 @@ import time
 from typing import TYPE_CHECKING, Annotated, Any, Mapping
 from urllib.parse import quote
 
+import httpx
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,6 +26,69 @@ FILE_API_PREFIX = "/file-api"
 MAX_UPLOAD_COUNT = 20
 _STREAM_CHUNK = 65536
 _VERIFIED_ASSET_TOKEN_KIND = "verified_asset_v1"
+# Cheap pre-filter so the Director cloud-mirror lookup (a full director_state.json
+# scan, see DirectorStore.find_asset_cloud_url) only runs for paths that could
+# possibly be a Director asset — every other /file-api/raw-file caller
+# (ArtifactsPanel, SkillPanel, ChatPanel, ...) never matches this and pays
+# zero extra cost.
+_DIRECTOR_ASSETS_PATH_HINT = "/director/projects/"
+_CLOUD_FETCH_TIMEOUT_S = 15.0
+
+
+def _resolve_director_cloud_url(path: str) -> str | None:
+    """若这个本地路径是某个已镜像到云存储的 Director 素材，返回其云端直链。
+
+    只在路径看起来像 Director 素材时才去扫 director_state.json（见上面
+    _DIRECTOR_ASSETS_PATH_HINT）——其余 /file-api/raw-file 调用方
+    （ArtifactsPanel/SkillPanel/ChatPanel 等）的路径永远不会命中这个前缀，
+    直接跳过，不产生任何额外开销。
+    """
+    if _DIRECTOR_ASSETS_PATH_HINT not in path:
+        return None
+    try:
+        from jiuwenswarm.server.runtime.director.director_store import DirectorStore
+
+        return DirectorStore().find_asset_cloud_url(path)
+    except Exception:  # noqa: BLE001
+        logger.exception("[file-api/raw-file] director cloud_url lookup failed for %s", path)
+        return None
+
+
+async def _fetch_cloud_chunk(cloud_url: str, path: str, offset: int, limit: int) -> Any:
+    """从云存储直链按 Range 取一段字节，包成跟本地 download_container_file
+    一样形状的 AgentFileDownloadChunk，这样 raw_file_get 剩下的逻辑（JSON
+    分片模式 / 流式模式）完全不用区分数据来源是本地还是云端。
+
+    任何失败（网络错误、超时、403——比如镜像修复前上传的那批私有对象）都
+    直接抛出，调用方（raw_file_get）捕获后退回本地文件，云端代理只应该是
+    "有更快/更新鲜的路就走，没有就还是原来那条路"，绝不能让素材变得不可用。
+    """
+    from jiuwenswarm.extensions.yuanrong_frontend_client import AgentFileDownloadChunk
+
+    range_end = offset + max(limit, 1) - 1
+    async with httpx.AsyncClient(timeout=_CLOUD_FETCH_TIMEOUT_S) as http_client:
+        resp = await http_client.get(
+            cloud_url, headers={"Range": f"bytes={offset}-{range_end}"}
+        )
+    if resp.status_code not in (200, 206):
+        resp.raise_for_status()
+    data = resp.content
+    content_range = resp.headers.get("Content-Range", "")
+    total_size = offset + len(data)
+    if "/" in content_range:
+        tail = content_range.rsplit("/", 1)[-1].strip()
+        if tail.isdigit():
+            total_size = int(tail)
+    eof = (offset + len(data)) >= total_size
+    return AgentFileDownloadChunk(
+        data=data,
+        path=path,
+        offset=offset,
+        chunk_size=len(data),
+        size=total_size,
+        content_type=resp.headers.get("Content-Type") or "application/octet-stream",
+        eof=eof,
+    )
 
 
 class RawFileQuery(BaseModel):
@@ -614,8 +678,21 @@ def attach_container_file_routes(app: FastAPI, channel: WebChannel) -> None:
         agent_type = params.agent_type if isinstance(params.agent_type, str) else None
 
         want_json = str(params.response_format or "").strip().lower() == "json"
+        # 只在首次需要时解析一遍，而不是每个 chunk 都重新扫一次
+        # director_state.json——这条路径在请求生命周期内不会变。
+        cloud_url = _resolve_director_cloud_url(path)
 
         async def _one_chunk(off: int, lim: int):
+            if cloud_url:
+                try:
+                    return await _fetch_cloud_chunk(cloud_url, path, off, lim)
+                except Exception as exc:  # noqa: BLE001
+                    # 云端代理失败（网络问题、ACL 修复前上传的私有对象……）一律
+                    # 退回本地文件，素材绝不能因为云端这一跳的问题变得不可用。
+                    logger.warning(
+                        "[file-api/raw-file] cloud proxy failed for %s, falling back to local: %s",
+                        path, exc,
+                    )
             return await client.download_container_file(
                 user_id=uid,
                 path=path,

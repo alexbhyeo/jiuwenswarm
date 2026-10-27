@@ -180,6 +180,83 @@ function resolveProjectRootDir(): string {
   return repoRoot
 }
 
+const DIRECTOR_ASSETS_PATH_HINT = `${path.sep}director${path.sep}projects${path.sep}`
+
+/**
+ * 若这个本地绝对路径是某个已镜像到云存储的 Director 素材（见后端
+ * director_manager.mirror_asset_to_cloud_storage），返回其云端直链。
+ *
+ * 只在路径看起来像 Director 素材时才去扫 director_state.json——这个
+ * middleware 同时服务 ArtifactsPanel/SkillPanel/ChatPanel 等跟 Director
+ * 毫无关系的本地文件，它们的路径永远不会命中 DIRECTOR_ASSETS_PATH_HINT，
+ * 直接跳过。与 app_web.py / container_file_http.py 里同名逻辑重复——三套
+ * /file-api/raw-file 实现（Vite dev middleware、生产静态服务器、AgentOS
+ * 路由模式）各自独立维护本地文件读取的那一份代码，不值得为这一个小函数
+ * 引入跨语言/跨进程依赖。
+ */
+function resolveDirectorCloudUrl(fullPath: string): string | null {
+  if (!fullPath.includes(DIRECTOR_ASSETS_PATH_HINT)) {
+    return null
+  }
+  try {
+    const stateFile = path.join(projectRootDir, 'agent', 'director', 'director_state.json')
+    if (!fs.existsSync(stateFile)) {
+      return null
+    }
+    const state = JSON.parse(fs.readFileSync(stateFile, 'utf-8')) as {
+      projects?: { assets?: { file_path?: string; cloud_url?: string | null }[] }[]
+    }
+    for (const project of state.projects || []) {
+      for (const asset of project.assets || []) {
+        if (asset.file_path === fullPath && asset.cloud_url) {
+          return asset.cloud_url
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('[file-api/raw-file] director cloud_url lookup failed:', (error as Error).message)
+  }
+  return null
+}
+
+/**
+ * 把 /file-api/raw-file 的响应代理到云存储直链，成功返回 true。请求自带的
+ * Range 头原样转发（COS 支持 Range），响应状态码/Content-Type/
+ * Content-Range 原样转发给浏览器。任何失败（网络问题、ACL 修复前上传的
+ * 私有对象返回 403……）都返回 false，调用方据此退回本地文件读取——云端
+ * 代理只应该是"有更快/更新鲜的路就走，没有就还是原来那条路"。
+ */
+async function serveRawFileFromCloud(
+  cloudUrl: string,
+  req: Pick<import('http').IncomingMessage, 'headers'>,
+  res: import('http').ServerResponse
+): Promise<boolean> {
+  try {
+    const rangeHeader = req.headers.range
+    const resp = await fetch(cloudUrl, {
+      headers: typeof rangeHeader === 'string' ? { Range: rangeHeader } : undefined,
+    })
+    if (!resp.ok && resp.status !== 206) {
+      return false
+    }
+    res.statusCode = resp.status
+    res.setHeader('content-type', resp.headers.get('content-type') || 'application/octet-stream')
+    res.setHeader('cache-control', 'no-store')
+    res.setHeader('accept-ranges', 'bytes')
+    const contentRange = resp.headers.get('content-range')
+    if (contentRange) {
+      res.setHeader('content-range', contentRange)
+    }
+    const body = Buffer.from(await resp.arrayBuffer())
+    res.setHeader('content-length', String(body.length))
+    res.end(body)
+    return true
+  } catch (error) {
+    console.warn('[file-api/raw-file] cloud proxy failed, falling back to local:', (error as Error).message)
+    return false
+  }
+}
+
 const FILE_CONTENT_ENCODING_ALIASES: Record<string, string> = {
   utf8: 'utf-8',
   'utf_8': 'utf-8',
@@ -1165,6 +1242,7 @@ function devFileContentApi(): Plugin {
           return
         }
 
+        void (async () => {
         try {
           const fullPath = path.resolve(projectRootDir, filePath)
           if (!isPathUnderAllowedRoot(fullPath)) {
@@ -1173,6 +1251,12 @@ function devFileContentApi(): Plugin {
             res.end(JSON.stringify({ error: 'forbidden_path' }))
             return
           }
+
+          const cloudUrl = resolveDirectorCloudUrl(fullPath)
+          if (cloudUrl && (await serveRawFileFromCloud(cloudUrl, req, res))) {
+            return
+          }
+
           if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
             res.statusCode = 404
             res.setHeader('content-type', 'application/json; charset=utf-8')
@@ -1198,6 +1282,7 @@ function devFileContentApi(): Plugin {
           res.setHeader('content-type', 'application/json; charset=utf-8')
           res.end(JSON.stringify({ error: (error as Error).message }))
         }
+        })()
       })
 
       // 技能上传：接收 multipart 文件，保存到临时目录，返回文件路径

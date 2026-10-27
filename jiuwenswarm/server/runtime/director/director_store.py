@@ -253,6 +253,23 @@ class DirectorStore:
     def get_project(self, project_id: str) -> DirectorProject | None:
         return self._load().get(project_id)
 
+    def find_asset_cloud_url(self, file_path: str) -> str | None:
+        """按本地绝对路径反查这份素材是否已镜像到云存储，返回其直链。
+
+        给 /file-api/raw-file 的云端代理分支用：前端一直只知道本地路径（见
+        container_file_http.py），这里按"哪个素材的 file_path 恰好等于这个
+        路径"做一次全量扫描——数据量（几十个项目、几百条素材）下这点开销
+        可以忽略，不值得为此再维护一份反向索引。没找到匹配素材、或素材还
+        没镜像成功，都返回 None，调用方据此退回本地文件。
+        """
+        if not file_path:
+            return None
+        for project in self._load().values():
+            for asset in project.assets:
+                if asset.file_path == file_path and asset.cloud_url:
+                    return asset.cloud_url
+        return None
+
     def create_project(self, name: str) -> DirectorProject:
         projects = self._load()
         now = time.time()

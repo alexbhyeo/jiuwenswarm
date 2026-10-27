@@ -924,9 +924,11 @@ class DirectorManager:
                     )
                 source_video_path = input_video_url
             else:
-                # 连进来的本地素材目前送不出去：参考视频由服务商自己去抓，只认
-                # HTTPS 直链，本地文件（以及 data: URI）一律被拒。在能明确说明
-                # 原因的地方就明确说，好过让用户对着服务商那句
+                # 连进来的本地素材送不出去：参考视频由服务商自己去抓，只认
+                # HTTPS 直链，本地文件（以及 data: URI）一律被拒。素材如果已经
+                # 镜像到云存储（见 mirror_asset_to_cloud_storage），直接拿那条
+                # 直链顶上，用户不需要自己再去对象存储抄链接；没镜像成功时才
+                # 像过去一样明确报错，好过让用户对着服务商那句
                 # "Only HTTPS URLs are allowed" 猜是哪一步出了问题。
                 wired_asset = next(
                     (
@@ -943,14 +945,17 @@ class DirectorManager:
                     raise DirectorRpcError(
                         "INVALID_PARAMS", "视频生视频需要先连接一个已就绪的视频素材，或填写视频链接"
                     )
-                source_label = (
-                    wired_asset.name or wired_asset.prompt or Path(str(wired_asset.file_path)).name
-                )
-                raise DirectorRpcError(
-                    "INVALID_PARAMS",
-                    f"视频生视频目前只认公网 HTTPS 的视频链接，本地素材「{source_label}」无法直接送给生成接口。"
-                    "请先把这段视频放到可公网访问的地址（如对象存储），再把链接填到卡片的「视频链接」里。",
-                )
+                if wired_asset.cloud_url:
+                    source_video_path = wired_asset.cloud_url
+                else:
+                    source_label = (
+                        wired_asset.name or wired_asset.prompt or Path(str(wired_asset.file_path)).name
+                    )
+                    raise DirectorRpcError(
+                        "INVALID_PARAMS",
+                        f"视频生视频目前只认公网 HTTPS 的视频链接，本地素材「{source_label}」还没有镜像到云存储，"
+                        "无法直接送给生成接口。请先连接云存储连接器（见「连接器广场」），或直接填写视频链接。",
+                    )
             duration_seconds = int(params.get("duration_seconds") or 15)
             # 成片是否带音轨由卡片上的选项决定；没带这个字段（旧画布数据、或别的
             # 调用方）时按"有声音"处理——这张卡片的输入是一段带音轨的源片，重绘
