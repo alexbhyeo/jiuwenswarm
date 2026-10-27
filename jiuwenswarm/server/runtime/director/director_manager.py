@@ -33,6 +33,7 @@ from jiuwenswarm.agents.harness.common.tools.multimodal_config import (
 from jiuwenswarm.agents.harness.common.tools.video_tools import video_understanding
 from jiuwenswarm.common.config import get_config, get_mcp_server_config
 from jiuwenswarm.common.mcp_config import call_mcp_tool
+from jiuwenswarm.common.utils import get_local_user_id
 from jiuwenswarm.agents.harness.common.tools.video_gen_tools import (
     check_video_status,
     generate_video,
@@ -468,6 +469,90 @@ def _parse_character_prompt(prompt: str) -> tuple[str | None, str]:
     return name, description
 
 
+# 素材的云存储镜像（见下面 mirror_asset_to_cloud_storage）按这个顺序挑一个
+# 已连接的云存储连接器——先试新连的 tencent-cos，没连再退回 azure-blob-
+# storage（两者都在「我的扩展」里按同一套 stdio-mcp + upload_file 工具
+# 约定接入，见各自 mcp_builtins/<name>/server.py）。不是任意 MCP 都能当
+# "云存储"用，只认这个白名单里的连接器名字。模块级而不是类属性——
+# director_multipart_http.py 的同步上传 handler 没有 DirectorManager 实例，
+# 也要能直接调这套逻辑。
+CLOUD_STORAGE_MCP_CANDIDATES: tuple[str, ...] = ("tencent-cos", "azure-blob-storage")
+# 两个连接器的 upload_file 工具历史上各自起的目标 key 参数名不同
+# （tencent-cos 建时就叫 object_key，azure-blob-storage 更早建、叫
+# blob_name）——都保留住各自原名，不强行统一改造已发布的 server.py。
+CLOUD_TOOL_KEY_PARAM: dict[str, str] = {
+    "tencent-cos": "object_key",
+    "azure-blob-storage": "blob_name",
+}
+# asset.type -> 云端子目录，对应用户要求的 user_id/project_id/{images,videos,audios}
+# 三段式归档；character 本质是图片，归进 images。
+CLOUD_ASSET_FOLDER: dict[str, str] = {
+    "image": "images",
+    "character": "images",
+    "video": "videos",
+    "audio": "audios",
+}
+
+
+async def mirror_asset_to_cloud_storage(
+    *, file_path: str, asset_type: str, project_id: str
+) -> str | None:
+    """若有已连接的云存储连接器，把一个本地素材文件上传过去，返回公网
+    HTTPS 直链；没有连接器、文件不存在、或上传失败时一律返回 None——
+    调用方据此继续走本地路径，镜像在这里永远是"有就用，没有就按老路子
+    走"的可选动作，不是任何生成流程的硬依赖。
+
+    云端对象 key 固定为 `<user_id>/<project_id>/<images|videos|audios>/
+    <本地文件名>`——user_id 目前是 get_local_user_id() 给的单机占位 id
+    （还没有登录体系，见该函数文档），但目录结构本身已经是多用户隔离的
+    最终形态：以后换上真实登录，只需要让 get_local_user_id() 改为读已
+    认证会话的 user_id，这里和所有调用方都不用再改。
+
+    走 call_mcp_tool（优先复用 mcp.connect 时就建立好的常驻连接，连接
+    没缓存住才退回临时连接）而不是每次都另起一个临时连接，省掉一次进程
+    起停的固定开销；call_mcp_tool 自带超时兜底，上传本身卡住也不会把
+    整张卡的生成时间拖到没有上限。
+
+    模块级函数而不是 DirectorManager 的方法——不依赖任何实例状态，
+    director_multipart_http.py 的同步上传 handler（没有 DirectorManager
+    实例可用）需要直接调用它。
+    """
+    if not file_path or not os.path.isfile(file_path):
+        return None
+    mcp_name: str | None = None
+    entry: dict[str, Any] | None = None
+    for candidate in CLOUD_STORAGE_MCP_CANDIDATES:
+        entry = get_mcp_server_config(candidate)
+        if entry is not None:
+            mcp_name = candidate
+            break
+    if entry is None or mcp_name is None:
+        return None
+    folder = CLOUD_ASSET_FOLDER.get(asset_type, "images")
+    object_key = f"{get_local_user_id()}/{project_id}/{folder}/{os.path.basename(file_path)}"
+    key_param = CLOUD_TOOL_KEY_PARAM.get(mcp_name, "object_key")
+    try:
+        result = await call_mcp_tool(
+            entry,
+            "upload_file",
+            {"local_path": file_path, key_param: object_key},
+            timeout_s=20.0,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "[director] cloud storage upload via '%s' for '%s' failed: %s",
+            mcp_name, file_path, exc,
+        )
+        return None
+    if isinstance(result, str) and result.strip().lower().startswith(("http://", "https://")):
+        return result.strip()
+    logger.warning(
+        "[director] cloud storage upload via '%s' for '%s' returned an unexpected "
+        "result instead of a URL: %r", mcp_name, file_path, result,
+    )
+    return None
+
+
 class DirectorManager:
     """导演模式的项目/生成 RPC 处理器（进程内单例，见 interface.py 构造点）."""
 
@@ -611,59 +696,30 @@ class DirectorManager:
             return asset.file_path
         return None
 
-    # 图音生视频的参考音频若走云存储连接器（见下面 _upload_audio_to_cloud_storage），
-    # 用这个固定名字去查「我的扩展」里是否已连接——目前只接 Azure 存储这一种
-    # 云存储连接器，不是任意 MCP 都能当"云存储"用。
-    _CLOUD_STORAGE_MCP_NAME = "azure-blob-storage"
-    _CLOUD_STORAGE_AUDIO_PREFIX = "audio"
+    async def _schedule_cloud_mirror(
+        self, *, project_id: str, asset_id: str, file_path: str | None, asset_type: str
+    ) -> None:
+        """后台镜像一个刚变为 ready 的素材，成功就把直链记到 asset.cloud_url。
 
-    async def _upload_audio_to_cloud_storage(self, audio_asset: DirectorAsset) -> str | None:
-        """若云存储连接器（azure-blob-storage）已连接，把一个就绪音频素材上传到
-        它的 audio/ 目录，返回公网 HTTPS 直链；未连接、素材文件不存在、或
-        上传失败时一律返回 None——调用方据此回退到本地文件路径（走
-        generate_video 自己的 base64 内联编码，受 _MAX_REFERENCE_AUDIO_BYTES
-        体积上限限制）。
-
-        云存储在这里是"有就用，没有就按老路子走"的可选路径，不是图音生视频
-        的硬依赖——没连云存储、或上传这一步本身失败/超时，都不应该让生成
-        直接报错，只是拿不到体积豁免/直链而已。
-
-        走 call_mcp_tool（优先复用 mcp.connect 时就建立好的常驻连接，连接
-        没缓存住才退回临时连接）而不是每次都另起一个临时连接——图音生视频
-        每次生成都要调这一下，常驻连接能省掉一次进程起停的固定开销；
-        call_mcp_tool 自带超时兜底，上传本身卡住也不会把整张卡的生成时间
-        拖到没有上限。
+        调用方总是用 asyncio.create_task(...) 发起这个协程、不 await 它
+        （fire-and-forget）——镜像是锦上添花的附加动作，绝不能拖慢或搞砸
+        一次生成/上传本身的响应。file_path 为空（素材还没真正落盘，比如
+        _execute_* 系列工具里 parsed['status'] 还是 pending 的中间态）时
+        直接跳过，等真正 ready 的那一刻（check_status 轮询到底，或同步生成
+        一次就成）由那次调用自己再触发一次。
         """
-        entry = get_mcp_server_config(self._CLOUD_STORAGE_MCP_NAME)
-        if entry is None:
-            return None
-        if not audio_asset.file_path or not os.path.isfile(audio_asset.file_path):
-            return None
-        # 素材在本地磁盘上的文件名本身就是全局唯一的（TTS 产物是
-        # audio_<timestamp>_<8位hex>.ext，上传素材是 upload_<16位hex>.ext，
-        # 见 audio_gen_tools.generate_audio / director_multipart_http），
-        # 不需要再拿 asset_id 加前缀防重名——直接存成 audio/<原文件名>。
-        blob_name = f"{self._CLOUD_STORAGE_AUDIO_PREFIX}/{os.path.basename(audio_asset.file_path)}"
-        try:
-            result = await call_mcp_tool(
-                entry,
-                "upload_file",
-                {"local_path": audio_asset.file_path, "blob_name": blob_name},
-                timeout_s=20.0,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "[director] cloud storage upload for audio asset '%s' failed: %s",
-                audio_asset.asset_id, exc,
-            )
-            return None
-        if isinstance(result, str) and result.strip().lower().startswith(("http://", "https://")):
-            return result.strip()
-        logger.warning(
-            "[director] cloud storage upload for audio asset '%s' returned an unexpected "
-            "result instead of a URL: %r", audio_asset.asset_id, result,
+        if not file_path:
+            return
+        url = await mirror_asset_to_cloud_storage(
+            file_path=file_path, asset_type=asset_type, project_id=project_id
         )
-        return None
+        if url is None:
+            return
+        try:
+            self._store.update_asset(project_id, asset_id, cloud_url=url)
+        except KeyError:
+            # 项目在镜像跑完之前被删除了——没有素材可更新，忽略。
+            pass
 
     async def _run_video_bridge_flf2v(
         self,
@@ -1004,10 +1060,19 @@ class DirectorManager:
                 # 传上去换一条公网直链：既绕开 generate_video 内联 base64 的
                 # 体积上限，也省得用户自己再去抄链接。没连云存储/上传失败就
                 # 原样走本地文件路径，不影响生成——见
-                # _upload_audio_to_cloud_storage 的取舍说明。
-                cloud_audio_url = await self._upload_audio_to_cloud_storage(audio_asset)
+                # mirror_asset_to_cloud_storage 的取舍说明。这里需要直链
+                # 立刻参与下面的 generate_video 调用，所以直接 await，不走
+                # fire-and-forget 的 _schedule_cloud_mirror。
+                cloud_audio_url = await mirror_asset_to_cloud_storage(
+                    file_path=str(audio_asset.file_path),
+                    asset_type="audio",
+                    project_id=project.project_id,
+                )
                 if cloud_audio_url:
                     reference_audio_path = cloud_audio_url
+                    self._store.update_asset(
+                        project.project_id, audio_asset.asset_id, cloud_url=cloud_audio_url
+                    )
             duration_seconds = int(params.get("duration_seconds") or 15)
             # 成片是否带音轨由卡片上的选项决定；没带这个字段（旧画布数据、
             # 或别的调用方）时按"有声音"处理——这张卡片的输入就是一段音频，
@@ -1189,6 +1254,11 @@ class DirectorManager:
             name=character_name,
         )
         project = self._store.append_asset(project_id, asset)
+        if asset.status == "ready":
+            asyncio.create_task(self._schedule_cloud_mirror(
+                project_id=project_id, asset_id=asset.asset_id,
+                file_path=asset.file_path, asset_type=asset.type,
+            ))
         return {
             "project": project.to_dict(),
             "asset_id": asset.asset_id,
@@ -1219,6 +1289,12 @@ class DirectorManager:
             project = self._store.update_asset(
                 project_id, asset_id, status="ready", file_path=parsed.get("file_path")
             )
+            updated_asset = next((a for a in project.assets if a.asset_id == asset_id), None)
+            if updated_asset is not None and updated_asset.file_path:
+                asyncio.create_task(self._schedule_cloud_mirror(
+                    project_id=project_id, asset_id=asset_id,
+                    file_path=updated_asset.file_path, asset_type=updated_asset.type,
+                ))
         # "pending"：任务仍在进行，asset 状态保持不变，仅原样返回给前端继续轮询。
 
         return {
@@ -1357,6 +1433,11 @@ class DirectorManager:
             name=design_name,
         )
         self._store.append_asset(project.project_id, asset)
+        if asset.status == "ready":
+            asyncio.create_task(self._schedule_cloud_mirror(
+                project_id=project.project_id, asset_id=asset.asset_id,
+                file_path=asset.file_path, asset_type=asset.type,
+            ))
 
         kind_label = "角色/道具" if kind == "character" else "场景"
         return f"已生成并保存「{design_name}」（{kind_label}设计图）。后续可以用 @{design_name} 引用这张图。", asset.asset_id
@@ -1476,6 +1557,11 @@ class DirectorManager:
             name=video_name,
         )
         self._store.append_asset(project.project_id, asset)
+        if asset.status == "ready":
+            asyncio.create_task(self._schedule_cloud_mirror(
+                project_id=project.project_id, asset_id=asset.asset_id,
+                file_path=asset.file_path, asset_type=asset.type,
+            ))
         return f"已生成视频「{video_name}」。后续可以用 @{video_name} 引用这段视频。", asset.asset_id
 
     async def _execute_generate_video_bridge(
@@ -1592,6 +1678,11 @@ class DirectorManager:
             name=bridge_name,
         )
         self._store.append_asset(project.project_id, asset)
+        if asset.status == "ready":
+            asyncio.create_task(self._schedule_cloud_mirror(
+                project_id=project.project_id, asset_id=asset.asset_id,
+                file_path=asset.file_path, asset_type=asset.type,
+            ))
         return (
             f"已生成过渡视频「{bridge_name}」，衔接「{clip1_name}」与「{clip2_name}」。"
             f"后续可以用 @{bridge_name} 引用这段视频。",
@@ -1879,6 +1970,10 @@ class DirectorManager:
             name=str(params.get("name") or "").strip() or "剪辑成片",
         )
         project = self._store.append_asset(project_id, asset)
+        asyncio.create_task(self._schedule_cloud_mirror(
+            project_id=project_id, asset_id=asset.asset_id,
+            file_path=asset.file_path, asset_type=asset.type,
+        ))
         return {"project": project.to_dict(), "asset_id": asset.asset_id}
 
     async def handle_director_edit_chat_skill_get(self, params: dict) -> dict:

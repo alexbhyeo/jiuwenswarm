@@ -32,6 +32,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sys
 import datetime
 import shutil
@@ -433,6 +434,40 @@ def get_user_workspace_dir() -> Path:
     return _workspace_base_dir
 
 
+_local_user_id: str | None = None
+
+
+def get_local_user_id() -> str:
+    """当前"用户"的稳定标识——目前还没有登录体系，先用这个占位实现。
+
+    首次调用时在 workspace 根目录下生成并落盘一个随机 id（`user_id.txt`），
+    之后每次都读回同一个值，天然做到"同一台机器/同一份数据目录 = 同一个
+    user_id"，不需要任何配置。这是云存储对象 key（见 director_manager 的
+    cloud-mirror helper）里 `user_id/project_id/...` 前缀的来源，也是未来
+    换成真实登录体系时唯一需要改的地方——到时候把函数体换成"从已认证的
+    会话里读 user_id"，调用方（cloud-mirror 相关代码）不用动一行。
+    """
+    global _local_user_id
+    if _local_user_id is not None:
+        return _local_user_id
+    id_file = get_user_workspace_dir() / "user_id.txt"
+    try:
+        existing = id_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        existing = ""
+    if existing:
+        _local_user_id = existing
+        return _local_user_id
+    new_id = secrets.token_hex(8)
+    try:
+        id_file.parent.mkdir(parents=True, exist_ok=True)
+        id_file.write_text(new_id, encoding="utf-8")
+    except OSError:
+        logging.getLogger(__name__).warning(
+            "[get_local_user_id] 无法写入 %s，本次进程内仍使用生成的 id，但不会持久化", id_file
+        )
+    _local_user_id = new_id
+    return _local_user_id
 
 
 # Cache for resolved paths

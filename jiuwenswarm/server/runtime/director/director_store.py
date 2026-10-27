@@ -50,6 +50,11 @@ class DirectorAsset:
     # 项目内通过composer 提示词里的 "@名称" 引用，作为 generate_visual 的
     # reference_image_paths 之一（见 director_manager._resolve_at_references）。
     name: str | None = None
+    # 这份素材若已镜像到已连接的云存储连接器（tencent-cos / azure-blob-storage，
+    # 见 director_manager._mirror_asset_to_cloud_storage），这里是它的公网直链；
+    # 镜像是 best-effort 的后台动作，未连接云存储、或镜像还没跑完/失败时都是
+    # None——本地 file_path 始终是前端展示用的事实源，这个字段纯粹是附加信息。
+    cloud_url: str | None = None
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -68,6 +73,7 @@ class DirectorAsset:
             job_id=data.get("job_id"),
             error=data.get("error"),
             name=data.get("name"),
+            cloud_url=data.get("cloud_url"),
             created_at=float(data.get("created_at") or time.time()),
             updated_at=float(data.get("updated_at") or time.time()),
         )

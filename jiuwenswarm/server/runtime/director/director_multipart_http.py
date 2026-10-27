@@ -10,12 +10,14 @@ server/runtime/skill/skills_multipart_http.py），复用其 multipart 解析，
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 import threading
 from pathlib import Path
 from typing import Any
 
+from jiuwenswarm.server.runtime.director.director_manager import mirror_asset_to_cloud_storage
 from jiuwenswarm.server.runtime.director.director_store import (
     DirectorAsset,
     DirectorStore,
@@ -133,8 +135,44 @@ def handle_director_asset_upload_http(*, content_type: str, body: bytes) -> tupl
             name=display_name,
         )
         project = store.append_asset(project_id, asset)
+        _spawn_cloud_mirror_thread(
+            project_id=project_id, asset_id=asset.asset_id,
+            file_path=asset.file_path, asset_type=asset.type,
+        )
         return 200, {
             "project": project.to_dict(),
             "asset_id": asset.asset_id,
             "asset_counts": store.asset_counts(),
         }
+
+
+def _spawn_cloud_mirror_thread(*, project_id: str, asset_id: str, file_path: str | None, asset_type: str) -> None:
+    """后台线程里跑一次云存储镜像，成功就把直链记到 asset.cloud_url。
+
+    这个 handler 是同步/线程化的（见模块 docstring），没有运行中的事件
+    循环可以 asyncio.create_task——另起一个 daemon 线程、在线程里
+    asyncio.run 整个异步镜像调用，与 DirectorManager._schedule_cloud_mirror
+    同样的 fire-and-forget 语义：不阻塞这次上传的 HTTP 响应，镜像失败/
+    连接器未连接都只是静默跳过。
+    """
+    if not file_path:
+        return
+
+    def _run() -> None:
+        try:
+            url = asyncio.run(mirror_asset_to_cloud_storage(
+                file_path=file_path, asset_type=asset_type, project_id=project_id
+            ))
+        except Exception:  # noqa: BLE001
+            logger.exception("[director_multipart_http] 云存储镜像失败: %s", file_path)
+            return
+        if not url:
+            return
+        with _UPLOAD_LOCK:
+            try:
+                DirectorStore().update_asset(project_id, asset_id, cloud_url=url)
+            except KeyError:
+                # 素材/项目在镜像跑完之前被删除了，忽略。
+                pass
+
+    threading.Thread(target=_run, daemon=True, name="director-cloud-mirror").start()
