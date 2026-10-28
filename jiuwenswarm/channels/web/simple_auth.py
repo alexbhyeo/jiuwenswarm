@@ -61,7 +61,7 @@ def _get_connection():
 
 
 def init_auth_db() -> None:
-    """Create the credentials table and seed the admin user if empty.
+    """Create the credentials table (+ migrate it) and seed the admin user if empty.
 
     No-op when the gate is disabled. Raises on failure so a misconfigured
     deployment (e.g. unreachable Postgres) fails fast at startup instead of
@@ -82,6 +82,13 @@ def init_auth_db() -> None:
                 )
                 """
             )
+            # Idempotent migration: lets an already-deployed table (created before
+            # this column existed) pick it up on next restart, no manual ALTER
+            # TABLE over SSH needed. NULL = "no override, this is the
+            # default/local instance" (today's only behavior, e.g. admin-bee).
+            cur.execute(
+                "ALTER TABLE app_users ADD COLUMN IF NOT EXISTS backend_base_url TEXT"
+            )
             cur.execute("SELECT COUNT(*) FROM app_users")
             (count,) = cur.fetchone()
             if count == 0:
@@ -93,44 +100,83 @@ def init_auth_db() -> None:
                         "nobody will be able to log in until a row is added."
                     )
                 else:
-                    password_hash = bcrypt.hashpw(
-                        admin_password.encode("utf-8"), bcrypt.gensalt()
-                    ).decode("ascii")
-                    cur.execute(
-                        "INSERT INTO app_users (username, password_hash) VALUES (%s, %s)",
-                        (admin_username, password_hash),
-                    )
+                    _create_user(cur, admin_username, admin_password, backend_base_url=None)
                     logger.info("[simple_auth] seeded initial admin user %r", admin_username)
     finally:
         conn.close()
 
 
-def verify_login(username: str, password: str) -> bool:
-    """Check a username/password pair against ``app_users``."""
+def _create_user(cur, username: str, password: str, *, backend_base_url: str | None) -> None:
+    """Insert one row. Shared by the first-boot admin seed and ``create_user()``."""
+    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")
+    cur.execute(
+        "INSERT INTO app_users (username, password_hash, backend_base_url) VALUES (%s, %s, %s)",
+        (username, password_hash, backend_base_url),
+    )
+
+
+def create_user(username: str, password: str, backend_base_url: str | None = None) -> None:
+    """Create (or overwrite) one login row.
+
+    ``backend_base_url`` is the one piece of per-user environment isolation
+    this module is responsible for: ``None`` means "this user is served
+    locally" (today's only behavior); a URL (e.g.
+    ``http://jiuwenswarm-user-test-bee:5173``) means every request from this
+    user's session gets reverse-proxied there instead — see
+    ``app_web.py``'s ``_maybe_proxy_to_user_instance``. The provisioning
+    script (``deploy/provision_user.sh``) is the intended caller for new
+    isolated users; this is the one place that knows how to correctly create
+    a login row, so it isn't duplicated between that script and the
+    first-boot admin seed above.
+    """
     if not username or not password:
-        return False
+        raise ValueError("username and password are required")
+    conn = _get_connection()
+    try:
+        with conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM app_users WHERE username = %s", (username,))
+            _create_user(cur, username, password, backend_base_url=backend_base_url)
+    finally:
+        conn.close()
+
+
+def verify_login(username: str, password: str) -> dict[str, str | None] | None:
+    """Check a username/password pair against ``app_users``.
+
+    Returns ``{"username": ..., "backend_base_url": ...}`` on success (the
+    latter may be ``None``), or ``None`` on failure.
+    """
+    if not username or not password:
+        return None
     conn = _get_connection()
     try:
         with conn, conn.cursor() as cur:
             cur.execute(
-                "SELECT password_hash FROM app_users WHERE username = %s", (username,)
+                "SELECT password_hash, backend_base_url FROM app_users WHERE username = %s",
+                (username,),
             )
             row = cur.fetchone()
     finally:
         conn.close()
     if row is None:
-        return False
-    (password_hash,) = row
+        return None
+    password_hash, backend_base_url = row
     try:
-        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+        if not bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8")):
+            return None
     except ValueError:
-        return False
+        return None
+    return {"username": username, "backend_base_url": backend_base_url}
 
 
-def create_session(username: str) -> str:
+def create_session(username: str, backend_base_url: str | None = None) -> str:
     token = secrets.token_urlsafe(32)
     with _sessions_lock:
-        _sessions[token] = {"username": username, "expires": time.time() + SESSION_TTL_SECONDS}
+        _sessions[token] = {
+            "username": username,
+            "backend_base_url": backend_base_url,
+            "expires": time.time() + SESSION_TTL_SECONDS,
+        }
     return token
 
 
@@ -142,16 +188,27 @@ def destroy_session(token: str) -> None:
 
 
 def is_authenticated(token: str) -> bool:
+    return get_session(token) is not None
+
+
+def get_session(token: str) -> dict[str, float | str | None] | None:
+    """Return the session dict (``username``, ``backend_base_url``, ``expires``) or ``None``.
+
+    Resolved once at login and cached in-process for the life of the
+    session — callers (e.g. the per-request backend-routing lookup in
+    ``app_web.py``) never need a Postgres round-trip to find out which
+    backend a session belongs to.
+    """
     if not token:
-        return False
+        return None
     with _sessions_lock:
         entry = _sessions.get(token)
         if entry is None:
-            return False
+            return None
         if float(entry["expires"]) < time.time():
             _sessions.pop(token, None)
-            return False
-        return True
+            return None
+        return entry
 
 
 def parse_cookie_header(cookie_header: str, name: str) -> str:

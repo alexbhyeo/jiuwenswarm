@@ -1024,6 +1024,13 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
     # 最前面，覆盖静态资源 / file-api / ws 代理 / 任意 API 转发——未设置
     # PGHOST 时完全不生效，行为和之前一样。
     _LOGIN_GATE_OPEN_PATHS = {"/login", "/auth/login"}
+    # Superset of the above: session management only exists on this (the
+    # primary/default) instance, so these must always be handled locally even
+    # for an already-authenticated session that would otherwise get proxied
+    # to its own per-user backend below - otherwise a logged-in secondary
+    # user's logout request would get forwarded to their own backend (which
+    # has no session store at all) instead of actually logging out.
+    _LOCAL_ONLY_AUTH_PATHS = _LOGIN_GATE_OPEN_PATHS | {"/auth/logout"}
 
     def _enforce_login_gate(self) -> bool:
         """Returns True if the request may proceed; False if a response (302/401) was already sent."""
@@ -1050,6 +1057,51 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
             self._write_json(401, {"error": "login_required"})
         return False
 
+    def _maybe_proxy_to_user_instance(self) -> bool:
+        """Per-user environment isolation: reverse-proxy this whole request to
+        another user's own dedicated backend+web instance, if their session
+        says to.
+
+        Called right after ``_enforce_login_gate()`` succeeds, in every
+        ``do_*`` method. Admin-bee (and anyone with no ``backend_base_url``
+        on their session) is unaffected - this is a no-op for them, byte-for-
+        byte the same code path as before this existed. For a user whose
+        session does carry a ``backend_base_url`` (set at login from
+        ``app_users.backend_base_url``, see ``simple_auth.create_user``),
+        every request - static assets, ``/file-api/*``, ``/ws``, ``/api/*``,
+        anything - gets forwarded to that user's own container instead of
+        being served from this process's local disk / local gateway. That
+        container has its own completely separate ``/home/app/.jiuwenswarm``
+        (Director assets, chat history, config.yaml/.env, MCP credentials)
+        and is never reachable from the host or the internet directly - only
+        through this already-authenticated hop.
+
+        Reuses ``_proxy_http``/``_proxy_websocket_tunnel`` as-is (confirmed
+        they forward ``self.path`` verbatim, no prefix-stripping) by just
+        pointing ``self.api_target``/``self.ws_target`` (instance attributes,
+        shadowing the class defaults - safe across threads since each request
+        gets its own handler instance) at the resolved backend for the
+        duration of this one request.
+        """
+        if not simple_auth.is_enabled():
+            return False
+        if urlparse(self.path).path in self._LOCAL_ONLY_AUTH_PATHS:
+            return False
+        token = self._get_auth_cookie(simple_auth.SESSION_COOKIE_NAME)
+        session = simple_auth.get_session(token)
+        if session is None:
+            return False
+        backend_base_url = session.get("backend_base_url")
+        if not backend_base_url:
+            return False
+        self.api_target = str(backend_base_url)
+        self.ws_target = _normalize_ws_target(str(backend_base_url))
+        if self._is_websocket_upgrade():
+            self._proxy_websocket_tunnel()
+        else:
+            self._proxy_http()
+        return True
+
     def _serve_login_page(self) -> None:
         body = simple_auth.login_page_html()
         self.send_response(200)
@@ -1071,10 +1123,11 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
         except (ValueError, json.JSONDecodeError, TypeError):
             self._write_json(400, {"error": "invalid_request"})
             return
-        if not simple_auth.verify_login(username, password):
+        auth_result = simple_auth.verify_login(username, password)
+        if auth_result is None:
             self._write_json(401, {"ok": False, "error": "invalid_credentials"})
             return
-        token = simple_auth.create_session(username)
+        token = simple_auth.create_session(username, auth_result.get("backend_base_url"))
         data = json.dumps({"ok": True}, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -2160,6 +2213,8 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if not self._enforce_login_gate():
             return
+        if self._maybe_proxy_to_user_instance():
+            return
         parsed = urlparse(self.path)
         if parsed.path == "/login":
             self._serve_login_page()
@@ -2206,6 +2261,8 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         if not self._enforce_login_gate():
+            return
+        if self._maybe_proxy_to_user_instance():
             return
         parsed = urlparse(self.path)
         if parsed.path == "/auth/login":
@@ -2255,12 +2312,16 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
     def do_PUT(self) -> None:  # noqa: N802
         if not self._enforce_login_gate():
             return
+        if self._maybe_proxy_to_user_instance():
+            return
         if self._dispatch_proxy():
             return
         self.send_error(405, "method not allowed")
 
     def do_PATCH(self) -> None:  # noqa: N802
         if not self._enforce_login_gate():
+            return
+        if self._maybe_proxy_to_user_instance():
             return
         if self._dispatch_proxy():
             return
@@ -2269,6 +2330,8 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
     def do_DELETE(self) -> None:  # noqa: N802
         if not self._enforce_login_gate():
             return
+        if self._maybe_proxy_to_user_instance():
+            return
         if self._dispatch_proxy():
             return
         self.send_error(405, "method not allowed")
@@ -2276,12 +2339,16 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
     def do_OPTIONS(self) -> None:  # noqa: N802
         if not self._enforce_login_gate():
             return
+        if self._maybe_proxy_to_user_instance():
+            return
         if self._dispatch_proxy():
             return
         self.send_error(405, "method not allowed")
 
     def do_HEAD(self) -> None:  # noqa: N802
         if not self._enforce_login_gate():
+            return
+        if self._maybe_proxy_to_user_instance():
             return
         parsed = urlparse(self.path)
         if self._is_share_api_route():
