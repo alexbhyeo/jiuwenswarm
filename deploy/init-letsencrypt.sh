@@ -38,7 +38,10 @@ for _ in $(seq 1 30); do
 done
 
 echo "==> Requesting a certificate for ${DOMAIN} ..."
-docker compose run --rm certbot certonly \
+# --entrypoint override is required: the certbot service's default entrypoint
+# (see docker-compose.yml) is the renewal-loop shell script, which ignores
+# whatever command `docker compose run` tries to pass after the service name.
+docker compose run --rm --entrypoint certbot certbot certonly \
   --webroot -w /var/www/certbot \
   -d "${DOMAIN}" \
   --email "${EMAIL}" --agree-tos --non-interactive
