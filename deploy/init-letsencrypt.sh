@@ -13,13 +13,16 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
-set -a
-# shellcheck disable=SC1091
-source .env
-set +a
-
+# Pull just the two values this script needs directly out of .env, without
+# sourcing it as shell: docker-compose's own env vars (e.g. POSTGRES_PASSWORD)
+# may contain characters (&, *, ...) that bash would misinterpret on `source`.
+DOMAIN="$(grep -E '^DOMAIN=' .env | tail -1 | cut -d= -f2-)"
+EMAIL="$(grep -E '^LETSENCRYPT_EMAIL=' .env | tail -1 | cut -d= -f2-)"
 DOMAIN="${DOMAIN:-happypeaceland.net}"
-EMAIL="${LETSENCRYPT_EMAIL:?Set LETSENCRYPT_EMAIL in .env}"
+if [ -z "$EMAIL" ]; then
+  echo "error: LETSENCRYPT_EMAIL not set in .env" >&2
+  exit 1
+fi
 
 mkdir -p deploy/nginx/certbot-www deploy/nginx/letsencrypt
 
