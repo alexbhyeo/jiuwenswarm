@@ -6,6 +6,7 @@
 
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { LogOut } from 'lucide-react';
 import './SessionSidebar.css';
 import PlusIcon from '../../assets/sidebar/plus.svg?react';
 import logoIcon from '/logo.svg';
@@ -15,6 +16,7 @@ import WorkIcon from '../../assets/工作.svg?react';
 import SkillDesignIcon from '../../assets/agent-management/agent-skill.svg?react';
 import AgentDesignIcon from '../../assets/智能体.svg?react';
 import PluginIcon from '../../assets/agent-management/extension.svg?react';
+import { logout as logoutFromLoginGate } from '../../services/simpleAuthClient';
 import type { SidebarNavKey } from '../../utils/frontendPlatform';
 import type {
   ApplicationPluginContribution,
@@ -120,6 +122,10 @@ export function SessionSidebar({
     onNavigate(nav);
   };
 
+  const handleLogout = useCallback(() => {
+    void logoutFromLoginGate();
+  }, []);
+
   const getNavItemLabel = (item: NavItem) => (
     item.labelKey ? t(item.labelKey) : item.label || item.key
   );
@@ -174,6 +180,17 @@ export function SessionSidebar({
       ))}
 
       <div className="icon-rail-spacer" />
+
+      <button
+        className="icon-rail-nav-item"
+        onClick={handleLogout}
+        data-testid="session-sidebar-logout-button"
+      >
+        <span className="icon-rail-nav-item__icon">
+          <LogOut aria-hidden size={16} />
+        </span>
+        <span className="icon-rail-nav-item__label">{t('nav.logout')}</span>
+      </button>
     </aside>
   );
 }

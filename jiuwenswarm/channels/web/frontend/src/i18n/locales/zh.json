@@ -52,7 +52,8 @@
     "settings": "设置",
     "logs": "日志",
     "update": "更新",
-    "personalContext": "知识"
+    "personalContext": "知识",
+    "logout": "退出"
   },
   "director": {
     "title": "导演模式",

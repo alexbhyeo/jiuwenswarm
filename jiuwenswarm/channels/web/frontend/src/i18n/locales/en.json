@@ -52,7 +52,8 @@
     "settings": "Settings",
     "logs": "Logs",
     "update": "Updates",
-    "personalContext": "Knowledge"
+    "personalContext": "Knowledge",
+    "logout": "Log out"
   },
   "director": {
     "title": "Director Mode",
