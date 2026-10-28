@@ -809,8 +809,32 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
             sockets = [self.connection, upstream]
             client_parser = self._WsTextFrameParser()
             server_parser = self._WsTextFrameParser()
+            # 登录闸门开启时记下这条隧道所属的会话 token：每轮 select 唤醒
+            # （至少每 _WS_SELECT_TIMEOUT 一次，不靠对端流量触发）都复查一次
+            # 会话是否还活着——用户点"退出"后，这条早已建立的隧道不会继续
+            # 裸奔到浏览器自己重连才断。不去跨线程直接 close 对端 socket：
+            # select() 阻塞时从另一线程关闭同一个 fd 存在 fd 复用的竞态风险，
+            # 轮询复查没有这个问题，换来的只是最多一个 _WS_SELECT_TIMEOUT
+            # 周期的延迟，这个代价对于"已登录过的会话别再裸奔"这个目标足够。
+            session_token = (
+                self._get_auth_cookie(simple_auth.SESSION_COOKIE_NAME)
+                if simple_auth.is_enabled()
+                else ""
+            )
             while True:
                 readable, _, errored = select.select(sockets, [], sockets, self._WS_SELECT_TIMEOUT)
+                if session_token and not simple_auth.is_authenticated(session_token):
+                    self.logger.info(
+                        "[ws][tunnel] session revoked, closing tunnel: %s",
+                        _format_ws_diagnostics(
+                            {
+                                "client": self.client_address,
+                                "upstream_host": upstream_host,
+                                "upstream_port": upstream_port,
+                            }
+                        ),
+                    )
+                    return
                 if errored:
                     self.log_error(
                         "proxy ws socket error, closing tunnel: %s",
