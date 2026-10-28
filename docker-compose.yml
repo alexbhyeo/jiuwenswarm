@@ -55,6 +55,11 @@ services:
       VISUAL_GEN_API_BASE: ${VISUAL_GEN_API_BASE:-}
       VISUAL_GEN_API_KEY: ${VISUAL_GEN_API_KEY:-}
       VISUAL_GEN_MODEL_NAME: ${VISUAL_GEN_MODEL_NAME:-}
+      # Director Mode audio generation / TTS model (jiuwenswarm/agents/harness/common/tools/audio_gen_tools.py).
+      AUDIO_GEN_ENABLED: ${AUDIO_GEN_ENABLED:-false}
+      AUDIO_GEN_API_BASE: ${AUDIO_GEN_API_BASE:-}
+      AUDIO_GEN_API_KEY: ${AUDIO_GEN_API_KEY:-}
+      AUDIO_GEN_MODEL_NAME: ${AUDIO_GEN_MODEL_NAME:-}
     volumes:
       - app_workspace:/home/app/.jiuwenswarm
     expose:
