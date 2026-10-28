@@ -1,0 +1,69 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: jiuwenswarm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.claw
+    container_name: jiuwenswarm-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Read directly by psycopg2 (libpq env vars) - no URL assembly/parsing,
+      # so passwords with URL-unsafe characters (%, &, ...) just work.
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB}
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      ADMIN_USERNAME: ${ADMIN_USERNAME}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      FRONTEND_HOST: 0.0.0.0
+    volumes:
+      - app_workspace:/home/app/.jiuwenswarm
+    expose:
+      - "5173"
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: jiuwenswarm-nginx
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./deploy/nginx/certbot-www:/var/www/certbot:ro
+      - ./deploy/nginx/letsencrypt:/etc/letsencrypt:ro
+
+  certbot:
+    image: certbot/certbot
+    container_name: jiuwenswarm-certbot
+    restart: unless-stopped
+    volumes:
+      - ./deploy/nginx/certbot-www:/var/www/certbot
+      - ./deploy/nginx/letsencrypt:/etc/letsencrypt
+    entrypoint: >
+      sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot; sleep 12h & wait $${!}; done'
+
+volumes:
+  pg_data:
+  app_workspace:

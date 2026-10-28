@@ -43,6 +43,10 @@ pnpm-debug.log*
 .env.*.local
 !.env.example
 
+# docker-compose: certbot runtime state (issued certs, ACME webroot) — never commit
+deploy/nginx/certbot-www/
+deploy/nginx/letsencrypt/
+
 # Apple code signing & notarization secrets — NEVER commit (contains private keys!)
 *.p12
 *.cer

@@ -19,6 +19,7 @@ dependencies = [
     "loguru>=0.7.3,<0.8",
     "openjiuwen @ git+https://gitcode.com/openJiuwen/agent-core.git@9e3390195a9ea15235b2b5f7412cb2aa440622cc",
     "pgvector>=0.4.2,<0.5",
+    "psycopg2-binary>=2.9.10,<3",
     "portalocker>=3.2.0,<4",
     "prompt-toolkit>=3.0,<4.0",
     "websockets>=12.0,<16",
@@ -166,6 +167,7 @@ namespaces = false
 jiuwenswarm = [
     "channels/web/frontend/dist/**/*",
     "channels/web/frontend/dist/*",
+    "channels/web/simple_auth_login.html",
     "agents/harness/common/rsi/harness_config.yaml",
     # config / env 模板放在 resources 目录
     "resources/**/*",

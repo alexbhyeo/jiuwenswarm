@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sign in · JiuwenSwarm</title>
+<style>
+  :root {
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: radial-gradient(circle at 20% 20%, #1e2a4a 0%, #0b0f1a 55%, #05070d 100%);
+    color: #e6e9f0;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    width: 100%;
+    max-width: 380px;
+    background: rgba(20, 24, 38, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 36px 32px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(8px);
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 28px;
+  }
+  .brand-mark {
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    background: linear-gradient(135deg, #6d8dff, #8b5cf6);
+    flex-shrink: 0;
+  }
+  .brand-name {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+  }
+  h1 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0 0 6px;
+  }
+  .subtitle {
+    font-size: 13px;
+    color: #9aa3b8;
+    margin: 0 0 28px;
+  }
+  label {
+    display: block;
+    font-size: 13px;
+    color: #b7bfd4;
+    margin-bottom: 6px;
+  }
+  .field {
+    margin-bottom: 18px;
+  }
+  input {
+    width: 100%;
+    padding: 11px 13px;
+    border-radius: 9px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(8, 10, 18, 0.6);
+    color: #e6e9f0;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.15s ease;
+  }
+  input:focus {
+    border-color: #6d8dff;
+  }
+  button {
+    width: 100%;
+    margin-top: 6px;
+    padding: 12px;
+    border: none;
+    border-radius: 9px;
+    background: linear-gradient(135deg, #6d8dff, #8b5cf6);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s ease, transform 0.05s ease;
+  }
+  button:hover { opacity: 0.92; }
+  button:active { transform: scale(0.99); }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .error {
+    display: none;
+    margin-top: 16px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: #fca5a5;
+    font-size: 13px;
+  }
+  .error.visible { display: block; }
+  .footnote {
+    margin-top: 24px;
+    text-align: center;
+    font-size: 12px;
+    color: #5b6478;
+  }
+</style>
+</head>
+<body>
+  <form class="card" id="login-form" autocomplete="on">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div class="brand-name">JiuwenSwarm</div>
+    </div>
+    <h1>Sign in</h1>
+    <p class="subtitle">Enter your credentials to continue.</p>
+
+    <div class="field">
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" autocomplete="username" required autofocus />
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required />
+    </div>
+
+    <button type="submit" id="submit-btn">Sign in</button>
+    <div class="error" id="error-box"></div>
+    <div class="footnote">Session stays active for 7 days on this device.</div>
+  </form>
+
+  <script>
+    const form = document.getElementById('login-form');
+    const errorBox = document.getElementById('error-box');
+    const submitBtn = document.getElementById('submit-btn');
+
+    function showError(message) {
+      errorBox.textContent = message;
+      errorBox.classList.add('visible');
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      errorBox.classList.remove('visible');
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Signing in…';
+
+      const username = document.getElementById('username').value;
+      const password = document.getElementById('password').value;
+
+      try {
+        const response = await fetch('/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        if (response.ok) {
+          const params = new URLSearchParams(window.location.search);
+          const next = params.get('next');
+          window.location.href = (next && next.startsWith('/')) ? next : '/';
+          return;
+        }
+        if (response.status === 401) {
+          showError('Incorrect username or password.');
+        } else {
+          showError('Sign-in failed. Please try again.');
+        }
+      } catch (err) {
+        showError('Could not reach the server. Please try again.');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Sign in';
+      }
+    });
+  </script>
+</body>
+</html>

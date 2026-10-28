@@ -48,6 +48,8 @@ from jiuwenswarm.common.client.agent_http_bridge import (
 _resolve_agent_http_base = resolve_agent_http_base
 _resolve_agent_upload_base = resolve_agent_upload_base
 
+from jiuwenswarm.channels.web import simple_auth
+
 if TYPE_CHECKING:
     from jiuwenswarm.channels.web.share_image_export import (
         ShareImageExportManager,
@@ -992,6 +994,91 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
 
         self._send_desktop_forbidden()
         return True
+
+    # --- Login gate: Postgres-backed access control, opt-in via PGHOST ---
+    # 与 desktop_token（仅保护 SPA 文档入口）不同，这个闸门挡在每个 do_* 方法
+    # 最前面，覆盖静态资源 / file-api / ws 代理 / 任意 API 转发——未设置
+    # PGHOST 时完全不生效，行为和之前一样。
+    _LOGIN_GATE_OPEN_PATHS = {"/login", "/auth/login"}
+
+    def _enforce_login_gate(self) -> bool:
+        """Returns True if the request may proceed; False if a response (302/401) was already sent."""
+        if not simple_auth.is_enabled():
+            return True
+        if urlparse(self.path).path in self._LOGIN_GATE_OPEN_PATHS:
+            return True
+        token = self._get_auth_cookie(simple_auth.SESSION_COOKIE_NAME)
+        if simple_auth.is_authenticated(token):
+            return True
+        is_page_navigation = (
+            self.command in ("GET", "HEAD")
+            and not self._is_websocket_upgrade()
+            and not self._is_file_api_route()
+            and not self._is_share_api_route()
+        )
+        if is_page_navigation:
+            self.send_response(302)
+            self.send_header("Location", "/login")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        else:
+            self._write_json(401, {"error": "login_required"})
+        return False
+
+    def _serve_login_page(self) -> None:
+        body = simple_auth.login_page_html()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _handle_auth_login_post(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 4096:
+                raise ValueError("invalid length")
+            payload = json.loads(self.rfile.read(length))
+            username = str(payload.get("username", ""))
+            password = str(payload.get("password", ""))
+        except (ValueError, json.JSONDecodeError, TypeError):
+            self._write_json(400, {"error": "invalid_request"})
+            return
+        if not simple_auth.verify_login(username, password):
+            self._write_json(401, {"ok": False, "error": "invalid_credentials"})
+            return
+        token = simple_auth.create_session(username)
+        data = json.dumps({"ok": True}, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header(
+            "Set-Cookie",
+            f"{simple_auth.SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; "
+            f"SameSite=Lax; Max-Age={simple_auth.SESSION_TTL_SECONDS}{simple_auth.cookie_secure_attr()}",
+        )
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _handle_auth_logout_post(self) -> None:
+        token = self._get_auth_cookie(simple_auth.SESSION_COOKIE_NAME)
+        simple_auth.destroy_session(token)
+        data = json.dumps({"ok": True}, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header(
+            "Set-Cookie",
+            f"{simple_auth.SESSION_COOKIE_NAME}=; Path=/; HttpOnly; "
+            f"SameSite=Lax; Max-Age=0{simple_auth.cookie_secure_attr()}",
+        )
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def _dispatch_proxy(self) -> bool:
         if self._is_api_route():
@@ -2047,7 +2134,12 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
         self._write_json(status, payload)
 
     def do_GET(self) -> None:  # noqa: N802
+        if not self._enforce_login_gate():
+            return
         parsed = urlparse(self.path)
+        if parsed.path == "/login":
+            self._serve_login_page()
+            return
         if parsed.path == "/oauth/hub/callback":
             from jiuwenswarm.channels.web.hub_oauth import complete
 
@@ -2089,7 +2181,15 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self) -> None:  # noqa: N802
+        if not self._enforce_login_gate():
+            return
         parsed = urlparse(self.path)
+        if parsed.path == "/auth/login":
+            self._handle_auth_login_post()
+            return
+        if parsed.path == "/auth/logout":
+            self._handle_auth_logout_post()
+            return
         if parsed.path in {"/marketplace-oauth/hub/start", "/marketplace-oauth/hub/result"}:
             from jiuwenswarm.channels.web.hub_oauth import result, start
 
@@ -2129,26 +2229,36 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
         self.send_error(405, "method not allowed")
 
     def do_PUT(self) -> None:  # noqa: N802
+        if not self._enforce_login_gate():
+            return
         if self._dispatch_proxy():
             return
         self.send_error(405, "method not allowed")
 
     def do_PATCH(self) -> None:  # noqa: N802
+        if not self._enforce_login_gate():
+            return
         if self._dispatch_proxy():
             return
         self.send_error(405, "method not allowed")
 
     def do_DELETE(self) -> None:  # noqa: N802
+        if not self._enforce_login_gate():
+            return
         if self._dispatch_proxy():
             return
         self.send_error(405, "method not allowed")
 
     def do_OPTIONS(self) -> None:  # noqa: N802
+        if not self._enforce_login_gate():
+            return
         if self._dispatch_proxy():
             return
         self.send_error(405, "method not allowed")
 
     def do_HEAD(self) -> None:  # noqa: N802
+        if not self._enforce_login_gate():
+            return
         parsed = urlparse(self.path)
         if self._is_share_api_route():
             self._handle_share_api_get(parsed)
@@ -2402,6 +2512,12 @@ def main() -> None:
     # installed in a post-listen worker below, so static HTML/CSS/JS can be
     # served without waiting for the agent-runtime logging module to import.
     logger = logging.getLogger(__name__)
+
+    try:
+        simple_auth.init_auth_db()
+    except Exception:
+        logger.exception("[simple_auth] failed to initialize the login gate (PGHOST is set but Postgres is unusable)")
+        raise SystemExit(1)
 
     class _ConfiguredHandler(_SpaStaticHandler):
         pass
