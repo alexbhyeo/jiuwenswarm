@@ -23,16 +23,23 @@ services:
       dockerfile: Dockerfile.claw
     container_name: jiuwenswarm-app
     restart: unless-stopped
-    # Only the primary app bridges all three segments: nginx's public traffic
-    # (frontend), its own login/session store (db), and per-user backend
-    # containers (users). Nothing else needs to - and nothing else should be
-    # able to - reach either postgres or a user's backend directly, so a
-    # vulnerability in nginx (or in this container, reached from nginx) can't
-    # pivot straight to another user's isolated workspace.
+    # Every isolated user gets their OWN dedicated Docker network (created by
+    # deploy/provision_user.sh, one per user - not declared here, since a
+    # static per-user network list would mean editing this file and
+    # redeploying for every new user). This service's declared networks are
+    # just its two fixed roles: nginx's public traffic (frontend) and its own
+    # login/session store (db). `app` also gets dynamically connected to each
+    # user's network at provision time via `docker network connect` - that
+    # works on an already-running container with no restart, but is NOT
+    # tracked here, so IMPORTANT: after any redeploy/recreate of this service
+    # (docker compose up -d --build app, or anything else that recreates it),
+    # you MUST run deploy/reconnect_user_networks.sh afterward, or every
+    # already-provisioned user's routing silently breaks until you do -
+    # Compose only restores the networks declared below, not the imperative
+    # per-user ones. See deploy/architecture.md.
     networks:
       - frontend
       - db
-      - users
     depends_on:
       postgres:
         condition: service_healthy
@@ -111,13 +118,12 @@ networks:
   # app <-> postgres only. Nothing else (nginx, user backends) can reach
   # the credentials/session store.
   db:
-  # app <-> every per-user backend container (jiuwenswarm-user-<username>,
-  # joined here by deploy/provision_user.sh). nginx and postgres are not on
-  # this network at all, so they cannot reach a user's backend even if
-  # compromised. User backends still share this one network with each
-  # other (not pairwise-isolated) - see deploy/architecture.md for the
-  # reasoning and the residual-risk tradeoff this accepts.
-  users:
+  # Per-user networks (jiuwenswarm_user_<username>_net, one per isolated
+  # user) are created and attached imperatively by deploy/provision_user.sh,
+  # not declared here - see the comment on the `app` service above and
+  # deploy/architecture.md. Each one has exactly two members: `app` and that
+  # one user's backend container, so user backends can never reach each
+  # other, and nothing but `app` can ever reach any of them.
 
 volumes:
   pg_data:
