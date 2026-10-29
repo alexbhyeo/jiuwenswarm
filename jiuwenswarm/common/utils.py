@@ -1486,6 +1486,14 @@ def _ensure_mcp_builtins(
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(info) as src, open(target, "wb") as dst:
                     shutil.copyfileobj(src, dst)
+                # manual zf.open()+copyfileobj (unlike extractall) never applies
+                # the zip entry's stored unix permission bits - without this, a
+                # package shipping an executable (e.g. a connector's own .venv
+                # interpreter) silently loses its +x bit on extraction.
+                if os.name != "nt":
+                    mode = (info.external_attr >> 16) & 0o777
+                    if mode:
+                        os.chmod(target, mode)
         # A zip built under a wrapper dir would leave a nested mcp_builtins/
         # subdir; flatten so tmp_dir directly holds each package dir. Flat zips
         # are unaffected. 套在 try 内，move 失败也走回滚清理。
