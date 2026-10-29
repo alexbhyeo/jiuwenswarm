@@ -438,17 +438,27 @@ _local_user_id: str | None = None
 
 
 def get_local_user_id() -> str:
-    """当前"用户"的稳定标识——目前还没有登录体系，先用这个占位实现。
+    """当前"用户"的稳定标识。
 
+    优先读 `JIUWENSWARM_USER_ID` 环境变量——每个用户独立的容器/工作区
+    在启动时都会注入自己登录用户名作为这个变量（见 docker-compose.yml 的
+    `app` 服务和 deploy/provision_user.sh），这样 user_id 直接等于登录
+    用户名，而不是一个和登录身份无关的随机值。这是云存储对象 key（见
+    director_manager 的 cloud-mirror helper，以及 tencent-cos 连接器自身
+    的 `TENCENT_COS_USER_PREFIX` 强制隔离）里 `user_id/project_id/...`
+    前缀的来源。
+
+    没有设置该环境变量时（例如本机单用户开发场景），退回旧的占位实现：
     首次调用时在 workspace 根目录下生成并落盘一个随机 id（`user_id.txt`），
     之后每次都读回同一个值，天然做到"同一台机器/同一份数据目录 = 同一个
-    user_id"，不需要任何配置。这是云存储对象 key（见 director_manager 的
-    cloud-mirror helper）里 `user_id/project_id/...` 前缀的来源，也是未来
-    换成真实登录体系时唯一需要改的地方——到时候把函数体换成"从已认证的
-    会话里读 user_id"，调用方（cloud-mirror 相关代码）不用动一行。
+    user_id"，不需要任何配置。
     """
     global _local_user_id
     if _local_user_id is not None:
+        return _local_user_id
+    env_user_id = os.getenv("JIUWENSWARM_USER_ID", "").strip()
+    if env_user_id:
+        _local_user_id = env_user_id
         return _local_user_id
     id_file = get_user_workspace_dir() / "user_id.txt"
     try:

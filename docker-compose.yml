@@ -54,6 +54,10 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       FRONTEND_HOST: 0.0.0.0
+      # Stable per-account identity used as the cloud-storage (Tencent COS)
+      # object-key prefix - see get_local_user_id() in jiuwenswarm/common/utils.py.
+      # Every isolated user's container gets its own via deploy/provision_user.sh.
+      JIUWENSWARM_USER_ID: ${ADMIN_USERNAME}
       # Main chat/LLM model (plain env vars, read via os.getenv - see
       # jiuwenswarm/common/config.py get_default_models()).
       API_KEY: ${API_KEY:-}

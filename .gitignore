@@ -89,7 +89,14 @@ workspace/agent/memory/*.db-shm
 workspace/agent/memory/*.db-wal
 
 jiuwenswarm/workspace/.whatsapp-auth/
-jiuwenswarm/resources/agent/workspace/
+# Build-generated agent workspace resources are ignored by default, but the
+# committed MCP builtins seed archive (mcp_builtins_v*.zip - ships the
+# tencent-cos connector etc. into every fresh workspace, see
+# _ensure_mcp_builtins in jiuwenswarm/common/utils.py) is a real, hand-
+# maintained source asset, not a build artifact - keep it trackable so a
+# plain `git add` on a version bump doesn't silently need `-f`.
+jiuwenswarm/resources/agent/workspace/*
+!jiuwenswarm/resources/agent/workspace/mcp_builtins_v*.zip
 jiuwenswarm/resources/tui/bin/
 packages/jiuwenswarm-tui/jiuwenswarm_tui/resources/tui/bin/
 packages/jiuwenswarm-tui/jiuwenswarm_tui/resources/tui-bin/

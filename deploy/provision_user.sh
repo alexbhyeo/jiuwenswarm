@@ -69,6 +69,7 @@ docker run -d \
   --restart unless-stopped \
   -v "${VOLUME_NAME}:/home/app/.jiuwenswarm" \
   -e FRONTEND_HOST=0.0.0.0 \
+  -e JIUWENSWARM_USER_ID="${USERNAME}" \
   jiuwenswarm-app >/dev/null
 
 echo "==> Waiting for ${CONTAINER_NAME} to come up ..."
@@ -103,6 +104,53 @@ simple_auth.create_user(
 )
 print('created')
 "
+
+echo "==> Configuring Tencent COS connector for ${USERNAME} (scoped to objects under '${USERNAME}/') ..."
+# Every user shares the same Tencent COS bucket/sub-account as the primary
+# instance - isolation is NOT done via separate Tencent credentials per user,
+# it's enforced inside the connector's own server.py (see
+# jiuwenswarm/resources/agent/workspace/mcp_builtins_v0.3.zip), which hard-
+# clamps every upload/list/download to the TENCENT_COS_USER_PREFIX env var
+# it's launched with - a value only this provisioning step ever sets, never
+# client- or agent-suppliable. If the primary instance has no tencent-cos
+# credentials configured yet, this step is skipped (not fatal) - re-run it
+# later (see deploy/architecture.md) once it does.
+#
+# The actual secret values only ever flow directly between these two `exec`
+# calls, captured in a shell variable - never printed, logged, or written to
+# disk unencrypted by this script.
+COS_SHARED_JSON="$(docker compose exec -T app python3 -c "
+import json
+from jiuwenswarm.server.runtime.mcp.credential import CredentialStore
+data = CredentialStore().get_all('tencent-cos')
+data.pop('TENCENT_COS_USER_PREFIX', None)
+print(json.dumps(data) if data.get('TENCENT_COS_SECRET_ID') else '')
+")"
+
+if [ -z "$COS_SHARED_JSON" ]; then
+  echo "    ! tencent-cos is not configured on the primary instance yet - skipping."
+  echo "      Re-run this provisioning step for ${USERNAME} later once it is."
+else
+  docker exec -i \
+    -e PROVISION_COS_JSON="${COS_SHARED_JSON}" \
+    -e PROVISION_COS_USER_PREFIX="${USERNAME}" \
+    "${CONTAINER_NAME}" python3 -c "
+import json
+import os
+from jiuwenswarm.server.runtime.mcp.credential import CredentialStore
+from jiuwenswarm.server.runtime.mcp.registry import connect_mcp
+from jiuwenswarm.server.runtime.mcp.state_store import set_mcp_state
+
+data = json.loads(os.environ['PROVISION_COS_JSON'])
+data['TENCENT_COS_USER_PREFIX'] = os.environ['PROVISION_COS_USER_PREFIX']
+store = CredentialStore()
+for key, value in data.items():
+    store.save_token('tencent-cos', key, value)
+connect_mcp('tencent-cos')
+set_mcp_state('tencent-cos', state='connected')
+print('tencent-cos connector configured')
+"
+fi
 
 echo "==> Done. ${USERNAME} can log in at the normal login page now, served by ${CONTAINER_NAME}."
 echo "    No model/API-key credentials are configured for this account - Director Mode"
