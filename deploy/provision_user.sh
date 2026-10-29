@@ -35,9 +35,14 @@ if docker inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
   exit 1
 fi
 
-NETWORK="$(docker compose ps -q app | xargs -r docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}')"
+# The primary `app` service is on three networks (frontend/db/users) for
+# segmentation - nginx and postgres must never be able to reach a user's
+# backend. Find the "users" one specifically by the label Compose always
+# attaches (com.docker.compose.network=<key from docker-compose.yml>),
+# rather than assuming which network `app` happens to list first.
+NETWORK="$(docker network ls --filter "label=com.docker.compose.network=users" --format '{{.Name}}' | head -1)"
 if [ -z "$NETWORK" ]; then
-  echo "error: could not determine the compose network from the running 'app' service (is it up?)" >&2
+  echo "error: could not find the 'users' compose network - is the stack up (docker compose up -d)?" >&2
   exit 1
 fi
 

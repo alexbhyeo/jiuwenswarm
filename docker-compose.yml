@@ -3,6 +3,8 @@ services:
     image: postgres:16-alpine
     container_name: jiuwenswarm-postgres
     restart: unless-stopped
+    networks:
+      - db
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -21,6 +23,16 @@ services:
       dockerfile: Dockerfile.claw
     container_name: jiuwenswarm-app
     restart: unless-stopped
+    # Only the primary app bridges all three segments: nginx's public traffic
+    # (frontend), its own login/session store (db), and per-user backend
+    # containers (users). Nothing else needs to - and nothing else should be
+    # able to - reach either postgres or a user's backend directly, so a
+    # vulnerability in nginx (or in this container, reached from nginx) can't
+    # pivot straight to another user's isolated workspace.
+    networks:
+      - frontend
+      - db
+      - users
     depends_on:
       postgres:
         condition: service_healthy
@@ -69,6 +81,8 @@ services:
     image: nginx:1.27-alpine
     container_name: jiuwenswarm-nginx
     restart: unless-stopped
+    networks:
+      - frontend
     depends_on:
       - app
     ports:
@@ -83,11 +97,27 @@ services:
     image: certbot/certbot
     container_name: jiuwenswarm-certbot
     restart: unless-stopped
+    networks:
+      - frontend
     volumes:
       - ./deploy/nginx/certbot-www:/var/www/certbot
       - ./deploy/nginx/letsencrypt:/etc/letsencrypt
     entrypoint: >
       sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot; sleep 12h & wait $${!}; done'
+
+networks:
+  # nginx <-> app only. nginx can never reach postgres or any user backend.
+  frontend:
+  # app <-> postgres only. Nothing else (nginx, user backends) can reach
+  # the credentials/session store.
+  db:
+  # app <-> every per-user backend container (jiuwenswarm-user-<username>,
+  # joined here by deploy/provision_user.sh). nginx and postgres are not on
+  # this network at all, so they cannot reach a user's backend even if
+  # compromised. User backends still share this one network with each
+  # other (not pairwise-isolated) - see docs/architecture.md for the
+  # reasoning and the residual-risk tradeoff this accepts.
+  users:
 
 volumes:
   pg_data:
