@@ -110,5 +110,8 @@ echo "    generation and chat won't work until credentials are set for it specif
 echo "    (docker exec ${CONTAINER_NAME} ... or restart it with the right env vars)."
 echo
 echo "    To remove this user later: docker rm -f ${CONTAINER_NAME} && \\"
+echo "      docker network disconnect ${NETWORK_NAME} jiuwenswarm-app && \\"
 echo "      docker network rm ${NETWORK_NAME} && docker volume rm ${VOLUME_NAME} && \\"
 echo "      delete their app_users row (docker compose exec app python3 -c \"...\")."
+echo "    (the disconnect step is required first - app is still attached to"
+echo "    ${NETWORK_NAME}, and Docker refuses to remove a network with active endpoints)"
