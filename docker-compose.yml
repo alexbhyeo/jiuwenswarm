@@ -115,7 +115,7 @@ networks:
   # joined here by deploy/provision_user.sh). nginx and postgres are not on
   # this network at all, so they cannot reach a user's backend even if
   # compromised. User backends still share this one network with each
-  # other (not pairwise-isolated) - see docs/architecture.md for the
+  # other (not pairwise-isolated) - see deploy/architecture.md for the
   # reasoning and the residual-risk tradeoff this accepts.
   users:
 
