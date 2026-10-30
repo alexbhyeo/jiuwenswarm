@@ -1,4 +1,5 @@
-import {
+
+import { isEnterprise } from '../../edition';import {
   useState,
   useRef,
   useCallback,
@@ -36,6 +37,7 @@ import { useMultiModelCollaborationEnabled } from '../../features/multiModelColl
 import { seedAgentCatalog, useAgentCatalogStore } from '../../stores/agentCatalogStore';
 import { getSelectedAgentGroup } from '../../stores/agentGroupCatalogSeed';
 import { supportsPlanMode } from '../../features/planMode/wireMode';
+import { isReachableTeamMemberStatus } from '../../features/teamMemberDeparture';
 import { applyPlanToggle, evaluatePlanToggle } from '../../features/planMode/planModeGate';
 import { applyGoalArm, evaluateGoalArm } from '../../features/goalMode/goalModeGate';
 import { queueOrAddGoalObjectiveMessage } from '../../features/goalPendingObjectiveBubble';
@@ -261,6 +263,9 @@ type InputAreaTeamMember = {
   name?: string;
   status?: string;
 };
+
+const EMPTY_SKILLS: string[] = [];
+const EMPTY_TEAM_MEMBERS: InputAreaTeamMember[] = [];
 
 type ComposerSuggestionKind = 'member' | 'role' | 'slash' | 'skill';
 type WorkIconName = 'add' | 'arrow' | 'check' | 'close' | 'collapse' | 'expand' | 'folder' | 'search';
@@ -842,6 +847,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     () => useAgentCatalogStore.getState().catalog ?? [],
   );
   const [agentOptionsStatus, setAgentOptionsStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [agentPodNotice, setAgentPodNotice] = useState<'starting' | 'timeout' | null>(null);
   const agentManagementClient = useMemo(() => createAgentManagementClient(), []);
   const [groupOptions, setGroupOptions] = useState<AgentGroupCatalogItem[]>(
     () => [getSelectedAgentGroup()].filter((group): group is AgentGroupCatalogItem => group !== null),
@@ -1050,8 +1056,14 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       return;
     let cancelled = false;
     setAgentOptionsStatus('loading');
+    setAgentPodNotice(null);
     void agentManagementClient
-      .listCatalog({ filter: 'mine' })
+      .listCatalog({
+        filter: 'mine',
+        onPodStarting: () => {
+          if (!cancelled) setAgentPodNotice('starting');
+        },
+      })
       .then((items) => {
         if (cancelled) return;
         const selectedItem = selectedAgentId ? items.find((item) => isSameAgentOption(item, selectedAgentId)) : null;
@@ -1067,10 +1079,14 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
         }
         setAgentOptions(items);
         seedAgentCatalog(items);
+        setAgentPodNotice(null);
         setAgentOptionsStatus('success');
       })
-      .catch(() => {
-        if (!cancelled) setAgentOptionsStatus('error');
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        const code = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code ?? '') : '';
+        setAgentPodNotice(code === 'pod_start_timeout' ? 'timeout' : null);
+        setAgentOptionsStatus('error');
       });
     return () => {
       cancelled = true;
@@ -1115,9 +1131,9 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
   const isLoadingHistory = useChatStore((s) => s.runtimes[activeSessionId ?? '']?.isLoadingHistory ?? false);
   const inputValue = useChatStore((s) => s.runtimes[activeSessionId ?? '']?.inputValue ?? '');
   const evolutionStatus = useChatStore((s) => s.runtimes[activeSessionId ?? '']?.evolutionStatus ?? null);
-  const selectedSkills = useSessionStore((s) => s.runtimes[activeSessionId ?? '']?.selectedSkills ?? []);
+  const selectedSkills = useSessionStore((s) => s.runtimes[activeSessionId ?? '']?.selectedSkills ?? EMPTY_SKILLS);
   const teamMembers = useSessionStore(
-    (s) => s.runtimes[conversationId]?.teamMembers ?? [],
+    (s) => s.runtimes[conversationId]?.teamMembers ?? EMPTY_TEAM_MEMBERS,
   ) as InputAreaTeamMember[];
   const currentSession = useSessionStore((s) => s.currentSession);
   const activeSession = useSessionStore((s) => {
@@ -1149,6 +1165,14 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
   const isInterruptible = isProcessing || isPaused || isGoalActive;
   const isAgentMode = mode === 'agent';
   const isTeamMode = mode === 'team';
+  const enterprise = isEnterprise();
+  const modeLocked = enterprise || hasHistory || isProcessing;
+
+  useEffect(() => {
+    if (enterprise && activeSessionId === NEW_CONVERSATION_ID && mode !== 'agent') {
+      onSwitchMode('agent');
+    }
+  }, [enterprise, activeSessionId, mode, onSwitchMode]);
   const isAutoHarnessMode = mode === 'auto_harness';
   const existingTeamGroupSelectionDisabled = Boolean(
     isTeamMode && activeSessionId !== NEW_CONVERSATION_ID && !agentGroupBinding && !agentGroupBindingPending,
@@ -1167,9 +1191,9 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
   }, [isAgentMode, isTeamMode]);
 
   const isWorkContextLocked = Boolean(activeSessionId && activeSessionId !== NEW_CONVERSATION_ID);
-  const showWorkContextRow = activeSessionId === NEW_CONVERSATION_ID;
+  const showWorkContextRow = !enterprise && activeSessionId === NEW_CONVERSATION_ID;
   /** Goal 入口是否适用于当前上下文（agent 模式 + 已接入 onSetGoal，如欢迎页新会话就不适用） */
-  const canUseGoalMenu = isAgentMode && Boolean(onSetGoal);
+  const canUseGoalMenu = !enterprise && isAgentMode && Boolean(onSetGoal);
   // bugfix 2026092201 bug001 第2轮修订：原来只跟 armed 挂钩（发送后 armed 变 false 就消失，
   // 理由是"目标是否存在"已由 GoalBar 覆盖，工具栏不需要重复常驻）。但这样一来目标在真正执行
   // 期间（armed 已经变 false、hasUnfinishedGoal 才是 true）这个 tag 会凭空消失，跟 Plan 的
@@ -1240,7 +1264,8 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     return teamMembers
       .filter((member) => {
         const id = member.member_id?.trim();
-        return id && id !== 'user';
+        // 离队 / 退役中的成员接不到消息，@ 出去也没人接。
+        return id && id !== 'user' && isReachableTeamMemberStatus(member.status);
       })
       .map((member) => ({
         id: member.member_id,
@@ -3781,7 +3806,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
 
   const handleModeSwitch = useCallback(
     async (targetMode: AgentMode) => {
-      if (isProcessing || hasHistory || mode === targetMode) return;
+      if (modeLocked || mode === targetMode) return;
       // Draft-session in-place mode switch: skills picked for the previous
       // mode no longer apply, so drop them from the store and remove their
       // inline chips from the editor. (Switching from a real session enters a
@@ -3948,6 +3973,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
         <div
           className={cx(
             'chat-input-container',
+            enterprise && 'chat-input-container--enterprise',
             showWorkContextRow && 'chat-input-container--work-home',
             (isModeMenuOpen || workMenuOpen) && 'chat-input-container--menu-open',
             composerSuggestion && !showSlashSuggestionBelow && 'chat-input-container--suggestion-open',
@@ -4344,6 +4370,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                         </button>
                         {!isDesignLanding && (
                         <>
+                        {!enterprise && (
                         <div className="chat-attach-menu-item-anchor">
                           <button
                             type="button"
@@ -4426,7 +4453,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                                       data-testid="chat-panel-agent-picker-state"
                                       data-variant="loading"
                                     >
-                                      {t('common.loading')}
+                                      {agentPodNotice === 'starting' ? t('experts.podStarting') : t('common.loading')}
                                     </div>
                                   ) : pickerTab === 'agent' && agentOptionsStatus === 'error' ? (
                                 <div
@@ -4434,7 +4461,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                                   data-testid="chat-panel-agent-picker-state"
                                   data-variant="error"
                                 >
-                                  {t('agentManagement.states.loadError')}
+                                  {agentPodNotice === 'timeout' ? t('experts.podStartTimeout') : t('agentManagement.states.loadError')}
                                 </div>
                               ) : pickerTab === 'agent' && filteredAgentOptions.length === 0 ? (
                                 <div
@@ -4639,6 +4666,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                           ) : null}
                           {agentTooltipNode}
                         </div>
+                        )}
                         {/* 插件/MCP 装备目前后端在集群模式下不生效（JiuWenSwarmDeepAdapter
                     ._ensure_chat_extensions 对 team 模式直接短路，见
                     interface_deep.py），继续展示这个入口只会让用户以为选了插件/MCP 会生效，
@@ -4684,7 +4712,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                             />
                           )}
                         </div>
-                        {!isTeamMode && (
+                        {!enterprise && !isTeamMode && (
                           <div className="chat-attach-menu-item-anchor">
                             <button
                               type="button"
@@ -4827,7 +4855,8 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                             />
                           </div>
                         )}
-                        {isTeamMode &&
+                        {!enterprise &&
+                          isTeamMode &&
                           (() => {
                             const toggleSwarmflow = (next: boolean) => {
                               if (!activeSessionId || swarmflowToggleDisabled) return;
@@ -4954,7 +4983,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                               </div>
                             );
                           })()}
-                        {personalContextMasterEnabled && (
+                          {!enterprise && personalContextMasterEnabled && (
                           <div
                             className="chat-mode-select__option"
                             role="menuitem"
@@ -5007,7 +5036,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                     data-testid="chat-panel-mode-select-trigger"
                     data-variant={currentMode.value}
                     onClick={() => {
-                      if (hasHistory || isProcessing) return;
+                      if (modeLocked) return;
                       if (!isModeMenuOpen && modeMenuRef.current) {
                         const rect = modeMenuRef.current.getBoundingClientRect();
                         setMenuDirection(resolveMenuDirection(rect.bottom, 160));
@@ -5015,9 +5044,10 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                       }
                       setIsModeMenuOpen((open) => !open);
                     }}
-                    aria-haspopup="menu"
-                    aria-expanded={isModeMenuOpen}
-                    style={hasHistory || isProcessing ? { cursor: 'default' } : undefined}
+                    disabled={enterprise}
+                    aria-haspopup={enterprise ? undefined : 'menu'}
+                    aria-expanded={enterprise ? undefined : isModeMenuOpen}
+                    style={modeLocked ? { cursor: 'default' } : undefined}
                   >
                     <span className="chat-mode-select__value" data-testid="chat-panel-mode-select-value">
                       <span className="chat-mode-select__icon" aria-hidden="true">
@@ -5025,7 +5055,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                       </span>
                       <span className="chat-mode-select__label">{t(currentMode.i18nKey)}</span>
                     </span>
-                    {!hasHistory && !isProcessing && (
+                    {!modeLocked && (
                       <svg
                         className="chat-mode-select__chevron"
                         viewBox="0 0 20 20"
@@ -5039,7 +5069,8 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                     )}
                   </button>
 
-                  {isModeMenuOpen &&
+                  {!enterprise &&
+                    isModeMenuOpen &&
                     modeMenuAnchor &&
                     createPortal(
                       <div
@@ -5109,7 +5140,8 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                       </div>,
                       document.body,
                     )}
-                  {isModeMenuOpen &&
+                  {!enterprise &&
+                    isModeMenuOpen &&
                     hoveredOptionDesc &&
                     hoveredOptionRect &&
                     createPortal(
@@ -5128,7 +5160,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                       document.body,
                     )}
                 </div>
-                {!isTeamMode && (
+                {!enterprise && !isTeamMode && (
                   <PermissionSelector
                     mode={mode}
                     permissionProfile={permissionProfile}
