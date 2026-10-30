@@ -27,6 +27,8 @@ derive from that one function, so a single patch isolates both
 
 from __future__ import annotations
 
+import os
+
 from pathlib import Path
 from typing import Any
 
@@ -110,9 +112,12 @@ def _configure_cloud_storage(
 ) -> _StubCloudUpload:
     """Mark the azure-blob-storage connector as "connected" and stub its upload
     call. Must run after ``_configure`` (which defaults it to not-connected)."""
+    # 只把 azure-blob-storage 标成"已连接"：候选表按
+    # dm.CLOUD_STORAGE_MCP_CANDIDATES 顺序取第一个，让 tencent-cos 保持未连接
+    # 才能继续走 azure 分支（它的目标 key 参数名是 blob_name，不是 object_key）。
     monkeypatch.setattr(
         dm, "get_mcp_server_config",
-        lambda name: {"name": name, "transport": "stdio"} if name == dm.DirectorManager._CLOUD_STORAGE_MCP_NAME else None,
+        lambda name: {"name": name, "transport": "stdio"} if name == "azure-blob-storage" else None,
     )
     stub = _StubCloudUpload(url=url, error=error)
     monkeypatch.setattr(dm, "call_mcp_tool", stub)
@@ -498,12 +503,17 @@ async def test_connected_audio_asset_is_uploaded_to_cloud_storage_when_connected
 
     result = await _generate(manager, project_id, prompt="p")
 
-    # The upload call targeted the audio/ folder with the local asset's real path.
+    # 目标 key 固定为 <user_id>/<project_id>/<images|videos|audios>/<文件名>：
+    # 目录结构本身就是多用户隔离的形态，连接器再按自己的前缀钳一次。
     assert len(cloud_stub.calls) == 1
     call = cloud_stub.calls[0]
     assert call["tool_name"] == "upload_file"
     assert call["arguments"]["local_path"] == audio_path
-    assert call["arguments"]["blob_name"] == "audio/asset-audio-1.mp3"
+    expected_key = (
+        f"{dm.get_local_user_id()}/{project_id}/audios/"
+        f"{os.path.basename(audio_path)}"
+    )
+    assert call["arguments"]["blob_name"] == expected_key
     # The uploaded URL replaces the local path end to end: the tool call, and
     # the persisted asset's params (which the frontend rebuilds edges from).
     assert stub.calls[0]["kwargs"]["reference_audio_path"] == cloud_url
