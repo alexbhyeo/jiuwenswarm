@@ -67,6 +67,15 @@ _CONFIG_SET_ENV_MAP = {
     "audio_gen_api_key": "AUDIO_GEN_API_KEY",
     "audio_gen_model": "AUDIO_GEN_MODEL_NAME",
     "audio_gen_enabled": "AUDIO_GEN_ENABLED",
+    # 剪辑对话（导演模式 · 剪辑）的独立模型槽。设置页的「剪辑对话」开关、模型
+    # 卡片和配置弹窗都读这里；缺了这几个键，面板永远认为该槽未配置（开关打不开、
+    # 弹窗不回填），而写盘走的是 common 的 config.set，值其实是存下来的。
+    "edit_chat_api_base": "EDIT_CHAT_API_BASE",
+    "edit_chat_api_key": "EDIT_CHAT_API_KEY",
+    "edit_chat_model": "EDIT_CHAT_MODEL_NAME",
+    "edit_chat_provider": "EDIT_CHAT_PROVIDER",
+    "edit_chat_protocol": "EDIT_CHAT_PROTOCOL",
+    "edit_chat_enabled": "EDIT_CHAT_ENABLED",
     "audio_api_base": "AUDIO_API_BASE",
     "audio_api_key": "AUDIO_API_KEY",
     "audio_model": "AUDIO_MODEL_NAME",
