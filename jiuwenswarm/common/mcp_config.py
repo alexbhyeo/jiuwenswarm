@@ -587,8 +587,15 @@ async def call_mcp_tool_via_temp_connection(
     if not name or transport not in {"stdio", "sse", "http", "streamable-http", "streamable_http"}:
         raise ValueError(f"invalid mcp entry name={name!r} transport={transport!r}")
 
+    # Resolve ${VAR} from the CredentialStore via the injection point (R1:
+    # common must not import server). Bare ``resolve_placeholders`` /
+    # ``CredentialStore`` names were a merge artifact - undefined here, so this
+    # raised NameError, got swallowed below, and every temp-connection call
+    # shipped literal ``${TENCENT_COS_REGION}``-style values to the connector.
     try:
-        entry = resolve_placeholders(entry, CredentialStore(), name)
+        entry = provider("mcp_credential").resolve_placeholders(
+            entry, _credential_store(), name
+        )
     except Exception as resolve_exc:  # noqa: BLE001
         logger.debug("[mcp-config] placeholder resolve failed: %s", resolve_exc)
 
