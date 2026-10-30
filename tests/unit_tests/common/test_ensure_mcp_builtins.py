@@ -11,6 +11,7 @@ from __future__ import annotations
 from contextlib import redirect_stdout
 import io
 import os
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -367,3 +368,126 @@ def test_bad_seed_zip_preserves_existing_dir(seed_dir: Path, tmp_path: Path) -> 
     # 也不留其它 .tmp 拋留.
     tmp_leaks = [p for p in dest.parent.iterdir() if ".tmp." in p.name]
     assert not tmp_leaks, f"temp dir leaked: {tmp_leaks}"
+
+
+# ---------------------------------------------------------------------------
+# _ensure_mcp_package_venvs — 跨平台复用预置 .venv 的修复
+# ---------------------------------------------------------------------------
+
+
+def _make_package(root: Path, name: str = "tencent-cos") -> Path:
+    pkg = root / name
+    (pkg / ".venv" / "bin").mkdir(parents=True)
+    (pkg / ".venv" / "bin" / "python3").write_text("#!/bin/sh\n", encoding="utf-8")
+    return pkg
+
+
+def test_package_venv_left_alone_when_interpreter_runs(tmp_path, mocker):
+    """本机跑得起来就什么都不做 —— 云端（x86_64 Linux）走的正是这条路径。"""
+    pkg = _make_package(tmp_path)
+    runs = mocker.patch.object(common_utils, "_mcp_venv_interpreter_runs", return_value=True)
+    rebuild = mocker.patch.object(common_utils, "_rebuild_mcp_package_venv")
+
+    common_utils._ensure_mcp_package_venvs(tmp_path)
+
+    runs.assert_called_once()
+    rebuild.assert_not_called()
+
+
+def test_package_venv_rebuilt_when_interpreter_cannot_run(tmp_path, mocker):
+    """预置解释器是别的平台编的（Exec format error）→ 按本机重建。"""
+    pkg = _make_package(tmp_path)
+    mocker.patch.object(common_utils, "_mcp_venv_interpreter_runs", return_value=False)
+    rebuild = mocker.patch.object(
+        common_utils, "_rebuild_mcp_package_venv", return_value=True
+    )
+
+    common_utils._ensure_mcp_package_venvs(tmp_path)
+
+    rebuild.assert_called_once_with(pkg)
+
+
+def test_package_venv_skips_dirs_without_venv(tmp_path, mocker):
+    """没有 .venv 的目录（旧 remote-mcp 包 / 隐藏目录）不碰。"""
+    (tmp_path / "remote-only").mkdir()
+    (tmp_path / ".staging").mkdir()
+    runs = mocker.patch.object(common_utils, "_mcp_venv_interpreter_runs")
+
+    common_utils._ensure_mcp_package_venvs(tmp_path)
+
+    runs.assert_not_called()
+
+
+def test_package_venv_missing_dir_is_noop(tmp_path, mocker):
+    runs = mocker.patch.object(common_utils, "_mcp_venv_interpreter_runs")
+
+    common_utils._ensure_mcp_package_venvs(tmp_path / "absent")
+
+    runs.assert_not_called()
+
+
+def test_interpreter_probe_handles_unexecutable_binary(tmp_path):
+    """真·不可执行文件（跨平台复用 / 无执行位）返回 False，不抛。"""
+    exe = tmp_path / "python3"
+    exe.write_text("not a real binary", encoding="utf-8")
+    exe.chmod(0o644)
+
+    assert common_utils._mcp_venv_interpreter_runs(exe) is False
+
+
+def test_interpreter_probe_true_for_current_python():
+    import sys
+
+    assert common_utils._mcp_venv_interpreter_runs(Path(sys.executable)) is True
+
+
+def test_rebuild_refuses_unknown_package(tmp_path, mocker):
+    """没登记依赖的包不猜：只告警，不装一半让人误以为能用。"""
+    pkg = _make_package(tmp_path, name="unknown-connector")
+    run = mocker.patch("subprocess.run")
+
+    assert common_utils._rebuild_mcp_package_venv(pkg) is False
+    run.assert_not_called()
+
+
+def test_rebuild_uses_pinned_requirements(tmp_path, mocker):
+    """重建走 `python -m venv` + 精确版本固定（mcp 2.x 没有 mcp.server.fastmcp）。"""
+    pkg = _make_package(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        if argv[1:3] == ["-m", "venv"]:
+            venv_bin = Path(argv[-1]) / "bin"
+            venv_bin.mkdir(parents=True, exist_ok=True)
+            (venv_bin / "python3").write_text("#!/bin/sh\n", encoding="utf-8")
+        return mocker.Mock(returncode=0)
+
+    mocker.patch("subprocess.run", side_effect=fake_run)
+
+    assert common_utils._rebuild_mcp_package_venv(pkg) is True
+
+    assert calls[0][1:3] == ["-m", "venv"]
+    install = calls[1]
+    assert install[1:3] == ["-m", "pip"]
+    pinned = common_utils._MCP_PACKAGE_REQUIREMENTS["tencent-cos"]
+    assert all(a in install for a in pinned)
+    assert all("==" in a for a in pinned), "版本必须写死，避免 mcp 2.x 破坏 fastmcp"
+
+
+def test_rebuild_failure_leaves_no_half_venv(tmp_path, mocker):
+    """pip 失败 → 返回 False 并把半残 .venv 删掉（下次启动会重试）。"""
+    pkg = _make_package(tmp_path)
+
+    def fake_run(argv, **kwargs):
+        if argv[1:3] == ["-m", "venv"]:
+            venv_bin = Path(argv[-1]) / "bin"
+            venv_bin.mkdir(parents=True, exist_ok=True)
+            (venv_bin / "python3").write_text("#!/bin/sh\n", encoding="utf-8")
+            return mocker.Mock(returncode=0)
+        raise subprocess.CalledProcessError(1, argv)
+
+    mocker.patch("subprocess.run", side_effect=fake_run)
+
+    assert common_utils._rebuild_mcp_package_venv(pkg) is False
+    assert not (pkg / ".venv").exists()

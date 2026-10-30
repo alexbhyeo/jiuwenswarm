@@ -1336,12 +1336,17 @@ def prepare_workspace(
     )
 
     # ----- 预置 MCP 包目录: 首次解压 zip 种子 / 版本升级覆盖 -----
+    mcp_builtins_dir = deepagent_workspace / "mcp" / "mcp_builtins"
     _ensure_mcp_builtins(
         template_agent_workspace=template_agent_workspace,
-        mcp_builtins_dir=deepagent_workspace / "mcp" / "mcp_builtins",
+        mcp_builtins_dir=mcp_builtins_dir,
         overwrite=overwrite,
         cumulative_diff=cumulative_diff,
     )
+    # 种子里的连接器自带预建 .venv，是按打包平台（x86_64 Linux）编好的；换平台
+    # （macOS / Windows / arm64）时那个解释器根本执行不了。这里与"是否刚解压"
+    # 无关地探测并重建，云端（同为 x86_64 Linux）探测通过、什么都不做。
+    _ensure_mcp_package_venvs(mcp_builtins_dir)
 
     return cumulative_diff
 
@@ -1573,6 +1578,121 @@ def _ensure_mcp_builtins(
         overwrite=overwrite,
     ):
         pass  # 仅登记到 diff 摘要，文件已解压就位
+
+
+# 预置 MCP 连接器自带的 ``.venv`` 是在打包机上预先建好的（当前种子包是
+# x86_64 Linux 上构建的），里面是**平台相关**的二进制：解释器本身、以及
+# 带 ABI 标签的 .so（例如 ``_cffi_backend.cpython-311-x86_64-linux-gnu.so``）。
+# 换到 macOS / Windows / arm64 上直接执行它只会得到
+# ``OSError: [Errno 8] Exec format error``——本地开发时连接器因此完全不可用，
+# 而云端（同为 x86_64 Linux）一切正常，所以这个坑只在本地冒出来。
+#
+# 修复方式：启动时探测一次「这个解释器在本机跑得起来吗」，跑不起来就**用当前
+# 解释器重建该包的 .venv**并装回同样的依赖。探测成本是一次 ``-c "import sys"``
+# （约几十毫秒/包），跑得起来就立刻返回，云端不会重建任何东西。
+_MCP_VENV_PROBE_TIMEOUT_S = 20
+
+# 连接器依赖只有包自己的 server.py 里 import 得到，种子包里没有 requirements
+# 文件；这里显式登记，避免去猜。新增连接器时在这里补一条。
+# 版本必须与种子包 `.venv` 里那份**完全一致**：mcp 2.x 把 FastMCP 改名为
+# MCPServer，`mcp.server.fastmcp` 会直接抛 ModuleNotFoundError；
+# 用 ≥2 装出来的环境看着"装好了"，连接器却起不来。这里的数字取自
+# ``mcp_builtins_v0.3.zip`` 内的 ``*.dist-info``。
+_MCP_PACKAGE_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    # server.py: from qcloud_cos import ... / from mcp.server.fastmcp import FastMCP
+    "tencent-cos": ("cos-python-sdk-v5==1.9.44", "mcp==1.30.0"),
+}
+
+
+def _mcp_package_venv_python(package_dir: Path) -> Path | None:
+    """``<package>/.venv`` 里的解释器（POSIX / Windows 两种布局）。"""
+    venv_dir = package_dir / ".venv"
+    for rel in (("bin", "python3"), ("bin", "python"), ("Scripts", "python.exe")):
+        candidate = venv_dir / Path(*rel)
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _mcp_venv_interpreter_runs(python_exe: Path) -> bool:
+    """这个预置解释器在本机能否执行（跨平台复用时最常见的是 Exec format error）。"""
+    import subprocess
+
+    try:
+        completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            [str(python_exe), "-c", "import sys"],
+            capture_output=True,
+            timeout=_MCP_VENV_PROBE_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
+
+
+def _rebuild_mcp_package_venv(package_dir: Path) -> bool:
+    """用**当前**解释器重建一个连接器的 .venv，返回是否成功。
+
+    依赖来自 :data:`_MCP_PACKAGE_REQUIREMENTS`；没有登记的包不猜、不装，
+    只记一条 warning（宁可明确说"本机跑不了"，也不要装一半让人以为能用）。
+    """
+    import subprocess
+
+    name = package_dir.name
+    requirements = _MCP_PACKAGE_REQUIREMENTS.get(name)
+    if not requirements:
+        logger.warning(
+            "[mcp_builtins] connector %s 的预置解释器无法在本机执行，且没有登记依赖；"
+            "本机无法使用该连接器（可在 _MCP_PACKAGE_REQUIREMENTS 补充）",
+            name,
+        )
+        return False
+
+    venv_dir = package_dir / ".venv"
+    print(f"[jiuwenswarm-init] MCP connector {name}: 预置解释器不适用于本机，正在重建 .venv ...")
+    try:
+        shutil.rmtree(venv_dir, ignore_errors=True)
+        subprocess.run(  # noqa: S603 - fixed argv, no shell
+            [sys.executable, "-m", "venv", str(venv_dir)],
+            check=True,
+            capture_output=True,
+            timeout=600,
+        )
+        new_python = _mcp_package_venv_python(package_dir) or venv_dir / "bin" / "python3"
+        subprocess.run(  # noqa: S603 - fixed argv, no shell
+            [str(new_python), "-m", "pip", "install", "--disable-pip-version-check", *requirements],
+            check=True,
+            capture_output=True,
+            timeout=1800,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        logger.warning("[mcp_builtins] connector %s 重建 .venv 失败: %s", name, exc)
+        shutil.rmtree(venv_dir, ignore_errors=True)
+        return False
+    logger.info("[mcp_builtins] connector %s 的 .venv 已按本机平台重建", name)
+    return True
+
+
+def _ensure_mcp_package_venvs(mcp_builtins_dir: Path) -> None:
+    """保证每个连接器自带的 .venv 在本机可用（不适用就按本机平台重建）。
+
+    必须在**解压之后**、与"是否需要解压"无关地每次都跑：解压出来的永远
+    是打包平台的那份，重建结果则要跨重启保留（不重建就不会覆盖它）。
+    """
+    if not mcp_builtins_dir.is_dir():
+        return
+    for package_dir in sorted(mcp_builtins_dir.iterdir()):
+        if not package_dir.is_dir() or package_dir.name.startswith("."):
+            continue
+        if not (package_dir / ".venv").is_dir():
+            continue
+        python_exe = _mcp_package_venv_python(package_dir)
+        if python_exe is None:
+            logger.warning("[mcp_builtins] connector %s 有 .venv 但没有解释器", package_dir.name)
+            continue
+        if _mcp_venv_interpreter_runs(python_exe):
+            continue
+        _rebuild_mcp_package_venv(package_dir)
 
 
 def prepare_runtime_workspace(
