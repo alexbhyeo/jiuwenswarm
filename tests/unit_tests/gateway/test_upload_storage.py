@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,9 @@ from jiuwenswarm.server.runtime.attachments.upload_storage import (
 )
 
 _FALLBACK = "document-1.md"
+# Windows 把 ``\`` 当路径分隔符，``Path("..\\..\\evil.md").name`` 是 ``evil.md``；
+# POSIX 上整串仍是一个名字，消毒后变成 ``.._.._evil.md``。
+_WIN_TRAVERSAL_EXPECTED = "evil.md" if os.name == "nt" else ".._.._evil.md"
 
 
 @pytest.mark.parametrize(
@@ -37,7 +41,7 @@ def test_safe_upload_filename_keeps_readable_names(filename: str):
     ("filename", "expected"),
     [
         ("../../etc/passwd", "passwd"),
-        ("..\\..\\evil.md", ".._.._evil.md"),
+        ("..\\..\\evil.md", _WIN_TRAVERSAL_EXPECTED),
         ("file:with|bad*chars?.md", "file_with_bad_chars_.md"),
         ("tab\there.md", "tab_here.md"),
         ("trailing .", "trailing"),
@@ -84,6 +88,17 @@ def test_safe_session_dirname_keeps_ascii_allowlist():
     assert safe_session_dirname("a/../b") == "a_.._b"
     assert safe_session_dirname(None) == "default"
     assert safe_session_dirname("   ") == "default"
+
+
+@pytest.mark.parametrize("raw", [".", "..", "...", ".. "])
+def test_safe_session_dirname_rejects_dot_directories(raw):
+    """点目录过白名单后仍是自身，作为目录名会跳出 sessions 树，一律回落 default。"""
+    assert safe_session_dirname(raw) == "default"
+
+
+def test_safe_session_dirname_keeps_a_dot_inside_the_name():
+    # 只剥尾部的点与空格（Windows 的静默语义），名字中间的照旧保留。
+    assert safe_session_dirname("sess.1") == "sess.1"
 
 
 def test_unique_upload_path_suffixes_existing_files(tmp_path: Path):

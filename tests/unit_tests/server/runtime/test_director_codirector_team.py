@@ -596,7 +596,14 @@ async def test_broken_team_falls_back_to_single_agent(
 
 
 def test_team_unavailable_when_package_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """两处来源都拿不到团队包时才算"不可用"。
+
+    ``_team_search_dirs`` 除了运行期工作区，还会读**包内资源**里的内置副本
+    （测试把工作区重定向到 tmp 之后，这个兜底就是唯一的来源）。所以这里要把
+    包根目录也指到一个空目录，才真正模拟出"包不存在"。
+    """
     monkeypatch.setattr(dt, "get_agent_root_dir", lambda: tmp_path)
+    monkeypatch.setattr(dt, "_find_package_root", lambda: tmp_path)
     with pytest.raises(dt.TeamUnavailableError):
         dt.load_team()
 

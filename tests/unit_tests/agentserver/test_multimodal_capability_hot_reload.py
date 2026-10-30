@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from jiuwenswarm.server.runtime.agent_adapter import interface_deep
+from jiuwenswarm.server.runtime.agent_adapter import interface_code, interface_deep
 from jiuwenswarm.server.runtime.agent_adapter.interface_deep import (
     JiuWenSwarmDeepAdapter,
 )
@@ -38,10 +38,11 @@ def _vision_config() -> dict:
     }
 
 
+@pytest.mark.parametrize("adapter_type", [JiuWenSwarmDeepAdapter, interface_code.JiuwenSwarmCodeAdapter])
 def test_multimodal_switch_hot_reload_registers_and_removes_vision_tools(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, adapter_type,
 ) -> None:
-    card = SimpleNamespace(name="vision_test", stateless=False)
+    card = SimpleNamespace(name="image_ocr", stateless=False)
     tool = SimpleNamespace(card=card, vision_model_config=None)
     registered: list[tuple[object, str | None]] = []
     unregistered: list[object] = []
@@ -59,7 +60,7 @@ def test_multimodal_switch_hot_reload_registers_and_removes_vision_tools(
     monkeypatch.setenv("VIDEO_ENABLED", "false")
     monkeypatch.delenv("IMAGE_GEN_API_KEY", raising=False)
 
-    adapter = JiuWenSwarmDeepAdapter()
+    adapter = adapter_type()
     ability_manager = _AbilityManager()
     native_config = SimpleNamespace(enable_read_image_multimodal=None)
     adapter._instance = SimpleNamespace(
@@ -80,15 +81,22 @@ def test_multimodal_switch_hot_reload_registers_and_removes_vision_tools(
     adapter._sync_multimodal_tools_for_runtime()
     assert adapter._vision_tools_registered is True
     assert registered == [(tool, adapter._tool_owner_id())]
-    assert ability_manager.added == ["vision_test"]
-    assert [item.name for item in adapter._tool_cards] == ["vision_test"]
+    assert ability_manager.added == ["image_ocr"]
+    assert [item.name for item in adapter._tool_cards] == ["image_ocr"]
+
+    config["models"]["vision"]["model_client_config"]["model_name"] = "replacement-model"
+    adapter._refresh_multimodal_configs(config)
+    adapter._sync_multimodal_tools_for_runtime()
+    assert adapter._vision_tools == [tool]
+    assert tool.vision_model_config.model == "replacement-model"
+    assert registered == [(tool, adapter._tool_owner_id())]
 
     monkeypatch.setenv("VISION_ENABLED", "false")
     adapter._refresh_multimodal_configs(config)
     adapter._sync_multimodal_tools_for_runtime()
     assert adapter._vision_tools_registered is False
     assert unregistered == [tool]
-    assert ability_manager.removed == ["vision_test"]
+    assert ability_manager.removed == ["image_ocr"]
     assert adapter._tool_cards == []
     assert adapter._resolve_enable_read_image_multimodal({}) is None
     assert adapter._resolve_enable_read_image_multimodal(
@@ -105,7 +113,7 @@ def test_multimodal_reload_preserves_generation_tool_groups(
     adapter._visual_gen_model_config = {"api_key": "test-key"}
     adapter._audio_gen_model_config = {"api_key": "test-key"}
     sync_groups = MagicMock(
-        side_effect=lambda **kwargs: (kwargs["current_tools"], kwargs["enabled"])
+        side_effect=lambda **kwargs: (kwargs["create_fn"]() if kwargs["enabled"] else [], kwargs["enabled"])
     )
     monkeypatch.setattr(adapter, "_sync_tool_group", sync_groups)
     monkeypatch.setattr(adapter, "_iter_runtime_audio_tools", lambda _agent_id: [])
@@ -116,10 +124,10 @@ def test_multimodal_reload_preserves_generation_tool_groups(
         call.kwargs["warn_label"]: call.kwargs
         for call in sync_groups.call_args_list
     }
-    assert [tool.card.name for tool in groups["generate_video tools"]["current_tools"]] == [
+    assert [tool.card.name for tool in groups["generate_video tools"]["create_fn"]()] == [
         "generate_video", "check_video_status",
     ]
-    assert [tool.card.name for tool in groups["generate_visual tool"]["current_tools"]] == [
+    assert [tool.card.name for tool in groups["generate_visual tool"]["create_fn"]()] == [
         "generate_visual",
     ]
     assert [tool.card.name for tool in groups["generate_audio tool"]["current_tools"]] == [

@@ -59,7 +59,6 @@ def test_permission_builder_defaults_to_develop_manual_rail() -> None:
     assert not isinstance(rail, AutoPermissionInterruptRail)
 
 
-@pytest.mark.usefixtures("internal_auto_mode")
 def test_explicit_auto_builder_uses_installed_config(tmp_path) -> None:
     rail = build_permission_rail(
         {"permissions": {"enabled": True, "mode": "auto"}},
@@ -73,7 +72,6 @@ def test_explicit_auto_builder_uses_installed_config(tmp_path) -> None:
     assert rail.base_rail._host.get_permissions_snapshot() == rail.permission_config
 
 
-@pytest.mark.usefixtures("internal_auto_mode")
 def test_explicit_auto_builder_preserves_host_browser_security_profile(
     tmp_path,
 ) -> None:
@@ -93,7 +91,6 @@ def test_explicit_auto_builder_preserves_host_browser_security_profile(
     assert rail.browser_runtime_security_profile is profile
 
 
-@pytest.mark.usefixtures("internal_auto_mode")
 def test_explicit_auto_builder_composes_enabled_persistent_audit(tmp_path) -> None:
     audit_root = tmp_path / "audit-data"
     rail = build_permission_rail(
@@ -133,7 +130,6 @@ def test_explicit_auto_builder_composes_enabled_persistent_audit(tmp_path) -> No
     assert tmp_path.as_posix() not in content
 
 
-@pytest.mark.usefixtures("internal_auto_mode")
 def test_explicit_auto_builder_degrades_when_audit_root_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -171,7 +167,6 @@ def test_explicit_auto_builder_degrades_when_audit_root_is_unavailable(
     assert result.reason == "audit_root_unavailable"
 
 
-@pytest.mark.usefixtures("internal_auto_mode")
 def test_explicit_auto_builder_wires_isolated_reviewer_from_llm(tmp_path) -> None:
     class RebuildableModel:
         def __init__(self, *, model_client_config, model_config) -> None:
@@ -190,6 +185,7 @@ def test_explicit_auto_builder_wires_isolated_reviewer_from_llm(tmp_path) -> Non
                 "auto": {
                     "reviewer_timeout_ms": 4321,
                     "reviewer_min_confidence": 0.0,
+                    "reviewer_output_format": "prompt",
                 },
             }
         },
@@ -207,10 +203,10 @@ def test_explicit_auto_builder_wires_isolated_reviewer_from_llm(tmp_path) -> Non
     )
     assert rail.auto_reviewer.client._model.model_config == model.model_config
     assert rail.auto_reviewer.timeout_seconds == pytest.approx(4.321)
-    assert rail.auto_reviewer.min_confidence == 0.0
+    assert not hasattr(rail.auto_reviewer, "min_confidence")
+    assert rail.auto_reviewer.client.output_format == "prompt"
 
 
-@pytest.mark.usefixtures("internal_auto_mode")
 def test_explicit_auto_builder_with_unrebuildable_model_fails_closed(
     tmp_path,
 ) -> None:

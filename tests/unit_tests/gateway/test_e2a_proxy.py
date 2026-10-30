@@ -8,17 +8,17 @@ from __future__ import annotations
 
 import pytest
 
-from jiuwenswarm.common.schema.message import ReqMethod
-from jiuwenswarm.gateway.routing.agent_client import (
+from openjiuwen_protocol.message import ReqMethod
+from gateway.routing.agent_client import (
     DuplicateRequestIdError,
     WebSocketAgentServerClient,
 )
-from jiuwenswarm.gateway.routing.agent_request_timeout import (
+from gateway.routing.agent_request_timeout import (
     AGENT_SERVER_TIMEOUT_CODE,
     AGENT_SERVER_TIMEOUT_ERROR,
     AgentRequestTimeoutError,
 )
-from jiuwenswarm.gateway.routing.e2a_proxy import (
+from gateway.routing.e2a_proxy import (
     SERVICE_UNAVAILABLE_CODE,
     _new_fetch_request_id,
     fetch_agent_unary,
@@ -62,6 +62,25 @@ class FakeAgentClient:
         if self.behavior == "timeout":
             raise AgentRequestTimeoutError()
         raise RuntimeError("connection lost")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", [ReqMethod.SESSION_LIST, ReqMethod.FILE_IMPORT_URL])
+async def test_proxy_preserves_authoritative_routing_metadata(method):
+    from types import SimpleNamespace
+    from jiuwenswarm.extensions.runtime_management_extension.pod_rest_map import identity_headers
+
+    client = FakeAgentClient()
+    await proxy_unary_request(
+        channel=FakeChannel(), agent_client=client,
+        ws=SimpleNamespace(_web_routing={"user_id": "u", "group_id": "g", "bot_id": "b"}),
+        req_id="file-req", params={"files": []}, session_id="s", user_id="u",
+        req_method=method,
+    )
+    headers = identity_headers(client.envelopes[0], accept="application/json")
+    assert headers["X-Group-Id"] == "g"
+    assert headers["X-Bot-Id"] == "b"
+    assert "group_id" not in client.envelopes[0].params
 
 
 async def _invoke(channel, agent_client, **overrides):
@@ -291,3 +310,29 @@ async def test_fetch_agent_unary_gives_up_after_single_retry() -> None:
     assert ok is False
     assert payload["code"] == SERVICE_UNAVAILABLE_CODE
     assert len(agent.request_ids) == 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_agent_unary_forwards_reported_http_status() -> None:
+    class _Client:
+        server_ready = True
+
+        async def send_request(self, envelope, *, timeout=None):
+            return type(
+                "Resp",
+                (),
+                {"ok": False, "payload": {"error": "missing", "code": "NOT_FOUND", "status": 404}},
+            )()
+
+    ok, payload = await fetch_agent_unary(
+        agent_client=_Client(),
+        req_method=ReqMethod.DIAGNOSIS_GET,
+        params={"session_id": "s1"},
+        session_id="s1",
+        user_id=None,
+        channel_id="web",
+        label="diagnosis",
+    )
+
+    assert ok is False
+    assert payload == {"error": "missing", "code": "NOT_FOUND", "status": 404}

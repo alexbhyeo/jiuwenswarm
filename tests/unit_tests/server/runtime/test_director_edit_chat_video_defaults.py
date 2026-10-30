@@ -10,8 +10,9 @@
 * 镜头视频与过渡视频的 ``generate_audio`` **缺省为 true**（schema 描述、
   SKILL.md 正文、执行分支三处一致）；
 * 时长范围 4-15 秒同时出现在 schema 与 SKILL.md 里；
-* 这个范围与 ``gen_toolkits`` 真正的夹取常量一致——否则技能会承诺一个
-  代码根本生成不出来的时长。
+* 这个范围与 ``video_gen_tools`` 真正的夹取常量一致——否则技能会承诺一个
+  代码根本生成不出来的时长（夹取常量随上游从 gen_toolkits 挪到了真正做
+  clamp 的 video_gen_tools.py）。
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from typing import Any
 
 import pytest
 
-from jiuwenswarm.agents.harness.common.tools import gen_toolkits
+from jiuwenswarm.agents.harness.common.tools import gen_toolkits, video_gen_tools
 from jiuwenswarm.server.runtime.director import director_manager as dm
 from jiuwenswarm.server.runtime.director import director_skills as dsk
 
@@ -59,8 +60,8 @@ def test_video_tools_document_the_4_to_15_second_range() -> None:
 
 def test_documented_range_matches_the_real_clamp() -> None:
     """文档写的 4-15 必须就是代码真正夹取的范围。"""
-    low = gen_toolkits._VIDEO_MIN_SECONDS
-    high = gen_toolkits._VIDEO_MAX_SECONDS
+    low = video_gen_tools._VIDEO_MIN_SECONDS
+    high = video_gen_tools._VIDEO_MAX_SECONDS
     assert (low, high) == (4, 15), f"夹取范围变成了 {low}-{high}，技能里的 4-15 要跟着改"
 
     for tool in ("generate_shot_video", "generate_video_bridge"):

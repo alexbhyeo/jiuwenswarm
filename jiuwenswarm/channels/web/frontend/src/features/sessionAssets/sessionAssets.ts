@@ -33,6 +33,7 @@ interface SessionAssetsState {
   refresh: (sessionId: string) => Promise<void>;
   register: (sessionId: string, items: SessionAssetInput[]) => Promise<void>;
   rename: (sessionId: string, assetId: string, name: string) => Promise<void>;
+  remove: (sessionId: string, assetId: string) => Promise<void>;
 }
 
 const EMPTY: SessionAsset[] = [];
@@ -73,13 +74,21 @@ export const useSessionAssetsStore = create<SessionAssetsState>((set) => {
         await webRequest<AssetsResponse>('session.assets.rename', { session_id: sessionId, asset_id: assetId, name }),
       );
     },
+    remove: async (sessionId, assetId) => {
+      apply(
+        sessionId,
+        await webRequest<AssetsResponse>('session.assets.remove', { session_id: sessionId, asset_id: assetId }),
+      );
+    },
   };
 });
 
 export {
   assetKindFromMime,
+  displayFileName,
   findReferencedAssets,
   normalizePath,
+  resolveAssetDisplayNames,
   stemFilename,
   withAssetReferenceNote,
   type NamedAsset,

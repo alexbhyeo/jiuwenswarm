@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from jiuwenswarm.common.utils import get_agent_root_dir
+from jiuwenswarm.common.utils import _find_package_root, get_agent_root_dir
 from jiuwenswarm.server.runtime.director.director_team_bandit import (
     ARM_OPTIONS,
     DIMENSIONS,
@@ -139,8 +139,22 @@ class ToolStepFailed(Exception):
 
 
 def _team_search_dirs() -> list[Path]:
+    """团队包搜索路径：工作区里的用户包优先，其次是内置包。
+
+    内置包有两处来源——运行期工作区（``<agent_root>/workspace/.agent_teams/
+    agent_groups/built_in``，首次启动时从包资源拷过去的副本）和**包内资源**
+    （``<package>/resources/agent/workspace/.agent_teams/agent_groups/built_in``）。
+    后者必须也搜：单元测试用 autouse fixture 把工作区整体重定向到 tmp（见
+    tests/unit_tests/conftest.py 的 _isolate_user_workspace），此时运行期副本
+    并不存在；只认运行期目录的话，内置团队在隔离环境（以及尚未播种的全新安装）
+    里就直接"找不到"，而不是读包内那份只读的原始资源。
+    """
     root = get_agent_root_dir() / "workspace" / _TEAM_SUBDIR
-    return [root / "local", root / "built_in"]
+    dirs = [root / "local", root / "built_in"]
+    packaged = _find_package_root() / "resources" / "agent" / "workspace" / _TEAM_SUBDIR / "built_in"
+    if packaged not in dirs:
+        dirs.append(packaged)
+    return dirs
 
 
 def _assemble_instructions(template: Any) -> str:
@@ -174,7 +188,9 @@ def load_team(team_name: str = TEAM_NAME) -> dict[str, Teammate]:
     不是代码里的常量，所以用户/我们可以直接改 persona 而不动 Python。
     """
     try:
-        from jiuwenswarm.agents.swarm.agent_group import load_agent_group_package
+        # 加载器已随上游迁到 openjiuwen 协议包（本地 agents/swarm/agent_group.py 已删除），
+        # 签名/语义不变：一个已验证的 AgentGroup 包目录 -> 有序的成员模板。
+        from openjiuwen.agent_teams.experts import load_agent_group_package
     except Exception as exc:  # pragma: no cover - openjiuwen 缺失时明确降级
         raise TeamUnavailableError(f"AgentGroup 加载器不可用: {exc}") from exc
 

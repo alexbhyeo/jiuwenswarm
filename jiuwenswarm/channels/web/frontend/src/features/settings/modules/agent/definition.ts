@@ -8,7 +8,7 @@ import {
   VideoGenSettings,
   VisualGenSettings,
 } from './AgentSettings';
-
+import { ExternalCliSettingsItem } from './ExternalCliAgentsSettings';
 export const agentModule: SettingsModuleDefinition = {
   id: 'agent',
   titleKey: 'settingsPanel.categories.agent',
@@ -46,6 +46,13 @@ export const agentModule: SettingsModuleDefinition = {
         { id: 'visual-gen-settings', component: 'custom', render: VisualGenSettings },
         { id: 'audio-gen-settings', component: 'custom', render: AudioGenSettings },
         { id: 'edit-chat-settings', component: 'custom', render: EditChatSettings },
+      ],
+    },
+    {
+      id: 'external-cli-agents',
+      titleKey: 'settingsPanel.agent.externalCliAgents',
+      items: [
+        { id: 'external-cli-agents', component: 'custom', render: ExternalCliSettingsItem },
       ],
     },
   ],

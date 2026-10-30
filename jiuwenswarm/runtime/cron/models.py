@@ -5,11 +5,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from jiuwenswarm.common.work_mode import (
+from gateway.common.work_mode import (
     DEFAULT_WEB_WORK_MODE,
     normalize_work_mode,
 )
-from jiuwenswarm.common.mode_matrix import (
+from gateway.common.mode_matrix import (
     TEAM_PLAN_CODE_MODE,
     TEAM_PLAN_NORMAL_MODE,
     deprecate_mode,
@@ -236,7 +236,23 @@ CRON_MODEL_SOURCE_ZEN = "zen"
 CRON_MODEL_SOURCE_LOGIN = "login"
 
 
-def resolve_cron_model(raw: Any) -> tuple[str | None, str]:
+def _match_supplied_zen_entry(value: str, zen_entries: list[dict[str, Any]] | None) -> str | None:
+    """Match a caller-supplied Zen row (public list row or raw cache entry)."""
+    for row in zen_entries or []:
+        if not isinstance(row, dict):
+            continue
+        model_config = row.get("model_client_config") or {}
+        model_name = str(row.get("model_name") or model_config.get("model_name") or "").strip()
+        alias = str(row.get("alias") or "").strip()
+        if model_name and value in {model_name, alias}:
+            return model_name
+    return None
+
+
+def resolve_cron_model(
+    raw: Any,
+    zen_entries: list[dict[str, Any]] | None = None,
+) -> tuple[str | None, str]:
     """Resolve a cron model name/alias to ``(canonical_model_name, source)``.
 
     source ∈ ``{"", "config", "zen", "login"}``；``""`` 表示未指定模型（None/空）。
@@ -253,14 +269,14 @@ def resolve_cron_model(raw: Any) -> tuple[str | None, str]:
     AgentServer ``_model_cache`` can look up. An explicitly configured name that
     resolves to empty is rejected instead of being persisted.
 
-    Opencode Zen free models are in-memory only, so a configured-model miss
-    also checks the live free-model cache.  A cache failure never blocks the
-    normal configured-model validation path.
+    Opencode Zen free models live in the AgentServer process. This function
+    does not import that module. Callers that already hold the public rows
+    (Gateway fetches ``models.zen_entries``) pass them as ``zen_entries``.
+    AgentServer cron tools match the in-process cache after a miss here.
 
     登录送的免费模型（华为账号登录，``common/auth/model_catalog``）同样只在缓存里、
     永不写入 config.yaml（未登录/活动未生效时目录为空，与前端"未登录不展示
-    免费模型"一致）。Gateway 与 AgentServer 读同一份缓存，两个进程里的调用方
-    （controller / cron_tools）行为一致。
+    免费模型"一致）。两个进程里的调用方（controller / cron_tools）对登录模型行为一致。
     """
     if raw is None:
         return None, ""
@@ -288,21 +304,11 @@ def resolve_cron_model(raw: Any) -> tuple[str | None, str]:
             )
         return canonical, CRON_MODEL_SOURCE_CONFIG
 
-    try:
-        from jiuwenswarm.server.runtime.opencode_zen import (
-            get_zen_free_model_entries,
-        )
+    matched_zen = _match_supplied_zen_entry(value, zen_entries)
+    if matched_zen:
+        return matched_zen, CRON_MODEL_SOURCE_ZEN
 
-        for zen_entry in get_zen_free_model_entries():
-            model_config = zen_entry.get("model_client_config") or {}
-            model_name = str(model_config.get("model_name") or "").strip()
-            alias = str(zen_entry.get("alias") or "").strip()
-            if model_name and value in {model_name, alias}:
-                return model_name, CRON_MODEL_SOURCE_ZEN
-    except Exception as exc:  # noqa: BLE001 - optional cache must not break cron
-        logger.debug("[cron] zen free-model lookup failed for %r: %s", value, exc)
-
-    # 登录送的免费模型：Zen 停用后免费模型的唯一来源。名字可能带 "#index"
+    # 登录送的免费模型：名字可能带 "#index"
     # 通道侧全局序号后缀，取前半段再匹配（与 passthrough._build_model_auth 一致）。
     try:
         from jiuwenswarm.common.auth.login_credentials import bare_model_name
@@ -322,13 +328,17 @@ def resolve_cron_model(raw: Any) -> tuple[str | None, str]:
     raise ValueError(f"Unknown model {value!r}. Available models: {hint}")
 
 
-def validate_cron_model(raw: Any) -> str | None:
+def validate_cron_model(
+    raw: Any,
+    zen_entries: list[dict[str, Any]] | None = None,
+) -> str | None:
     """Validate model name/alias against configured models. Returns canonical model_name or raises.
 
     :func:`resolve_cron_model` 的封装：只返回规范名，不暴露来源。需要区分模型
     来源（如登录模型的凭据绑定捕获）的调用方请直接用 ``resolve_cron_model``。
+    ``zen_entries`` 是调用方已经从 AgentServer 取到的公开行；不传则不匹配 Zen。
     """
-    canonical, _source = resolve_cron_model(raw)
+    canonical, _source = resolve_cron_model(raw, zen_entries=zen_entries)
     return canonical
 
 
@@ -345,6 +355,18 @@ def resolve_cron_job_timeout_seconds(job: "CronJob") -> float:
 def is_team_cron_mode(mode: str | None) -> bool:
     """Return True when a cron job should run via Team + SwarmFlow streaming."""
     return is_team_mode(mode)
+
+
+def normalize_tenant_id(raw: Any) -> str:
+    """群、机器人、用户都是字符串。没填、不是字符串、或只有空白时写成 ``default``。
+
+    文件、etcd、企业库用同一条规则。``default`` 表示这格身份没有单独填写。
+    """
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text:
+            return text
+    return "default"
 
 
 @dataclass(frozen=True)
@@ -412,9 +434,13 @@ class CronJob:
     mcp: list[str] | None = None
     # 飞书多应用场景：创建该定时任务的 app_id，用于推送时定位到正确的 app 配置
     app_id: str = ""
+    # 租户里的群、机器人。和 user_id 凑成「这条任务是谁的」。
+    # 没填时，文件、etcd、企业库读写都写成 "default"。
+    group_id: str = ""
+    bot_id: str = ""
     # 创建者标识（web 端 user_id）。执行时透传给 faas 的 X-Session-Context，
     # 否则 CreateSandbox 拉不起导致 60s 超时（见 plan-cron-user-id）。
-    # 默认空串兼容旧数据；语义=创建者，创建后不可变。
+    # 语义=创建者，创建后不可变。没填或空字符串在读写时写成 "default"。
     user_id: str = ""
     # 登录免费模型的凭据句柄绑定：创建/改选登录模型时，由创建连接上的华为账号
     # 登录会话派生（credential_ref_for_user）。路由 user_id 与华为账号是两套
@@ -427,6 +453,8 @@ class CronJob:
     # from_dict 仅做 normalize + 兜底 "work"，不做跨层 Project 反查；
     # 精确值由创建/更新路径从 Project 记录注入，或由展示层二次查询覆盖。
     work_mode: str = DEFAULT_WEB_WORK_MODE
+    # 企业库表调度用的下一趟触发时刻（秒）。空值不写进个人版文件。
+    next_run_at: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -467,10 +495,13 @@ class CronJob:
             d["mcp"] = list(self.mcp)
         if self.app_id:
             d["app_id"] = self.app_id
-        if self.user_id:
-            d["user_id"] = self.user_id
+        d["group_id"] = normalize_tenant_id(self.group_id)
+        d["bot_id"] = normalize_tenant_id(self.bot_id)
+        d["user_id"] = normalize_tenant_id(self.user_id)
         if self.credential_ref:
             d["credential_ref"] = self.credential_ref
+        if self.next_run_at is not None:
+            d["next_run_at"] = self.next_run_at
         return d
 
     @staticmethod
@@ -520,6 +551,14 @@ class CronJob:
         updated_at_f = (
             float(updated_at) if isinstance(updated_at, (int, float)) else None
         )
+
+        def _epoch_field(key: str) -> float | None:
+            raw = data.get(key, None)
+            if isinstance(raw, (int, float)):
+                return float(raw)
+            return None
+
+        next_run_at_f = _epoch_field("next_run_at")
 
         if not job_id:
             raise ValueError("id is required")
@@ -584,18 +623,17 @@ class CronJob:
         selection_raw = data.get("model_selection")
         job_model_selection = None
         if isinstance(selection_raw, dict):
-            from jiuwenswarm.common.model_selection import ModelSelection
+            from gateway.common.model_selection import ModelSelection
             job_model_selection = ModelSelection.model_validate(selection_raw).model_dump()
         # mcp：老数据兜底（无 mcp 字段 → None，行为与改造前一致）
         job_mcp = normalize_cron_job_mcp(data.get("mcp", None))
         app_id_raw = data.get("app_id", "")
         job_app_id = str(app_id_raw).strip() if isinstance(app_id_raw, str) else ""
 
-        # user_id：老数据兜底（无 user_id → ""）
-        job_user_id_raw = data.get("user_id", "")
-        job_user_id = (
-            str(job_user_id_raw).strip() if isinstance(job_user_id_raw, str) else ""
-        )
+        # 空值写成 "default"。
+        job_group_id = normalize_tenant_id(data.get("group_id", ""))
+        job_bot_id = normalize_tenant_id(data.get("bot_id", ""))
+        job_user_id = normalize_tenant_id(data.get("user_id", ""))
 
         # credential_ref：老数据兜底（无字段 → ""，即未绑定登录账号）
         job_credential_ref_raw = data.get("credential_ref", "")
@@ -635,9 +673,12 @@ class CronJob:
             model_selection=job_model_selection,
             mcp=job_mcp,
             app_id=job_app_id,
+            group_id=job_group_id,
+            bot_id=job_bot_id,
             user_id=job_user_id,
             credential_ref=job_credential_ref,
             work_mode=job_work_mode,
+            next_run_at=next_run_at_f,
         )
 
 
@@ -649,7 +690,7 @@ class CronRunState:
     job_id: str
     wake_at_iso: str
     push_at_iso: str
-    status: str = "pending"  # pending|running|succeeded|failed
+    status: str = "pending"  # pending|running|succeeded|failed|awaiting_approval|skipped
     placeholder_sent: bool = False
     pushed_final: bool = False
     started_at: float | None = None
@@ -681,3 +722,7 @@ class CronRunState:
     execution_session_allocated: bool = False
     # Manual proactive checks report their outcome through a UI notification.
     manually_triggered: bool = False
+    # 执行流已经把终稿放进会话直播。后面的推送不再往同一条直播放第二遍。
+    live_final_forwarded: bool = False
+    # 直播帧序号。浏览器若短暂连了两次，用它丢掉来晚的旧帧。
+    live_seq: int = 0

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from jiuwenswarm.gateway.message_handler.message_handler import MessageHandler
+from gateway.message_handler.message_handler import MessageHandler
 from jiuwenswarm.server.gateway_push.wire import build_server_push_wire
 
 
@@ -21,10 +21,10 @@ class _CapturingCronController:
         self.create_params = dict(params)
         return {"id": "job-1"}
 
-    async def get_job(self, job_id: str) -> dict:
+    async def get_job(self, job_id: str, **_kwargs) -> dict:
         return {"id": job_id, "user_id": self.user_id}
 
-    async def update_job(self, job_id: str, patch: dict) -> dict:
+    async def update_job(self, job_id: str, patch: dict, **_kwargs) -> dict:
         _ = job_id
         self.update_patch = dict(patch)
         return {"id": "job-1"}
@@ -35,12 +35,12 @@ class _RunNowCronController:
         self.run_calls = 0
         self.user_id = ""
 
-    async def run_now(self, job_id: str) -> str:
+    async def run_now(self, job_id: str, **_kwargs) -> str:
         _ = job_id
         self.run_calls += 1
         return "job-1:1710000000"
 
-    async def get_job(self, job_id: str) -> dict:
+    async def get_job(self, job_id: str, **_kwargs) -> dict:
         return {"id": job_id, "user_id": self.user_id}
 
 
@@ -84,7 +84,12 @@ def _bare_handler(agent_client: object, controller: _CapturingCronController) ->
 
 
 @pytest.mark.asyncio
-async def test_single_user_cron_push_keeps_local_project_validation() -> None:
+async def test_single_user_cron_push_marks_project_binding_verified() -> None:
+    """A3g：agent 工具链路双模式统一打 marker。
+
+    server 侧 CronTools 在两种模式下都经
+    server.runtime.session.project_store.resolve_cron_project_binding 完成解析
+    （legacy 共享目录 / AgentOS 用户目录同源），gateway controller 不再本地反查。"""
     controller = _CapturingCronController()
     handler = _bare_handler(object(), controller)
 
@@ -97,7 +102,7 @@ async def test_single_user_cron_push_keeps_local_project_validation() -> None:
     )
 
     assert controller.create_params is not None
-    assert "_agentos_project_binding_verified" not in controller.create_params
+    assert controller.create_params["_agentos_project_binding_verified"] is True
 
 
 @pytest.mark.asyncio
@@ -116,6 +121,51 @@ async def test_agentos_cron_push_marks_remote_project_binding_verified() -> None
     )
 
     assert controller.update_patch == {"_agentos_project_binding_verified": True}
+
+
+@pytest.mark.asyncio
+async def test_cron_push_create_replaces_default_tenant_with_chat_routing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """对话工具把空身份 normalize 成 default 时，Gateway 用原始 chat routing 盖回。"""
+    controller = _CapturingCronController()
+    handler = _bare_handler(object(), controller)
+    handler._stream_metadata["req-1"] = {
+        "user_id": "u-1",
+        "routing": {
+            "group_id": "g-real",
+            "bot_id": "06b75225-753d-40be-b23c-a13de9038734",
+        },
+    }
+    monkeypatch.setattr(
+        "gateway.enterprise.is_enterprise",
+        lambda: True,
+    )
+
+    await handler._handle_cron_push_payload(
+        payload={
+            "action": "create",
+            "data": {
+                "name": "job",
+                "group_id": "default",
+                "bot_id": "default",
+                "user_id": "forged-tool-user",
+            },
+        },
+        request_id="req-1",
+        channel_id="web",
+        session_id="sess-1",
+        metadata=None,
+        user_id="u-1",
+    )
+
+    assert controller.create_params is not None
+    assert controller.create_params["user_id"] == "u-1"
+    assert controller.create_params["group_id"] == "g-real"
+    assert (
+        controller.create_params["bot_id"]
+        == "06b75225-753d-40be-b23c-a13de9038734"
+    )
 
 
 @pytest.mark.asyncio
@@ -165,17 +215,18 @@ async def test_cron_push_without_request_login_rejects_supplied_session(action) 
 
 @pytest.mark.asyncio
 async def test_dialogue_cron_push_persists_free_model_account_binding(tmp_path, monkeypatch) -> None:
-    from jiuwenswarm.common.auth.model_catalog import LoginModel
-    from jiuwenswarm.gateway.cron.controller import CronController
-    from jiuwenswarm.gateway.cron.store import CronJobStore
+    from gateway.auth import model_catalog as _model_catalog
+    from gateway.auth.model_catalog import LoginModel
+    from gateway.cron.controller import CronController
+    from gateway.cron.store import CronJobStore
 
-    monkeypatch.setattr("jiuwenswarm.common.config.get_model_config", lambda *a, **k: None)
-    monkeypatch.setattr("jiuwenswarm.common.config.get_model_names", lambda: [])
+    monkeypatch.setattr("gateway.common.config.get_model_config", lambda *a, **k: None)
+    monkeypatch.setattr("gateway.common.config.get_model_names", lambda: [])
     monkeypatch.setattr(
         "jiuwenswarm.server.runtime.opencode_zen.get_zen_free_model_entries", lambda: []
     )
     monkeypatch.setattr(
-        "jiuwenswarm.common.auth.model_catalog.get_models",
+        _model_catalog, "get_models",
         lambda *a, **k: [LoginModel(model_name="GLM-5.2", display_name="GLM-5.2")],
     )
 
@@ -189,9 +240,9 @@ async def test_dialogue_cron_push_persists_free_model_account_binding(tmp_path, 
         assert user_id == "huawei-openid"
         return credential_ref
 
-    monkeypatch.setattr("jiuwenswarm.common.auth.service.live_session", live_session)
+    monkeypatch.setattr("gateway.auth.service.live_session", live_session)
     monkeypatch.setattr(
-        "jiuwenswarm.common.auth.login_credentials.credential_ref_for_user",
+        "gateway.auth.login_credentials.credential_ref_for_user",
         credential_ref_for_user,
     )
     store = CronJobStore(path=tmp_path / "cron_jobs.json")
@@ -332,7 +383,8 @@ async def test_cron_command_id_survives_wire_projection_for_gateway_ack() -> Non
         "metadata": {"_jiuwenswarm_cron_owner_user_id": "user-a"},
         "body": {"command_id": "cmd-1", "action": "list", "status": "ok", "data": {}},
     })
-    async def _list_jobs() -> list[dict]:
+    async def _list_jobs(**kwargs) -> list[dict]:
+        assert kwargs.get("user_id") == "user-a"
         return []
 
     controller.list_jobs = _list_jobs

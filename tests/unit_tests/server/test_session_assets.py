@@ -75,3 +75,38 @@ async def test_session_id_is_validated(manager):
         with pytest.raises(sa.SessionAssetError) as exc:
             await manager.handle_session_assets_list({"session_id": bad})
         assert exc.value.code == "INVALID_PARAMS"
+
+async def test_remove_drops_one_asset_and_is_idempotent(manager, tmp_path):
+    result = await manager.handle_session_assets_register(
+        {"session_id": "s1", "items": [{"path": _file(tmp_path, "one.png")}, {"path": _file(tmp_path, "two.png")}]}
+    )
+    one, two = result["assets"]
+    removed = await manager.handle_session_assets_remove({"session_id": "s1", "asset_id": one["asset_id"]})
+    assert [a["asset_id"] for a in removed["assets"]] == [two["asset_id"]]
+    # removing an unknown/already-removed id is a no-op, not an error
+    again = await manager.handle_session_assets_remove({"session_id": "s1", "asset_id": one["asset_id"]})
+    assert [a["asset_id"] for a in again["assets"]] == [two["asset_id"]]
+    # the removal persists across manager instances (state is on disk, per session)
+    assert [a["asset_id"] for a in (await sa.SessionAssetManager().handle_session_assets_list({"session_id": "s1"}))["assets"]] == [
+        two["asset_id"]
+    ]
+    # other sessions are untouched
+    assert (await manager.handle_session_assets_list({"session_id": "other"}))["assets"] == []
+
+
+@pytest.mark.asyncio
+async def test_session_id_is_validated(manager):
+    for bad in ("", "../escape", "a/b", ".."):
+        with pytest.raises(sa.SessionAssetError) as exc:
+            await manager.handle_session_assets_list({"session_id": bad})
+        assert exc.value.code == "INVALID_PARAMS"
+
+
+@pytest.mark.asyncio
+async def test_state_file_cannot_escape_sessions_dir(manager, tmp_path):
+    # ".." matches the session_id regex (only [A-Za-z0-9_.-]) but must still be
+    # rejected: unresolved, it would point outside the sessions directory and let
+    # a caller read/write a file in its parent instead of an isolated session.
+    with pytest.raises(sa.SessionAssetError) as exc:
+        sa.SessionAssetManager._state_file("..")
+    assert exc.value.code == "INVALID_PARAMS"

@@ -6,13 +6,15 @@
 A task's files - uploads from the composer and media the agent generated - can be
 given short names so they can be referenced with ``@name`` in the chat box. The
 registry is independent of any other feature: it lives next to the session's own
-data as ``<sessions>/<session_id>/session_assets.json`` and is served by three
+data as ``<sessions>/<session_id>/session_assets.json`` and is served by four
 stateless RPC methods:
 
 - ``session.assets.list``: the session's assets.
 - ``session.assets.register``: add files (idempotent per file path; the default
   name is the file name without extension, made unique).
 - ``session.assets.rename``: change an asset's name.
+- ``session.assets.remove``: drop one asset by id (idempotent; does not touch the
+  underlying file, only the registry entry).
 """
 from __future__ import annotations
 
@@ -76,11 +78,16 @@ def validate_asset_name(name: str) -> str:
 class SessionAssetManager:
     """Stateless RPC handlers; each call is a full load -> change -> save round trip."""
 
-    def _state_file(self, session_id: str) -> Path:
+    @staticmethod
+    def _state_file(session_id: str) -> Path:
         sid = (session_id or "").strip()
         if not _SESSION_ID.match(sid):
             raise SessionAssetError("INVALID_PARAMS", "缺少或非法的 session_id")
-        return get_agent_sessions_dir() / sid / _STATE_FILE
+        base = get_agent_sessions_dir().resolve()
+        file = (base / sid / _STATE_FILE).resolve()
+        if not file.is_relative_to(base):
+            raise SessionAssetError("INVALID_PARAMS", "缺少或非法的 session_id")
+        return file
 
     def _load(self, session_id: str) -> list[dict[str, Any]]:
         file = self._state_file(session_id)
@@ -133,7 +140,8 @@ class SessionAssetManager:
             try:
                 base = validate_asset_name(wanted)
             except SessionAssetError:
-                base = validate_asset_name(re.sub(r"[@\r\n\t]", "", Path(path).stem) or "asset")
+                cleaned_stem = re.sub(r"[@\r\n\t]", "", Path(path).stem).strip()
+                base = validate_asset_name(cleaned_stem[:_NAME_MAX] or "asset")
             name = self._unique_name(base, taken)
             taken.add(name.casefold())
             known_paths.add(_path_key(path))
@@ -166,6 +174,15 @@ class SessionAssetManager:
         target["name"] = name
         self._save(session_id, assets)
         return {"assets": assets}
+
+    async def handle_session_assets_remove(self, params: dict) -> dict:
+        session_id = str(params.get("session_id") or "")
+        asset_id = str(params.get("asset_id") or "").strip()
+        assets = self._load(session_id)
+        remaining = [a for a in assets if a["asset_id"] != asset_id]
+        if len(remaining) != len(assets):
+            self._save(session_id, remaining)
+        return {"assets": remaining}
 
 
 _MANAGER: SessionAssetManager | None = None
