@@ -494,6 +494,28 @@ CLOUD_ASSET_FOLDER: dict[str, str] = {
 }
 
 
+def _ensure_mcp_providers() -> None:
+    """装配 server 侧注入点，让本进程也能看到已连接的 MCP。
+
+    ``mirror_asset_to_cloud_storage`` 有两个调用方，分属不同进程：生成流程
+    在 AgentServer 里（注入点由它的启动链装好），上传走的是 WebChannel 的
+    ``/file-api/director/upload``（见 director_multipart_http）。WebChannel
+    进程启动时不会装配 server runtime 的注入点，于是 ``get_mcp_servers()``
+    取 ``mcp_state`` 直接抛 ``ExternalProviderUnregistered``、被内部吞成空
+    列表——``get_mcp_server_config`` 返回 None，镜像静默跳过：表现就是
+    "生成的素材进了 COS，上传的素材没进"，且两种情况下都不打任何日志。
+
+    ``install_front()`` 幂等（已注册的域直接跳过）且是懒加载，在已装配的
+    AgentServer 进程里是无副作用的空操作。
+    """
+    try:
+        from jiuwenswarm.server.runtime.provider_setup import install_front
+
+        install_front()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("[director] mcp provider install skipped: %s", exc)
+
+
 async def mirror_asset_to_cloud_storage(
     *, file_path: str, asset_type: str, project_id: str
 ) -> str | None:
@@ -519,6 +541,7 @@ async def mirror_asset_to_cloud_storage(
     """
     if not file_path or not os.path.isfile(file_path):
         return None
+    _ensure_mcp_providers()
     mcp_name: str | None = None
     entry: dict[str, Any] | None = None
     for candidate in CLOUD_STORAGE_MCP_CANDIDATES:
