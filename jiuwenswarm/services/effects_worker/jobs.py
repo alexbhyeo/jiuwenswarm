@@ -73,6 +73,7 @@ class JobManager:
     def submit(
         self, *, input_bytes: bytes, filename: str, asset_type: str, effectcraft_effect: str,
         params: dict[str, Any], output_ext: str,
+        trim_in: float | None = None, trim_out: float | None = None,
     ) -> str:
         job_id = secrets.token_urlsafe(18)
         workdir = self._base_dir / job_id
@@ -82,12 +83,14 @@ class JobManager:
 
         rec = JobRecord(job_id=job_id, status="queued", workdir=workdir)
         self._jobs[job_id] = rec
-        asyncio.create_task(self._run(rec, input_path, asset_type, effectcraft_effect, params, output_ext))
+        asyncio.create_task(
+            self._run(rec, input_path, asset_type, effectcraft_effect, params, output_ext, trim_in, trim_out)
+        )
         return job_id
 
     async def _run(
         self, rec: JobRecord, input_path: Path, asset_type: str, effectcraft_effect: str,
-        params: dict[str, Any], output_ext: str,
+        params: dict[str, Any], output_ext: str, trim_in: float | None, trim_out: float | None,
     ) -> None:
         async with self._semaphore:
             rec.status = "running"
@@ -100,6 +103,8 @@ class JobManager:
                     output_ext=output_ext,
                     workdir=rec.workdir,
                     timeout_s=self._job_timeout_s,
+                    trim_in=trim_in,
+                    trim_out=trim_out,
                 )
             except CliDriverError as exc:
                 rec.status = "failed"

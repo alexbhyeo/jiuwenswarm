@@ -519,13 +519,17 @@ export function directorClipEffectApply(
   projectId: string,
   assetId: string,
   effectId: string,
-  effectParams: Record<string, unknown>
+  effectParams: Record<string, unknown>,
+  trimRange?: { trimIn: number; trimOut: number } | null
 ): Promise<GenerateResult> {
   return webRequest<unknown>(METHOD.clipEffectApply, {
     project_id: projectId,
     asset_id: assetId,
     effect_id: effectId,
     params: effectParams,
+    // 只在从时间线片段发起时才带：素材库卡片入口没有裁剪窗口的概念，
+    // 后端把缺省当成"处理整份源文件"。
+    ...(trimRange ? { trim_in: trimRange.trimIn, trim_out: trimRange.trimOut } : {}),
   })
     .then(normalizeGenerateResult)
     .catch((err) => {

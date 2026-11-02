@@ -5913,6 +5913,7 @@
       "button": "特效",
       "panelTitle": "应用特效",
       "sourceAsset": "作用于：{{name}}",
+      "sourceAssetRange": "作用于：{{name}}（{{start}}s–{{end}}s）",
       "apply": "应用",
       "applying": "正在处理…",
       "applyFailed": "特效处理失败：{{message}}",

@@ -65,7 +65,8 @@ interface DirectorState {
     projectId: string,
     assetId: string,
     effectId: string,
-    effectParams: Record<string, unknown>
+    effectParams: Record<string, unknown>,
+    trimRange?: { trimIn: number; trimOut: number } | null
   ) => Promise<void>;
 
   setActiveTab: (tab: DirectorTabKey) => void;
@@ -379,7 +380,7 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
     }
   },
 
-  applyEffect: async (projectId, assetId, effectId, effectParams) => {
+  applyEffect: async (projectId, assetId, effectId, effectParams, trimRange) => {
     stopEffectPolling();
     set({ applyingEffect: true, effectError: null, pendingEffect: null });
     try {
@@ -388,7 +389,8 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
         projectId,
         assetId,
         effectId,
-        effectParams
+        effectParams,
+        trimRange
       );
       set((s) => ({
         projects: s.projects.map((p) => (p.project_id === project.project_id ? project : p)),

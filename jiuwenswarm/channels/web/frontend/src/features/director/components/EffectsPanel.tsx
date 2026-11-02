@@ -24,11 +24,16 @@ export function EffectsPanel({
   open,
   projectId,
   asset,
+  trimRange,
   onClose,
 }: {
   open: boolean;
   projectId: string;
   asset: DirectorAsset | null;
+  /** 仅时间线片段入口传入：该片段在源文件内的裁剪窗口（秒）——应用时只处理
+   *  这段范围，不处理整份源文件。素材库卡片入口不传（undefined/null），
+   *  按整份素材处理。 */
+  trimRange?: { trimIn: number; trimOut: number } | null;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -70,7 +75,7 @@ export function EffectsPanel({
 
   const apply = async () => {
     if (!asset || !selectedEffect) return;
-    await applyEffect(projectId, asset.asset_id, selectedEffect.effectId, paramValues);
+    await applyEffect(projectId, asset.asset_id, selectedEffect.effectId, paramValues, trimRange);
     if (!useDirectorStore.getState().effectError) onClose();
   };
 
@@ -93,8 +98,14 @@ export function EffectsPanel({
             <X aria-hidden />
           </button>
         </header>
-        <p className="effects-panel__source">
-          {t('director.effects.sourceAsset', { name: asset.name || asset.prompt || asset.asset_id })}
+        <p className="effects-panel__source" data-testid="director-effects-panel-source">
+          {trimRange
+            ? t('director.effects.sourceAssetRange', {
+                name: asset.name || asset.prompt || asset.asset_id,
+                start: trimRange.trimIn.toFixed(1),
+                end: trimRange.trimOut.toFixed(1),
+              })
+            : t('director.effects.sourceAsset', { name: asset.name || asset.prompt || asset.asset_id })}
         </p>
         <div className="effects-panel__body">
           {effectCatalogLoading ? null : applicableEffects.length === 0 ? (

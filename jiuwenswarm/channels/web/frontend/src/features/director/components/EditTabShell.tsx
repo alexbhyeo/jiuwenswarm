@@ -328,9 +328,19 @@ export function EditTabShell() {
   const composing = useDirectorStore((s) => s.composing);
   // 剪辑"特效"：时间线片段本身没有素材状态/类型以外的完整信息，按
   // clip.assetId 反查当前项目的 DirectorAsset 再交给 EffectsPanel——与
-  // DirectorRail 的资产卡片走同一个面板/RPC，只是入口不同。
-  const [effectsClipAssetId, setEffectsClipAssetId] = useState<string | null>(null);
-  const effectsAsset = selectedProject?.assets.find((a) => a.asset_id === effectsClipAssetId) ?? null;
+  // DirectorRail 的资产卡片走同一个面板/RPC，只是入口不同。额外存一份
+  // 片段自己的裁剪窗口（trimIn/trimOut，源文件内的秒数）：从时间线片段发起
+  // 特效时，只处理这段范围，不是整份源文件——这是片段独有的信息，素材库
+  // 卡片入口没有这个概念，所以是单独一份 state 而不是塞进 DirectorAsset。
+  const [effectsClip, setEffectsClip] = useState<{ assetId: string; trimIn: number; trimOut: number } | null>(null);
+  const effectsAsset = selectedProject?.assets.find((a) => a.asset_id === effectsClip?.assetId) ?? null;
+  // 图片片段的 trimIn/trimOut 是"展示时长"，不是对源文件的时间裁剪（一张
+  // 静态图片没有"源文件内的某一段"这回事）——只有 video/audio 才把裁剪窗口
+  // 传给面板，图片素材始终按整张处理，与 DirectorRail 卡片入口行为一致。
+  const effectsTrimRange =
+    effectsClip && effectsAsset && effectsAsset.type !== 'image'
+      ? { trimIn: effectsClip.trimIn, trimOut: effectsClip.trimOut }
+      : null;
 
   // tracks[0] 是主轨——唯一没有"轨道 N"标签的那条，但不再是唯一参与播放的
   // 轨道：所有轨道都会参与播放，播放优先级按轨道从上到下（见 locateActive）。
@@ -1155,7 +1165,7 @@ export function EditTabShell() {
             title={t('director.effects.button')}
             onClick={(e) => {
               e.stopPropagation();
-              setEffectsClipAssetId(clip.assetId);
+              setEffectsClip({ assetId: clip.assetId, trimIn: clip.trimIn, trimOut: clip.trimOut });
             }}
             data-testid="director-edit-clip-effects"
           >
@@ -1484,10 +1494,11 @@ export function EditTabShell() {
       </div>
 
       <EffectsPanel
-        open={effectsClipAssetId !== null}
+        open={effectsClip !== null}
         projectId={selectedProjectId ?? ''}
         asset={effectsAsset}
-        onClose={() => setEffectsClipAssetId(null)}
+        trimRange={effectsTrimRange}
+        onClose={() => setEffectsClip(null)}
       />
     </div>
   );

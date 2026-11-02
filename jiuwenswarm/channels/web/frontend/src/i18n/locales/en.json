@@ -5916,6 +5916,7 @@
       "button": "Effects",
       "panelTitle": "Apply effect",
       "sourceAsset": "Applies to: {{name}}",
+      "sourceAssetRange": "Applies to: {{name}} ({{start}}s–{{end}}s)",
       "apply": "Apply",
       "applying": "Processing…",
       "applyFailed": "Effect failed: {{message}}",

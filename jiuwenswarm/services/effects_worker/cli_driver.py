@@ -108,6 +108,8 @@ async def run_effect_job(
     output_ext: str,
     workdir: Path,
     timeout_s: float,
+    trim_in: float | None = None,
+    trim_out: float | None = None,
 ) -> Path:
     """在 workdir 里跑完整的一次任务，返回渲染产物的路径。
 
@@ -115,6 +117,12 @@ async def run_effect_job(
     任何跨任务状态，一次调用只认这一个 workdir。asset_type 决定渲染方式：
     "image" 用 render-frame 出一张静帧，"video"/"audio" 用 render 按
     FORMAT_BY_EXT 编码整段时长。
+
+    trim_in/trim_out（都是源文件内的秒数，与剪辑时间线上 EditClip.trimIn/
+    trimOut 同一单位）限定只渲染这段范围——不需要先拆图层/裁剪素材，
+    `render --start S --end S` 直接按这个范围导出（已实测核实：6 秒合成，
+    `--start 2 --end 4` 产出正好 2 秒/20 帧的结果）。只对 "video"/"audio"
+    有意义：图片素材走 render-frame 单帧导出，没有时间范围这回事。
     """
     project_path = workdir / "job.ecproj"
     output_path = workdir / f"output.{output_ext}"
@@ -187,10 +195,12 @@ async def run_effect_job(
         )
     else:
         fmt = FORMAT_BY_EXT.get(output_ext, output_ext)
-        await _run_cli(
-            ["render", str(project_path), "--comp", str(comp_id), "--out", str(output_path), "--format", fmt],
-            cwd=workdir, timeout_s=timeout_s, label="render",
-        )
+        render_args = [
+            "render", str(project_path), "--comp", str(comp_id), "--out", str(output_path), "--format", fmt,
+        ]
+        if trim_in is not None and trim_out is not None:
+            render_args += ["--start", str(trim_in), "--end", str(trim_out)]
+        await _run_cli(render_args, cwd=workdir, timeout_s=timeout_s, label="render")
 
     if not output_path.is_file():
         raise CliDriverError("render 报告成功但未找到产物文件")

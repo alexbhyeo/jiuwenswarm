@@ -55,7 +55,14 @@ class EffectDef:
     asset_types: tuple[str, ...]  # 适用的素材类型："image" / "video" / "audio"
     effectcraft_effect: str  # effectcraft 里的真实 effect 名称（add_effect 的 effect 参数）
     params: tuple[EffectParam, ...]
-    output_ext: str  # 渲染产物的文件后缀
+
+
+# 渲染产物的文件后缀——取决于被处理的**源素材类型**，不是效果本身：同一个
+# Gaussian Blur 既能处理图片（出一张静帧 png）也能处理视频（出一段 mp4），
+# 固定在 EffectDef 上会在"图片效果"场景下产出内容是 png、后缀却叫 .mp4 的
+# 文件（曾经的真实 bug，实测 E2E 跑全量效果目录后才发现）。
+def output_ext_for_asset_type(asset_type: str) -> str:
+    return {"image": "png", "video": "mp4", "audio": "wav"}.get(asset_type, "mp4")
 
 
 EFFECT_CATALOG: tuple[EffectDef, ...] = (
@@ -68,7 +75,6 @@ EFFECT_CATALOG: tuple[EffectDef, ...] = (
         # 属性键名已对照 effectcraft 文档（docs/agents.md "A typical session"）核实：
         # set_property {"path":"effects/#1/blurriness", ...}。
         params=(EffectParam("blurriness", "模糊强度", "number", 8, min=0, max=100),),
-        output_ext="mp4",
     ),
     EffectDef(
         effect_id="stylize_glow",
@@ -84,7 +90,6 @@ EFFECT_CATALOG: tuple[EffectDef, ...] = (
             EffectParam("radius", "半径", "number", 30, min=0, max=200),
             EffectParam("intensity", "强度", "number", 2, min=0, max=10),
         ),
-        output_ext="mp4",
     ),
     EffectDef(
         effect_id="sharpen",
@@ -94,7 +99,6 @@ EFFECT_CATALOG: tuple[EffectDef, ...] = (
         effectcraft_effect="Sharpen",
         # 属性键名已通过 `effect.apply`+`props --flat --json` 实测核实。
         params=(EffectParam("amount", "强度", "number", 50, min=0, max=200),),
-        output_ext="mp4",
     ),
     EffectDef(
         effect_id="color_hue_sat",
@@ -109,7 +113,6 @@ EFFECT_CATALOG: tuple[EffectDef, ...] = (
             EffectParam("saturation", "饱和度", "number", 0, min=-100, max=100),
             EffectParam("lightness", "明度", "number", 0, min=-100, max=100),
         ),
-        output_ext="mp4",
     ),
     EffectDef(
         effect_id="time_echo",
@@ -123,7 +126,6 @@ EFFECT_CATALOG: tuple[EffectDef, ...] = (
             EffectParam("numberOfEchoes", "回声数量", "number", 3, min=1, max=10),
             EffectParam("decay", "衰减", "number", 0.5, min=0, max=1),
         ),
-        output_ext="mp4",
     ),
     EffectDef(
         effect_id="time_timewarp",
@@ -133,7 +135,6 @@ EFFECT_CATALOG: tuple[EffectDef, ...] = (
         effectcraft_effect="Timewarp",
         # 属性键名已通过实测核实。
         params=(EffectParam("speed", "速度(%)", "number", 100, min=10, max=400),),
-        output_ext="mp4",
     ),
     EffectDef(
         effect_id="key_keylight",
@@ -148,7 +149,6 @@ EFFECT_CATALOG: tuple[EffectDef, ...] = (
             EffectParam("screenMatte/clipBlack", "黑场裁切", "number", 10, min=0, max=100),
             EffectParam("screenMatte/clipWhite", "白场裁切", "number", 90, min=0, max=100),
         ),
-        output_ext="mp4",
     ),
     EffectDef(
         effect_id="audio_reverb",
@@ -162,7 +162,6 @@ EFFECT_CATALOG: tuple[EffectDef, ...] = (
             EffectParam("reverbTime", "混响时长", "number", 100, min=0, max=100),
             EffectParam("wetOut", "湿声比例", "number", 10, min=0, max=100),
         ),
-        output_ext="wav",
     ),
     EffectDef(
         effect_id="audio_eq",
@@ -178,7 +177,6 @@ EFFECT_CATALOG: tuple[EffectDef, ...] = (
             EffectParam("band1Frequency", "频率(Hz)", "number", 200, min=20, max=20000),
             EffectParam("band1BoostCut", "增益(dB)", "number", 0, min=-20, max=20),
         ),
-        output_ext="wav",
     ),
 )
 
@@ -218,20 +216,29 @@ class EffectsWorkerError(Exception):
 
 
 async def submit_job(
-    *, file_path: str, asset_type: str, effect: EffectDef, params: dict[str, Any]
+    *, file_path: str, asset_type: str, effect: EffectDef, params: dict[str, Any],
+    trim_in: float | None = None, trim_out: float | None = None,
 ) -> str:
-    """上传素材 + 效果参数到 effects-worker，返回其 job_id。"""
+    """上传素材 + 效果参数到 effects-worker，返回其 job_id。
+
+    trim_in/trim_out（源文件内的秒数）只对 video/audio 有意义——从剪辑时间线
+    上的某个片段（而不是素材库的整份素材）发起时，调用方传入该片段的
+    trimIn/trimOut，effects-worker 只渲染这段范围，不处理整份源文件。
+    """
     if not os.path.isfile(file_path):
         raise EffectsWorkerError(f"源文件不存在: {file_path}")
     async with httpx.AsyncClient(timeout=_JOB_SUBMIT_TIMEOUT_S) as client:
         with open(file_path, "rb") as fh:
             files = {"file": (os.path.basename(file_path), fh)}
-            data = {
+            data: dict[str, Any] = {
                 "asset_type": asset_type,
                 "effectcraft_effect": effect.effectcraft_effect,
                 "params": json.dumps(params),
-                "output_ext": effect.output_ext,
+                "output_ext": output_ext_for_asset_type(asset_type),
             }
+            if trim_in is not None and trim_out is not None:
+                data["trim_in"] = trim_in
+                data["trim_out"] = trim_out
             try:
                 resp = await client.post(f"{EFFECTS_WORKER_URL}/jobs", data=data, files=files)
             except httpx.HTTPError as exc:

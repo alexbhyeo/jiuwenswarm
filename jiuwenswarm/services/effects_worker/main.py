@@ -50,6 +50,8 @@ async def create_job(
     effectcraft_effect: str = Form(...),
     params: str = Form("{}"),
     output_ext: str = Form(...),
+    trim_in: float | None = Form(None),
+    trim_out: float | None = Form(None),
 ) -> dict:
     try:
         parsed_params = json.loads(params)
@@ -57,6 +59,10 @@ async def create_job(
         raise HTTPException(status_code=400, detail="params 不是合法 JSON") from None
     if not isinstance(parsed_params, dict):
         raise HTTPException(status_code=400, detail="params 必须是 JSON 对象")
+    if (trim_in is None) != (trim_out is None):
+        raise HTTPException(status_code=400, detail="trim_in/trim_out 必须同时提供或同时省略")
+    if trim_in is not None and trim_out is not None and trim_in >= trim_out:
+        raise HTTPException(status_code=400, detail="trim_in 必须小于 trim_out")
 
     content = await file.read()
     job_id = _jobs.submit(
@@ -66,6 +72,8 @@ async def create_job(
         effectcraft_effect=effectcraft_effect,
         params=parsed_params,
         output_ext=output_ext,
+        trim_in=trim_in,
+        trim_out=trim_out,
     )
     return {"job_id": job_id}
 
