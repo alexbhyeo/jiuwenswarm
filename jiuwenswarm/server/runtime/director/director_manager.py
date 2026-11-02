@@ -61,6 +61,7 @@ from jiuwenswarm.server.runtime.director.director_effects import (
     catalog_to_dict,
     download_result as effects_download_result,
     get_effect,
+    output_ext_for_asset_type,
     poll_job as effects_poll_job,
     submit_job as effects_submit_job,
 )
@@ -524,6 +525,31 @@ def _ensure_mcp_providers() -> None:
         logger.debug("[director] mcp provider install skipped: %s", exc)
 
 
+def _cloud_object_key(*, asset_type: str, project_id: str, file_path: str) -> str:
+    """云端对象 key 固定为 `<user_id>/<project_id>/<images|videos|audios>/
+    <本地文件名>`——user_id 目前是 get_local_user_id() 给的单机占位 id（还
+    没有登录体系），但目录结构本身已经是多用户隔离的最终形态：以后换上
+    真实登录，只需要让 get_local_user_id() 改为读已认证会话的 user_id，
+    这里和所有调用方都不用再改。镜像上传（mirror_asset_to_cloud_storage）
+    和云端删除（delete_asset_from_cloud_storage）必须算出同一个 key——
+    提取成一个函数，不是两处各写一遍同样的拼接逻辑。
+    """
+    folder = CLOUD_ASSET_FOLDER.get(asset_type, "images")
+    return f"{get_local_user_id()}/{project_id}/{folder}/{os.path.basename(file_path)}"
+
+
+def _resolve_cloud_storage_connector() -> tuple[str, dict[str, Any]] | None:
+    """按 CLOUD_STORAGE_MCP_CANDIDATES 顺序找第一个已连接的云存储连接器。
+    没有任何一个连接时返回 None——调用方据此把云端操作当成可选动作跳过，
+    不是硬依赖。"""
+    _ensure_mcp_providers()
+    for candidate in CLOUD_STORAGE_MCP_CANDIDATES:
+        entry = get_mcp_server_config(candidate)
+        if entry is not None:
+            return candidate, entry
+    return None
+
+
 async def mirror_asset_to_cloud_storage(
     *, file_path: str, asset_type: str, project_id: str
 ) -> str | None:
@@ -531,12 +557,6 @@ async def mirror_asset_to_cloud_storage(
     HTTPS 直链；没有连接器、文件不存在、或上传失败时一律返回 None——
     调用方据此继续走本地路径，镜像在这里永远是"有就用，没有就按老路子
     走"的可选动作，不是任何生成流程的硬依赖。
-
-    云端对象 key 固定为 `<user_id>/<project_id>/<images|videos|audios>/
-    <本地文件名>`——user_id 目前是 get_local_user_id() 给的单机占位 id
-    （还没有登录体系，见该函数文档），但目录结构本身已经是多用户隔离的
-    最终形态：以后换上真实登录，只需要让 get_local_user_id() 改为读已
-    认证会话的 user_id，这里和所有调用方都不用再改。
 
     走 call_mcp_tool（优先复用 mcp.connect 时就建立好的常驻连接，连接
     没缓存住才退回临时连接）而不是每次都另起一个临时连接，省掉一次进程
@@ -549,18 +569,11 @@ async def mirror_asset_to_cloud_storage(
     """
     if not file_path or not os.path.isfile(file_path):
         return None
-    _ensure_mcp_providers()
-    mcp_name: str | None = None
-    entry: dict[str, Any] | None = None
-    for candidate in CLOUD_STORAGE_MCP_CANDIDATES:
-        entry = get_mcp_server_config(candidate)
-        if entry is not None:
-            mcp_name = candidate
-            break
-    if entry is None or mcp_name is None:
+    resolved = _resolve_cloud_storage_connector()
+    if resolved is None:
         return None
-    folder = CLOUD_ASSET_FOLDER.get(asset_type, "images")
-    object_key = f"{get_local_user_id()}/{project_id}/{folder}/{os.path.basename(file_path)}"
+    mcp_name, entry = resolved
+    object_key = _cloud_object_key(asset_type=asset_type, project_id=project_id, file_path=file_path)
     key_param = CLOUD_TOOL_KEY_PARAM.get(mcp_name, "object_key")
     try:
         result = await call_mcp_tool(
@@ -582,6 +595,35 @@ async def mirror_asset_to_cloud_storage(
         "result instead of a URL: %r", mcp_name, file_path, result,
     )
     return None
+
+
+async def delete_asset_from_cloud_storage(
+    *, file_path: str, asset_type: str, project_id: str
+) -> None:
+    """删除一个素材在云存储连接器里的镜像副本（如果有的话）——与
+    mirror_asset_to_cloud_storage 对称，同样是尽力而为：没有连接器、连接器
+    不支持 delete_object（目前只有 tencent-cos 实现了这个工具，见其
+    server.py；azure-blob-storage 还没有）、或删除失败，都只记日志，不
+    向调用方抛异常——用户在 UI 上看到的"已删除"以本地项目元数据为准，云端
+    清理失败不应该让删除操作本身报错。
+
+    只在调用方已确认这份素材确实镜像过（asset.cloud_url 非空）时才调用——
+    这里不做"先探测有没有连接器"的短路，始终按 mirror 时同一套 key 计算
+    公式尝试删除，计算出的 key 不存在也不是错误（COS DELETE 本身幂等）。
+    """
+    resolved = _resolve_cloud_storage_connector()
+    if resolved is None:
+        return
+    mcp_name, entry = resolved
+    object_key = _cloud_object_key(asset_type=asset_type, project_id=project_id, file_path=file_path)
+    key_param = CLOUD_TOOL_KEY_PARAM.get(mcp_name, "object_key")
+    try:
+        await call_mcp_tool(entry, "delete_object", {key_param: object_key}, timeout_s=20.0)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "[director] cloud storage delete via '%s' for key '%s' failed: %s",
+            mcp_name, object_key, exc,
+        )
 
 
 class DirectorManager:
@@ -1380,6 +1422,14 @@ class DirectorManager:
             except OSError:
                 logger.exception("[DirectorManager] 删除素材文件失败: %s", asset.file_path)
 
+        # 这份素材如果镜像过云存储（cloud_url 非空），后台尽力把云端那份也
+        # 删掉——同样是 fire-and-forget：失败只记日志，不影响删除操作本身
+        # 已经生效（见 delete_asset_from_cloud_storage 文档）。
+        if asset.cloud_url and asset.file_path:
+            asyncio.create_task(delete_asset_from_cloud_storage(
+                file_path=asset.file_path, asset_type=asset.type, project_id=project_id,
+            ))
+
         return {"project": project.to_dict(), "asset_counts": self._store.asset_counts()}
 
     async def _execute_edit_chat_tool_call(
@@ -2029,6 +2079,18 @@ class DirectorManager:
         effect_id = str(params.get("effect_id") or "").strip()
         raw_params = params.get("params")
         effect_params = dict(raw_params) if isinstance(raw_params, dict) else {}
+        # 时间线片段级入口传来的裁剪窗口（源文件内的秒数）——只对 video/audio
+        # 有意义，且必须成对出现，否则当成"整份素材"处理（素材库卡片入口、
+        # 或片段本身覆盖了整段源文件时都是这样）。两个字段都不传是最常见的
+        # 情况，不是异常。
+        raw_trim_in = params.get("trim_in")
+        raw_trim_out = params.get("trim_out")
+        trim_in = float(raw_trim_in) if isinstance(raw_trim_in, (int, float)) else None
+        trim_out = float(raw_trim_out) if isinstance(raw_trim_out, (int, float)) else None
+        if (trim_in is None) != (trim_out is None):
+            raise DirectorRpcError("INVALID_PARAMS", "trim_in / trim_out 必须同时提供或同时省略")
+        if trim_in is not None and trim_out is not None and trim_in >= trim_out:
+            raise DirectorRpcError("INVALID_PARAMS", "trim_in 必须小于 trim_out")
 
         if not (project_id and asset_id and effect_id):
             raise DirectorRpcError("INVALID_PARAMS", "缺少 project_id / asset_id / effect_id")
@@ -2048,6 +2110,10 @@ class DirectorManager:
             raise DirectorRpcError(
                 "NOT_SUPPORTED", f"特效「{effect.label}」不支持素材类型: {source_asset.type}"
             )
+        # 图片没有"源文件内的时间范围"这回事（trimIn/trimOut 在时间线上表示
+        # 的是展示时长，不是对一张静态图片做时间裁剪）——忽略，按整张图处理。
+        if source_asset.type == "image":
+            trim_in = trim_out = None
 
         try:
             job_id = await effects_submit_job(
@@ -2055,20 +2121,26 @@ class DirectorManager:
                 asset_type=source_asset.type,
                 effect=effect,
                 params=effect_params,
+                trim_in=trim_in,
+                trim_out=trim_out,
             )
         except EffectsWorkerError as exc:
             raise DirectorRpcError("GENERATION_FAILED", str(exc)) from None
 
+        asset_params: dict[str, Any] = {
+            "source_asset_id": source_asset.asset_id,
+            "effect_id": effect.effect_id,
+            "effect_params": effect_params,
+        }
+        if trim_in is not None and trim_out is not None:
+            asset_params["trim_in"] = trim_in
+            asset_params["trim_out"] = trim_out
         asset = DirectorAsset(
             asset_id=f"asset_{secrets.token_hex(4)}",
             type=source_asset.type,
             status="pending",
             prompt="",
-            params={
-                "source_asset_id": source_asset.asset_id,
-                "effect_id": effect.effect_id,
-                "effect_params": effect_params,
-            },
+            params=asset_params,
             job_id=job_id,
             name=f"{source_asset.name or source_asset.type} · {effect.label}",
         )
@@ -2103,9 +2175,7 @@ class DirectorManager:
                 project_id, asset_id, status="failed", error=status.get("error") or "特效处理失败"
             )
         elif status.get("status") == "ready":
-            effect_id = str((asset.params or {}).get("effect_id") or "")
-            effect = get_effect(effect_id)
-            ext = effect.output_ext if effect else "mp4"
+            ext = output_ext_for_asset_type(asset.type)
             dest_path = str(get_project_assets_dir(project_id) / f"{asset_id}.{ext}")
             try:
                 await effects_download_result(job_id, dest_path)
