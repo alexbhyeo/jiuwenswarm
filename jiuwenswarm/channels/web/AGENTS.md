@@ -152,6 +152,7 @@
 | `features/shareImageExport.tsx` | `share-image-export` | 长图导出独立渲染页 |
 | `components/ui/Select` | `ui-select` | 通用下拉选择控件 |
 | `features/director/lab` | `lab-process-node` | 实验室画布处理卡片(合并态/未生成态)、文字提示弹窗、历史切换条 |
+| `features/director/components/EffectsPanel` | `director-effects-panel` | 剪辑"特效"面板:效果选择列表、参数表单、应用按钮 |
 | `components/ui/HelpTips` | `ui-help-tips` | 通用"?"帮助提示按钮与自适应气泡 |
 | `features/designer` | `designer` | 设计功能页;工作流画布与节点;Director 对话;运行控制;素材与分镜 |
 | `features/rsi` | `rsi` | RSI 任务列表、创建、详情与优化过程画布 |

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useDirectorStore } from '../directorStore';
 import type { DirectorAsset, DirectorAssetDragPayload, DirectorProject } from '../types';
 import { DIRECTOR_ASSET_DRAG_MIME } from '../types';
+import { EffectsPanel } from './EffectsPanel';
 
 function dragAssetPayload(asset: DirectorAsset): DirectorAssetDragPayload | null {
   if (!asset.file_path) return null;
@@ -219,6 +220,13 @@ const trashIcon = (
   </svg>
 );
 
+const sparklesIcon = (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3v4M12 17v4M4.5 5.5l2.5 2.5M17 16l2.5 2.5M3 12h4M17 12h4M4.5 18.5 7 16M17 8l2.5-2.5" />
+    <circle cx="12" cy="12" r="2" />
+  </svg>
+);
+
 interface ProjectRowNameProps {
   project: DirectorProject;
   onRename: (name: string) => void;
@@ -305,12 +313,14 @@ interface AssetNameLabelProps {
   fallback: string;
   onRename: (name: string) => void;
   onDelete: () => void;
+  /** 仅 image/video/audio 素材传入——character（角色参考图）不支持特效处理。 */
+  onOpenEffects?: () => void;
 }
 
 /** 素材名称：默认展示 name||prompt；点击铅笔图标进入行内编辑，
  *  回车/失焦保存，Esc 取消。图片重命名后可在 composer 里用 "@名称" 引用。
  *  垃圾桶图标：二次确认后删除该素材（元数据 + 磁盘文件）。 */
-function AssetNameLabel({ asset, fallback, onRename, onDelete }: AssetNameLabelProps) {
+function AssetNameLabel({ asset, fallback, onRename, onDelete, onOpenEffects }: AssetNameLabelProps) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -346,6 +356,20 @@ function AssetNameLabel({ asset, fallback, onRename, onDelete }: AssetNameLabelP
   return (
     <div className="director-asset-name">
       <span className="director-asset-name-text">{displayName}</span>
+      {onOpenEffects && (
+        <button
+          type="button"
+          className="director-asset-rename-btn director-asset-effects-btn"
+          title={t('director.effects.button')}
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenEffects();
+          }}
+          data-testid="director-asset-effects-btn"
+        >
+          {sparklesIcon}
+        </button>
+      )}
       <button
         type="button"
         className="director-asset-rename-btn"
@@ -385,6 +409,7 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
   const uploadAsset = useDirectorStore((s) => s.uploadAsset);
   const uploading = useDirectorStore((s) => s.uploading);
   const uploadError = useDirectorStore((s) => s.uploadError);
+  const [effectsAsset, setEffectsAsset] = useState<DirectorAsset | null>(null);
 
   // 依次串行上传，避免多个文件几乎同时到达时各自独立的
   // director_state.json 读改写互相覆盖（同类问题见 director. 前缀无状态路由修复）。
@@ -531,6 +556,7 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
                       fallback={t('director.categories.video')}
                       onRename={(name) => renameAsset(selectedProject!.project_id, asset.asset_id, name)}
                       onDelete={() => deleteAsset(selectedProject!.project_id, asset.asset_id)}
+                      onOpenEffects={() => setEffectsAsset(asset)}
                     />
                     <div className="director-asset-time">{relativeTime(t, asset.updated_at)}</div>
                   </div>
@@ -582,6 +608,7 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
                       fallback={t('director.categories.image')}
                       onRename={(name) => renameAsset(selectedProject!.project_id, asset.asset_id, name)}
                       onDelete={() => deleteAsset(selectedProject!.project_id, asset.asset_id)}
+                      onOpenEffects={() => setEffectsAsset(asset)}
                     />
                     <div className="director-asset-time">{relativeTime(t, asset.updated_at)}</div>
                   </div>
@@ -629,6 +656,7 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
                       fallback={t('director.categories.audio')}
                       onRename={(name) => renameAsset(selectedProject!.project_id, asset.asset_id, name)}
                       onDelete={() => deleteAsset(selectedProject!.project_id, asset.asset_id)}
+                      onOpenEffects={() => setEffectsAsset(asset)}
                     />
                     <div className="director-asset-time">{relativeTime(t, asset.updated_at)}</div>
                   </div>
@@ -697,6 +725,13 @@ export function DirectorRail({ projects, selectedProject, onNewProject, onSelect
       <div className="director-rail-spacer" />
 
       <div className="director-rail-footer">{t('director.poweredBy')}</div>
+
+      <EffectsPanel
+        open={effectsAsset !== null}
+        projectId={selectedProject?.project_id ?? ''}
+        asset={effectsAsset}
+        onClose={() => setEffectsAsset(null)}
+      />
     </div>
   );
 }

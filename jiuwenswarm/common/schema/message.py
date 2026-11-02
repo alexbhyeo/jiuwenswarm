@@ -118,6 +118,9 @@ _ensure_req_method("DIRECTOR_EDIT_CHAT_SKILL_GET", "director.edit_chat.skill_get
 _ensure_req_method("DIRECTOR_EDIT_CHAT_SKILL_SET", "director.edit_chat.skill_set")
 _ensure_req_method("DIRECTOR_LAB_CANVAS_SAVE", "director.lab_canvas.save")
 _ensure_req_method("DIRECTOR_CLIP_COMPOSE", "director.clip.compose")
+_ensure_req_method("DIRECTOR_CLIP_EFFECTS_LIST", "director.clip.effects.list")
+_ensure_req_method("DIRECTOR_CLIP_EFFECT_APPLY", "director.clip.effect.apply")
+_ensure_req_method("DIRECTOR_CLIP_EFFECT_CHECK_STATUS", "director.clip.effect.check_status")
 
 __all__ = [
     "PROMPT_SUGGESTION_READY_EVENT",

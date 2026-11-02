@@ -1,16 +1,16 @@
 ---
 title: 设计文档索引
-author: alan_cheng
-author_email: chengshuo5@huawei.com
+author: alexbhyeo
+author_email: alexbhyeo@users.noreply.github.com
 generated: true
 ---
 
 <!-- 本文件由 .agents/skills/jw-design/scripts/generate_index.py 自动生成，请勿手改。重新生成：python .agents/skills/jw-design/scripts/generate_index.py -->
-<!-- generated-at: 2026-10-26T21:36+08:00 -->
+<!-- generated-at: 2026-11-01T22:33+08:00 -->
 
 # 设计文档索引 (INDEX)
 
-> 开发前 3 · 开发中 0 · 开发后 3 · 已否决 0
+> 开发前 4 · 开发中 0 · 开发后 3 · 已否决 0
 
 按模块目录分组，组内按生命周期展示；跨模块设计在各相关模块下列出，全局统计按文档去重。
 
@@ -20,10 +20,13 @@ generated: true
 |---|---|
 | [agent_teams](#module-1) | 1 |
 | [agent_teams/workflow](#module-2) | 3 |
-| [jiuwenswarm](#module-3) | 3 |
-| [jiuwenswarm/channels/web/frontend](#module-4) | 1 |
-| [jiuwenswarm/gateway/channel_manager/web](#module-5) | 1 |
-| [jiuwenswarm/observability](#module-6) | 1 |
+| [deploy](#module-3) | 1 |
+| [jiuwenswarm](#module-4) | 3 |
+| [jiuwenswarm/channels/web/frontend](#module-5) | 1 |
+| [jiuwenswarm/channels/web/frontend/src/features/director](#module-6) | 1 |
+| [jiuwenswarm/gateway/channel_manager/web](#module-7) | 1 |
+| [jiuwenswarm/observability](#module-8) | 1 |
+| [jiuwenswarm/server/runtime/director](#module-9) | 1 |
 
 <a id="module-1"></a>
 
@@ -49,6 +52,16 @@ generated: true
 
 <a id="module-3"></a>
 
+## deploy
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261101-2128-director-effectcraft-integration](proposals/D-20261101-2128-director-effectcraft-integration/design.md) | 剪辑特效接入 EffectCraft 设计方案 | draft | alexbhyeo | core | 2026-11-01 |
+
+<a id="module-4"></a>
+
 ## jiuwenswarm
 
 ### 开发后 (archive)
@@ -59,7 +72,7 @@ generated: true
 | [SDD-0010](archive/SDD-0010-jiuwen-tui-nested-workflow-and-budget-observability/design.md) | jiuwen TUI 嵌套 Workflow 与 Budget 可观测性 | shipped | @chenchunzhou | observability | 2026-08-06 |
 | [SDD-0028](archive/SDD-0028-swarmflow-verify-fork-observability/design.md) | swarmflow verify / fork 可观测与前端呈现 | shipped | @xiajing | observability | 2026-09-29 |
 
-<a id="module-4"></a>
+<a id="module-5"></a>
 
 ## jiuwenswarm/channels/web/frontend
 
@@ -69,7 +82,17 @@ generated: true
 |---|---|---|---|---|---|
 | [SDD-0026](proposals/SDD-0026-trajectory-observability-web-ui/design.md) | 轨迹观测前端：单 Agent、Subagent 与 Team 多 Agent 轨迹 UI | draft | @alan_cheng | observability | 2026-09-15 |
 
-<a id="module-5"></a>
+<a id="module-6"></a>
+
+## jiuwenswarm/channels/web/frontend/src/features/director
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261101-2128-director-effectcraft-integration](proposals/D-20261101-2128-director-effectcraft-integration/design.md) | 剪辑特效接入 EffectCraft 设计方案 | draft | alexbhyeo | core | 2026-11-01 |
+
+<a id="module-7"></a>
 
 ## jiuwenswarm/gateway/channel_manager/web
 
@@ -79,7 +102,7 @@ generated: true
 |---|---|---|---|---|---|
 | [SDD-0025](proposals/SDD-0025-trajectory-session-store-and-serving/design.md) | 轨迹数据面：会话级 SQLite 存储、实时变更提示与读取 API | draft | @alan_cheng | observability | 2026-09-15 |
 
-<a id="module-6"></a>
+<a id="module-8"></a>
 
 ## jiuwenswarm/observability
 
@@ -88,3 +111,13 @@ generated: true
 | ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
 |---|---|---|---|---|---|
 | [SDD-0025](proposals/SDD-0025-trajectory-session-store-and-serving/design.md) | 轨迹数据面：会话级 SQLite 存储、实时变更提示与读取 API | draft | @alan_cheng | observability | 2026-09-15 |
+
+<a id="module-9"></a>
+
+## jiuwenswarm/server/runtime/director
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261101-2128-director-effectcraft-integration](proposals/D-20261101-2128-director-effectcraft-integration/design.md) | 剪辑特效接入 EffectCraft 设计方案 | draft | alexbhyeo | core | 2026-11-01 |

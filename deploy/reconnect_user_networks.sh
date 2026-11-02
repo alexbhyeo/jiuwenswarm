@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Reconnect the primary `app` container to every provisioned user's
-# dedicated network (jiuwenswarm_user_<username>_net).
+# dedicated network (jiuwenswarm_user_<username>_net), and backfill each
+# user's own container onto the shared `effects` network (effects-worker,
+# 剪辑"特效") if it isn't on it yet - covers users provisioned before that
+# feature existed, not just the post-redeploy `app` case below.
 #
 # REQUIRED after any redeploy/recreate of the `app` service - e.g.
 # `docker compose up -d --build app`, or anything else that replaces that
@@ -48,6 +51,12 @@ while IFS= read -r USERNAME; do
     echo "  + ${USERNAME}: connected app to ${NETWORK_NAME}"
   else
     echo "  = ${USERNAME}: app already connected to ${NETWORK_NAME}"
+  fi
+  USER_CONTAINER="jiuwenswarm-user-${USERNAME}"
+  if docker network connect effects "${USER_CONTAINER}" 2>/dev/null; then
+    echo "  + ${USERNAME}: connected ${USER_CONTAINER} to effects"
+  else
+    echo "  = ${USERNAME}: ${USER_CONTAINER} already connected to effects (or container missing)"
   fi
 done <<< "$USERNAMES"
 

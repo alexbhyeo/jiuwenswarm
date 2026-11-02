@@ -56,6 +56,14 @@ from jiuwenswarm.server.runtime.director.director_clip_compose import (
     compose_timeline,
     parse_tracks as compose_parse_tracks,
 )
+from jiuwenswarm.server.runtime.director.director_effects import (
+    EffectsWorkerError,
+    catalog_to_dict,
+    download_result as effects_download_result,
+    get_effect,
+    poll_job as effects_poll_job,
+    submit_job as effects_submit_job,
+)
 from jiuwenswarm.server.runtime.director.director_frame_extract import extract_frame
 from jiuwenswarm.server.runtime.director.director_skills import (
     get_assistant_skill_config,
@@ -2003,6 +2011,127 @@ class DirectorManager:
             file_path=asset.file_path, asset_type=asset.type,
         ))
         return {"project": project.to_dict(), "asset_id": asset.asset_id}
+
+    async def handle_director_clip_effects_list(self, params: dict) -> dict:
+        """返回 v1 精选特效目录（静态数据，不依赖项目/素材状态）。"""
+        return {"effects": catalog_to_dict()}
+
+    async def handle_director_clip_effect_apply(self, params: dict) -> dict:
+        """对一个已就绪素材应用一个特效，交给 effects-worker 异步处理。
+
+        与 handle_director_generate 同构：立即追加一条 pending 态的新
+        DirectorAsset（带 job_id），由前端像生成任务一样轮询
+        handle_director_clip_effect_check_status；原素材的 file_path 不变——
+        特效处理永远产出新素材，不覆盖源文件（见设计文档 D-04）。
+        """
+        project_id = str(params.get("project_id") or "").strip()
+        asset_id = str(params.get("asset_id") or "").strip()
+        effect_id = str(params.get("effect_id") or "").strip()
+        raw_params = params.get("params")
+        effect_params = dict(raw_params) if isinstance(raw_params, dict) else {}
+
+        if not (project_id and asset_id and effect_id):
+            raise DirectorRpcError("INVALID_PARAMS", "缺少 project_id / asset_id / effect_id")
+
+        project = self._store.get_project(project_id)
+        if project is None:
+            raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")
+
+        source_asset = next((a for a in project.assets if a.asset_id == asset_id), None)
+        if source_asset is None or source_asset.status != "ready" or not source_asset.file_path:
+            raise DirectorRpcError("ASSET_NOT_READY", f"素材不存在或未就绪: {asset_id}")
+
+        effect = get_effect(effect_id)
+        if effect is None:
+            raise DirectorRpcError("NOT_SUPPORTED", f"暂不支持的特效: {effect_id}")
+        if source_asset.type not in effect.asset_types:
+            raise DirectorRpcError(
+                "NOT_SUPPORTED", f"特效「{effect.label}」不支持素材类型: {source_asset.type}"
+            )
+
+        try:
+            job_id = await effects_submit_job(
+                file_path=source_asset.file_path,
+                asset_type=source_asset.type,
+                effect=effect,
+                params=effect_params,
+            )
+        except EffectsWorkerError as exc:
+            raise DirectorRpcError("GENERATION_FAILED", str(exc)) from None
+
+        asset = DirectorAsset(
+            asset_id=f"asset_{secrets.token_hex(4)}",
+            type=source_asset.type,
+            status="pending",
+            prompt="",
+            params={
+                "source_asset_id": source_asset.asset_id,
+                "effect_id": effect.effect_id,
+                "effect_params": effect_params,
+            },
+            job_id=job_id,
+            name=f"{source_asset.name or source_asset.type} · {effect.label}",
+        )
+        project = self._store.append_asset(project_id, asset)
+        return {
+            "project": project.to_dict(),
+            "asset_id": asset.asset_id,
+            "asset_counts": self._store.asset_counts(),
+        }
+
+    async def handle_director_clip_effect_check_status(self, params: dict) -> dict:
+        project_id = str(params.get("project_id") or "").strip()
+        asset_id = str(params.get("asset_id") or "").strip()
+        job_id = str(params.get("job_id") or "").strip()
+        if not (project_id and asset_id and job_id):
+            raise DirectorRpcError("INVALID_PARAMS", "缺少 project_id / asset_id / job_id")
+
+        project = self._store.get_project(project_id)
+        if project is None:
+            raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")
+        asset = next((a for a in project.assets if a.asset_id == asset_id), None)
+        if asset is None:
+            raise DirectorRpcError("ASSET_NOT_FOUND", f"未找到素材: {asset_id}")
+
+        try:
+            status = await effects_poll_job(job_id)
+        except EffectsWorkerError as exc:
+            status = {"status": "failed", "error": str(exc)}
+
+        if status.get("status") == "failed":
+            project = self._store.update_asset(
+                project_id, asset_id, status="failed", error=status.get("error") or "特效处理失败"
+            )
+        elif status.get("status") == "ready":
+            effect_id = str((asset.params or {}).get("effect_id") or "")
+            effect = get_effect(effect_id)
+            ext = effect.output_ext if effect else "mp4"
+            dest_path = str(get_project_assets_dir(project_id) / f"{asset_id}.{ext}")
+            try:
+                await effects_download_result(job_id, dest_path)
+            except Exception as exc:  # noqa: BLE001
+                project = self._store.update_asset(
+                    project_id, asset_id, status="failed", error=f"下载特效产物失败: {exc}"
+                )
+            else:
+                project = self._store.update_asset(
+                    project_id, asset_id, status="ready", file_path=dest_path
+                )
+                asyncio.create_task(self._schedule_cloud_mirror(
+                    project_id=project_id, asset_id=asset_id,
+                    file_path=dest_path, asset_type=asset.type,
+                ))
+        # "queued"/"running"：任务仍在进行，asset 状态保持不变，仅原样返回给
+        # 前端继续轮询，与 handle_director_generate_check_status 同构。
+        worker_status = str(status.get("status") or "")
+        reported_status = "pending" if worker_status in ("queued", "running") else worker_status
+
+        return {
+            "project": project.to_dict(),
+            "asset_id": asset_id,
+            "status": reported_status,
+            "asset_counts": self._store.asset_counts(),
+        }
 
     async def handle_director_edit_chat_skill_get(self, params: dict) -> dict:
         """剪辑助手的**默认（基础）技能**状态：当前生效的是哪一个 + 可切换的候选。

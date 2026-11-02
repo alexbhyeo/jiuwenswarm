@@ -5,7 +5,7 @@ import { create } from 'zustand';
 import i18n from '../../i18n';
 import { DEFAULT_AUDIO_VOICE } from './audioVoices';
 import { DEFAULT_AUDIO_STYLE } from './audioStyles';
-import type { DirectorSkillOption, TimelineClipPayload } from './directorApi';
+import type { DirectorSkillOption, EffectDef, TimelineClipPayload } from './directorApi';
 import type {
   ComposerMode,
   ComposerParams,
@@ -31,6 +31,8 @@ interface PendingGeneration {
   jobId: string;
 }
 
+type PendingEffect = PendingGeneration;
+
 interface DirectorState {
   activeTab: DirectorTabKey;
   // 左侧"导演模式"面板（项目列表/素材库）的折叠态——点击全局导航栏的
@@ -51,6 +53,20 @@ interface DirectorState {
   generating: boolean;
   generateError: string | null;
   pendingGeneration: PendingGeneration | null;
+
+  // 剪辑"特效"：目录是静态数据，拉一次缓存住即可（与 installedSkills 同理）。
+  effectCatalog: EffectDef[];
+  effectCatalogLoading: boolean;
+  loadEffectCatalog: (force?: boolean) => Promise<void>;
+  applyingEffect: boolean;
+  effectError: string | null;
+  pendingEffect: PendingEffect | null;
+  applyEffect: (
+    projectId: string,
+    assetId: string,
+    effectId: string,
+    effectParams: Record<string, unknown>
+  ) => Promise<void>;
 
   setActiveTab: (tab: DirectorTabKey) => void;
   toggleRailCollapsed: () => void;
@@ -136,6 +152,17 @@ function stopPolling(): void {
   }
 }
 
+// 特效任务用独立的定时器句柄——生成（视频/图片/音频）和特效处理是两条独立
+// 的异步操作，用户可能前一个还没轮询完就发起了后一个，不能共用一个定时器。
+let effectPollTimer: ReturnType<typeof setTimeout> | null = null;
+
+function stopEffectPolling(): void {
+  if (effectPollTimer) {
+    clearTimeout(effectPollTimer);
+    effectPollTimer = null;
+  }
+}
+
 export const useDirectorStore = create<DirectorState>((set, get) => ({
   activeTab: 'create',
   railCollapsed: false,
@@ -152,6 +179,12 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
   generating: false,
   generateError: null,
   pendingGeneration: null,
+
+  effectCatalog: [],
+  effectCatalogLoading: false,
+  applyingEffect: false,
+  effectError: null,
+  pendingEffect: null,
 
   uploading: false,
   uploadError: null,
@@ -193,10 +226,27 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
       // 生成的那次调用会排队轮询，导致刷新后卡在"生成中"永远不再更新。
       if (!get().pendingGeneration) {
         for (const project of projects) {
-          const pendingAsset = project.assets.find((a) => a.status === 'pending' && a.job_id);
+          // params.effect_id 存在的 pending 素材是特效任务（下面单独恢复），
+          // 不能被这里当成生成任务轮询——两者共用同一套 pending/job_id 字段，
+          // 靠这个字段区分谁是谁。
+          const pendingAsset = project.assets.find(
+            (a) => a.status === 'pending' && a.job_id && !a.params?.effect_id
+          );
           if (pendingAsset?.job_id) {
             set({ pendingGeneration: { projectId: project.project_id, assetId: pendingAsset.asset_id, jobId: pendingAsset.job_id } });
             schedulePoll(get, set);
+            break;
+          }
+        }
+      }
+      if (!get().pendingEffect) {
+        for (const project of projects) {
+          const pendingAsset = project.assets.find(
+            (a) => a.status === 'pending' && a.job_id && a.params?.effect_id
+          );
+          if (pendingAsset?.job_id) {
+            set({ pendingEffect: { projectId: project.project_id, assetId: pendingAsset.asset_id, jobId: pendingAsset.job_id } });
+            scheduleEffectPoll(get, set);
             break;
           }
         }
@@ -313,6 +363,47 @@ export const useDirectorStore = create<DirectorState>((set, get) => ({
     } catch (e) {
       const message = e instanceof DirectorApiError ? e.message : e instanceof Error ? e.message : String(e);
       set({ generating: false, generateError: message });
+    }
+  },
+
+  loadEffectCatalog: async (force = false) => {
+    if (!force && get().effectCatalog.length > 0) return;
+    set({ effectCatalogLoading: true });
+    try {
+      const { directorClipEffectsList } = await import('./directorApi');
+      const effects = await directorClipEffectsList();
+      set({ effectCatalog: effects, effectCatalogLoading: false });
+    } catch (e) {
+      const message = e instanceof DirectorApiError ? e.message : e instanceof Error ? e.message : String(e);
+      set({ effectCatalogLoading: false, effectError: message });
+    }
+  },
+
+  applyEffect: async (projectId, assetId, effectId, effectParams) => {
+    stopEffectPolling();
+    set({ applyingEffect: true, effectError: null, pendingEffect: null });
+    try {
+      const { directorClipEffectApply } = await import('./directorApi');
+      const { project, assetId: newAssetId, assetCounts } = await directorClipEffectApply(
+        projectId,
+        assetId,
+        effectId,
+        effectParams
+      );
+      set((s) => ({
+        projects: s.projects.map((p) => (p.project_id === project.project_id ? project : p)),
+        assetCounts,
+      }));
+      const asset = project.assets.find((a) => a.asset_id === newAssetId);
+      if (asset?.status === 'pending' && asset.job_id) {
+        set({ applyingEffect: false, pendingEffect: { projectId, assetId: newAssetId, jobId: asset.job_id } });
+        scheduleEffectPoll(get, set);
+      } else {
+        set({ applyingEffect: false });
+      }
+    } catch (e) {
+      const message = e instanceof DirectorApiError ? e.message : e instanceof Error ? e.message : String(e);
+      set({ applyingEffect: false, effectError: message });
     }
   },
 
@@ -519,6 +610,36 @@ function schedulePoll(
     } catch (e) {
       const message = e instanceof DirectorApiError ? e.message : e instanceof Error ? e.message : String(e);
       set({ pendingGeneration: null, generateError: message });
+    }
+  }, 5000);
+}
+
+function scheduleEffectPoll(
+  get: () => DirectorState,
+  set: (partial: Partial<DirectorState> | ((state: DirectorState) => Partial<DirectorState>)) => void
+): void {
+  effectPollTimer = setTimeout(async () => {
+    const pending = get().pendingEffect;
+    if (!pending) return;
+    try {
+      const { directorClipEffectCheckStatus } = await import('./directorApi');
+      const { project, status, assetCounts } = await directorClipEffectCheckStatus(
+        pending.projectId,
+        pending.assetId,
+        pending.jobId
+      );
+      set((s) => ({
+        projects: s.projects.map((p) => (p.project_id === project.project_id ? project : p)),
+        assetCounts,
+      }));
+      if (status === 'pending') {
+        scheduleEffectPoll(get, set);
+      } else {
+        set({ pendingEffect: null });
+      }
+    } catch (e) {
+      const message = e instanceof DirectorApiError ? e.message : e instanceof Error ? e.message : String(e);
+      set({ pendingEffect: null, effectError: message });
     }
   }, 5000);
 }

@@ -1347,6 +1347,9 @@ _DIRECTOR_ROUTES: dict[ReqMethod, str] = {
     ReqMethod.DIRECTOR_EDIT_CHAT_SKILL_SET: "handle_director_edit_chat_skill_set",
     ReqMethod.DIRECTOR_LAB_CANVAS_SAVE: "handle_director_lab_canvas_save",
     ReqMethod.DIRECTOR_CLIP_COMPOSE: "handle_director_clip_compose",
+    ReqMethod.DIRECTOR_CLIP_EFFECTS_LIST: "handle_director_clip_effects_list",
+    ReqMethod.DIRECTOR_CLIP_EFFECT_APPLY: "handle_director_clip_effect_apply",
+    ReqMethod.DIRECTOR_CLIP_EFFECT_CHECK_STATUS: "handle_director_clip_effect_check_status",
 }
 
 _SESSION_ASSET_ROUTES: dict[ReqMethod, str] = {

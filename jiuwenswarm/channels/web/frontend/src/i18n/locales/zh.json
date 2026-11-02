@@ -5908,6 +5908,81 @@
       "skillSetDefaultBusy": "切换中…",
       "minimizeHint": "最小化剪辑助手",
       "restoreHint": "展开剪辑助手"
+    },
+    "effects": {
+      "button": "特效",
+      "panelTitle": "应用特效",
+      "sourceAsset": "作用于：{{name}}",
+      "apply": "应用",
+      "applying": "正在处理…",
+      "applyFailed": "特效处理失败：{{message}}",
+      "noEffects": "该素材类型暂无可用特效",
+      "lineage": "由「{{source}}」应用「{{effect}}」生成",
+      "catalog": {
+        "blur_gaussian": {
+          "label": "高斯模糊",
+          "params": {
+            "blurriness": "模糊强度"
+          }
+        },
+        "stylize_glow": {
+          "label": "发光",
+          "params": {
+            "threshold": "阈值",
+            "radius": "半径",
+            "intensity": "强度"
+          }
+        },
+        "sharpen": {
+          "label": "锐化",
+          "params": {
+            "amount": "强度"
+          }
+        },
+        "color_hue_sat": {
+          "label": "色相/饱和度",
+          "params": {
+            "hue": "色相",
+            "saturation": "饱和度",
+            "lightness": "明度"
+          }
+        },
+        "time_echo": {
+          "label": "回声/重影",
+          "params": {
+            "echoTime": "回声间隔(秒)",
+            "numberOfEchoes": "回声数量",
+            "decay": "衰减"
+          }
+        },
+        "time_timewarp": {
+          "label": "变速",
+          "params": {
+            "speed": "速度(%)"
+          }
+        },
+        "key_keylight": {
+          "label": "抠像",
+          "params": {
+            "screenMatte/clipBlack": "黑场裁切",
+            "screenMatte/clipWhite": "白场裁切"
+          }
+        },
+        "audio_reverb": {
+          "label": "混响",
+          "params": {
+            "reverbTime": "混响时长",
+            "wetOut": "湿声比例"
+          }
+        },
+        "audio_eq": {
+          "label": "均衡器",
+          "params": {
+            "band1Frequency": "频率(Hz)",
+            "band1BoostCut": "增益(dB)"
+          }
+        }
+      }
     }
   }
 }

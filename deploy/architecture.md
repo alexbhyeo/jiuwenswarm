@@ -100,6 +100,7 @@ graph LR
 | `frontend` | `nginx`, `app`, `certbot` | nginx only ever needs to reach the primary `app`. It can never reach `postgres` or any user's backend, even if compromised. |
 | `db` | `app`, `postgres` | Only the primary app's login gate talks to Postgres. Nginx and user backends are not on this network at all. |
 | `jiuwenswarm_user_<username>_net` (one per user) | `app`, exactly that one `jiuwenswarm-user-<username>` | Created by `deploy/provision_user.sh` at provisioning time. Each has exactly two members, so one user's backend can never reach another's - not just application-level isolation, they're not even on the same network. |
+| `effects` | `app`, `effects-worker`, every user's `jiuwenswarm-user-<username>` container | Declared in `docker-compose.yml` so `app` gets it automatically on every redeploy (unlike the per-user networks above); each user's own container is connected to it explicitly by `deploy/provision_user.sh`. `effects-worker` drives a locally-built `effectcraft-cli` binary (see `deploy/effects-worker/build.sh` - the effectcraft repo itself is never modified) to apply "剪辑" (Director edit mode) effects; it does zero authentication of its own, which is safe only because nginx and postgres are never members of this network and effects-worker is never given a `ports:` mapping. Isolation between jobs/users is structural (one OS process + one temp dir per job, deleted after use), not a permission check - see `jiuwenswarm/services/effects_worker/jobs.py` and the design doc `.agents/agent-docs/designs/proposals/D-20261101-2128-director-effectcraft-integration/design.md`. |
 
 **Threats this closes**:
 1. A remote vulnerability in `nginx` or the primary `app` (reached over the
@@ -261,7 +262,10 @@ rm jiuwenswarm_user_<username>_workspace`, then delete their `app_users` row.
 |---|---|
 | `docker-compose.yml` | Primary stack: `postgres`, `app`, `nginx`, `certbot`, and the `frontend`/`db` network topology (per-user networks are created dynamically, not declared here - see §2). |
 | `deploy/provision_user.sh` | Creates one new isolated user end-to-end (§5). |
-| `deploy/reconnect_user_networks.sh` | Re-attaches `app` to every user's network after an `app` redeploy (§2, §5). |
+| `deploy/reconnect_user_networks.sh` | Re-attaches `app` to every user's network after an `app` redeploy, and backfills each user's own container onto `effects` (§2, §5). |
+| `deploy/effects-worker/Dockerfile`, `deploy/effects-worker/build.sh` | Builds `effects-worker` - a locally-built `effectcraft-cli` binary copied in by `build.sh`, never cloned/built inside the image (§2). |
+| `jiuwenswarm/services/effects_worker/` | `effects-worker`'s own code: job queue (`jobs.py`), `effectcraft-cli` subprocess driver (`cli_driver.py`), HTTP API (`main.py`). |
+| `jiuwenswarm/server/runtime/director/director_effects.py` | The v1 curated effect catalog and the `app`-side HTTP client to `effects-worker`, used by `director_manager.py`'s `handle_director_clip_effect_*` RPCs. |
 | `deploy/nginx/conf.d/app.conf`, `deploy/nginx/app-ssl.conf` | nginx config (bootstrap HTTP-only, then swapped to the TLS version post-certbot). |
 | `deploy/init-letsencrypt.sh` | One-time cert bootstrap for the primary domain. |
 | `jiuwenswarm/channels/web/simple_auth.py` | `app_users` table, `create_user()`, session creation/lookup, password hashing. |

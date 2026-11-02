@@ -4,6 +4,7 @@ import { useDirectorStore } from '../directorStore';
 import { DIRECTOR_ASSET_DRAG_MIME } from '../types';
 import type { DirectorAssetDragPayload } from '../types';
 import { DirectorTabs } from './DirectorTabs';
+import { EffectsPanel } from './EffectsPanel';
 
 const saveIcon = (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
@@ -104,6 +105,13 @@ const captureIcon = (
 const trashIcon = (
   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round">
     <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6" />
+  </svg>
+);
+
+const sparklesIcon = (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3v4M12 17v4M4.5 5.5l2.5 2.5M17 16l2.5 2.5M3 12h4M17 12h4M4.5 18.5 7 16M17 8l2.5-2.5" />
+    <circle cx="12" cy="12" r="2" />
   </svg>
 );
 
@@ -313,9 +321,16 @@ export function EditTabShell() {
   const activeTab = useDirectorStore((s) => s.activeTab);
   const setActiveTab = useDirectorStore((s) => s.setActiveTab);
   const selectedProjectId = useDirectorStore((s) => s.selectedProjectId);
+  const projects = useDirectorStore((s) => s.projects);
+  const selectedProject = projects.find((p) => p.project_id === selectedProjectId) ?? null;
   const uploadAsset = useDirectorStore((s) => s.uploadAsset);
   const composeTimeline = useDirectorStore((s) => s.composeTimeline);
   const composing = useDirectorStore((s) => s.composing);
+  // 剪辑"特效"：时间线片段本身没有素材状态/类型以外的完整信息，按
+  // clip.assetId 反查当前项目的 DirectorAsset 再交给 EffectsPanel——与
+  // DirectorRail 的资产卡片走同一个面板/RPC，只是入口不同。
+  const [effectsClipAssetId, setEffectsClipAssetId] = useState<string | null>(null);
+  const effectsAsset = selectedProject?.assets.find((a) => a.asset_id === effectsClipAssetId) ?? null;
 
   // tracks[0] 是主轨——唯一没有"轨道 N"标签的那条，但不再是唯一参与播放的
   // 轨道：所有轨道都会参与播放，播放优先级按轨道从上到下（见 locateActive）。
@@ -1136,6 +1151,18 @@ export function EditTabShell() {
           ) : null}
           <button
             type="button"
+            className="director-edit-clip-effects"
+            title={t('director.effects.button')}
+            onClick={(e) => {
+              e.stopPropagation();
+              setEffectsClipAssetId(clip.assetId);
+            }}
+            data-testid="director-edit-clip-effects"
+          >
+            {sparklesIcon}
+          </button>
+          <button
+            type="button"
             className="director-edit-clip-delete"
             title={t('director.edit.deleteClip')}
             onClick={(e) => {
@@ -1455,6 +1482,13 @@ export function EditTabShell() {
           </button>
         </div>
       </div>
+
+      <EffectsPanel
+        open={effectsClipAssetId !== null}
+        projectId={selectedProjectId ?? ''}
+        asset={effectsAsset}
+        onClose={() => setEffectsClipAssetId(null)}
+      />
     </div>
   );
 }

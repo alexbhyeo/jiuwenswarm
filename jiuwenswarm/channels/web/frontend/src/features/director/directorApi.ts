@@ -32,6 +32,9 @@ const METHOD = {
   editChatSkillSet: 'director.edit_chat.skill_set',
   labCanvasSave: 'director.lab_canvas.save',
   clipCompose: 'director.clip.compose',
+  clipEffectsList: 'director.clip.effects.list',
+  clipEffectApply: 'director.clip.effect.apply',
+  clipEffectCheckStatus: 'director.clip.effect.check_status',
 } as const;
 
 // 剪辑对话每轮都要把该项目已有的历史消息整份重发一遍给模型（无服务端会话
@@ -437,6 +440,110 @@ export function directorClipCompose(
     { timeoutMs: COMPOSE_TIMEOUT_MS }
   )
     .then(normalizeProjectResult)
+    .catch((err) => {
+      throw toDirectorError(err);
+    });
+}
+
+// 剪辑"特效"：对一个已就绪素材应用一个 v1 精选特效，产出派生素材——
+// 与 generate 同构的 submit → pending(job_id) → check_status 轮询流程
+// （director_manager.handle_director_clip_effect_apply/check_status）。
+
+export interface EffectParamOption {
+  value: string;
+  label: string;
+}
+
+export interface EffectParamDef {
+  key: string;
+  label: string;
+  kind: 'number' | 'select';
+  default: unknown;
+  min: number | null;
+  max: number | null;
+  options: EffectParamOption[];
+}
+
+export interface EffectDef {
+  effectId: string;
+  label: string;
+  group: string;
+  assetTypes: Array<'image' | 'video' | 'audio'>;
+  params: EffectParamDef[];
+}
+
+function normalizeEffectCatalog(raw: unknown): EffectDef[] {
+  const payload = raw as {
+    effects?: Array<{
+      effect_id: string;
+      label: string;
+      group: string;
+      asset_types: Array<'image' | 'video' | 'audio'>;
+      params: Array<{
+        key: string;
+        label: string;
+        kind: 'number' | 'select';
+        default: unknown;
+        min: number | null;
+        max: number | null;
+        options: EffectParamOption[];
+      }>;
+    }>;
+  };
+  return (payload.effects ?? []).map((e) => ({
+    effectId: e.effect_id,
+    label: e.label,
+    group: e.group,
+    assetTypes: e.asset_types,
+    params: e.params.map((p) => ({
+      key: p.key,
+      label: p.label,
+      kind: p.kind,
+      default: p.default,
+      min: p.min,
+      max: p.max,
+      options: p.options,
+    })),
+  }));
+}
+
+export function directorClipEffectsList(): Promise<EffectDef[]> {
+  return webRequest<unknown>(METHOD.clipEffectsList, {})
+    .then(normalizeEffectCatalog)
+    .catch((err) => {
+      throw toDirectorError(err);
+    });
+}
+
+export function directorClipEffectApply(
+  projectId: string,
+  assetId: string,
+  effectId: string,
+  effectParams: Record<string, unknown>
+): Promise<GenerateResult> {
+  return webRequest<unknown>(METHOD.clipEffectApply, {
+    project_id: projectId,
+    asset_id: assetId,
+    effect_id: effectId,
+    params: effectParams,
+  })
+    .then(normalizeGenerateResult)
+    .catch((err) => {
+      throw toDirectorError(err);
+    });
+}
+
+export function directorClipEffectCheckStatus(
+  projectId: string,
+  assetId: string,
+  jobId: string
+): Promise<CheckStatusResult> {
+  return webRequest<unknown>(METHOD.clipEffectCheckStatus, {
+    project_id: projectId,
+    asset_id: assetId,
+    job_id: jobId,
+  })
+    .then(normalizeCheckStatusResult)
     .catch((err) => {
       throw toDirectorError(err);
     });

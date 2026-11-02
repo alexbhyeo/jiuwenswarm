@@ -72,6 +72,14 @@ docker run -d \
   -e JIUWENSWARM_USER_ID="${USERNAME}" \
   jiuwenswarm-app >/dev/null
 
+echo "==> Connecting ${CONTAINER_NAME} to the shared effects network ..."
+# effects-worker (剪辑"特效") is a shared service, same tier as postgres -
+# this user's container needs to reach it the same way `app` does (`app`
+# declares `effects` in docker-compose.yml and gets it automatically on
+# every `docker compose up`; this container is a plain `docker run`, so it
+# needs an explicit connect, same as its own per-user network above).
+docker network connect effects "${CONTAINER_NAME}"
+
 echo "==> Waiting for ${CONTAINER_NAME} to come up ..."
 ready=0
 for _ in $(seq 1 30); do

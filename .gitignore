@@ -50,6 +50,11 @@ pnpm-debug.log*
 deploy/nginx/certbot-www/
 deploy/nginx/letsencrypt/
 
+# deploy/effects-worker/build.sh output - a locally-built binary from the
+# separate effectcraft repo, not source, never committed (see build.sh and
+# deploy/architecture.md).
+deploy/effects-worker/bin/
+
 # Apple code signing & notarization secrets — NEVER commit (contains private keys!)
 *.p12
 *.cer

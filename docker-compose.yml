@@ -40,6 +40,7 @@ services:
     networks:
       - frontend
       - db
+      - effects
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,10 +84,29 @@ services:
       AUDIO_GEN_API_BASE: ${AUDIO_GEN_API_BASE:-}
       AUDIO_GEN_API_KEY: ${AUDIO_GEN_API_KEY:-}
       AUDIO_GEN_MODEL_NAME: ${AUDIO_GEN_MODEL_NAME:-}
+      # 剪辑"特效"：驱动 effectcraft-cli 的共享服务，Docker 内网域名直连，
+      # 不是密钥（见 jiuwenswarm/server/runtime/director/director_effects.py）。
+      EFFECTS_WORKER_URL: http://effects-worker:8088
     volumes:
       - app_workspace:/home/app/.jiuwenswarm
     expose:
       - "5173"
+
+  effects-worker:
+    build:
+      context: .
+      dockerfile: deploy/effects-worker/Dockerfile
+    container_name: jiuwenswarm-effects-worker
+    restart: unless-stopped
+    # 不挂 ports:，只接 effects 网络——只有 app 和各用户容器能连到它，
+    # 不做任何身份校验是安全的前提就在这里（见 deploy/architecture.md）。
+    networks:
+      - effects
+    environment:
+      EFFECTS_WORKER_CONCURRENCY: ${EFFECTS_WORKER_CONCURRENCY:-2}
+      EFFECTS_WORKER_JOB_TIMEOUT_SECONDS: ${EFFECTS_WORKER_JOB_TIMEOUT_SECONDS:-600}
+    expose:
+      - "8088"
 
   nginx:
     image: nginx:1.27-alpine
@@ -128,6 +148,13 @@ networks:
   # deploy/architecture.md. Each one has exactly two members: `app` and that
   # one user's backend container, so user backends can never reach each
   # other, and nothing but `app` can ever reach any of them.
+  # app <-> effects-worker, plus every per-user container (connected
+  # imperatively by deploy/provision_user.sh, same pattern as the per-user
+  # networks above - a static per-user list here would mean redeploying for
+  # every new user). nginx and postgres are never members, so effects-worker
+  # doing zero authentication of its own is safe by network topology alone -
+  # see deploy/architecture.md.
+  effects:
 
 volumes:
   pg_data:

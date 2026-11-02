@@ -5911,6 +5911,81 @@
       "skillSetDefaultBusy": "Switching…",
       "minimizeHint": "Minimize edit assistant",
       "restoreHint": "Restore edit assistant"
+    },
+    "effects": {
+      "button": "Effects",
+      "panelTitle": "Apply effect",
+      "sourceAsset": "Applies to: {{name}}",
+      "apply": "Apply",
+      "applying": "Processing…",
+      "applyFailed": "Effect failed: {{message}}",
+      "noEffects": "No effects available for this asset type",
+      "lineage": "Derived from “{{source}}” via “{{effect}}”",
+      "catalog": {
+        "blur_gaussian": {
+          "label": "Gaussian Blur",
+          "params": {
+            "blurriness": "Blurriness"
+          }
+        },
+        "stylize_glow": {
+          "label": "Glow",
+          "params": {
+            "threshold": "Threshold",
+            "radius": "Radius",
+            "intensity": "Intensity"
+          }
+        },
+        "sharpen": {
+          "label": "Sharpen",
+          "params": {
+            "amount": "Amount"
+          }
+        },
+        "color_hue_sat": {
+          "label": "Hue/Saturation",
+          "params": {
+            "hue": "Hue",
+            "saturation": "Saturation",
+            "lightness": "Lightness"
+          }
+        },
+        "time_echo": {
+          "label": "Echo",
+          "params": {
+            "echoTime": "Echo time (s)",
+            "numberOfEchoes": "Number of echoes",
+            "decay": "Decay"
+          }
+        },
+        "time_timewarp": {
+          "label": "Timewarp",
+          "params": {
+            "speed": "Speed (%)"
+          }
+        },
+        "key_keylight": {
+          "label": "Keylight",
+          "params": {
+            "screenMatte/clipBlack": "Clip black",
+            "screenMatte/clipWhite": "Clip white"
+          }
+        },
+        "audio_reverb": {
+          "label": "Reverb",
+          "params": {
+            "reverbTime": "Reverb time",
+            "wetOut": "Wet amount"
+          }
+        },
+        "audio_eq": {
+          "label": "Parametric EQ",
+          "params": {
+            "band1Frequency": "Frequency (Hz)",
+            "band1BoostCut": "Gain (dB)"
+          }
+        }
+      }
     }
   }
 }

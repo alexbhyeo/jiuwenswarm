@@ -1,0 +1,137 @@
+.effects-panel-dialog {
+  width: min(480px, calc(100vw - 32px));
+}
+
+.effects-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: min(80vh, 640px);
+}
+
+.effects-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px 24px 8px;
+}
+
+.effects-panel__header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 28px;
+}
+
+.effects-panel__close {
+  display: inline-flex;
+  flex: 0 0 32px;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--color-settings-text-secondary);
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.effects-panel__close svg {
+  width: 20px;
+  height: 20px;
+}
+
+.effects-panel__close:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  background: var(--color-sidebar-nav-hover);
+}
+
+.effects-panel__source {
+  margin: 0;
+  padding: 0 24px 12px;
+  font-size: 13px;
+  color: var(--color-settings-text-secondary);
+}
+
+.effects-panel__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 16px;
+  padding: 0 24px 16px;
+  overflow-y: auto;
+}
+
+.effects-panel__empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-settings-text-secondary);
+}
+
+.effects-panel__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.effects-panel__effect-btn {
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-default);
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.effects-panel__effect-btn[aria-pressed='true'] {
+  color: var(--color-text-on-accent);
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+
+.effects-panel__params {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.effects-panel__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.effects-panel__field label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--color-settings-text-secondary);
+}
+
+.effects-panel__field-value {
+  color: var(--color-text-primary);
+}
+
+.effects-panel__field input[type='range'] {
+  width: 100%;
+}
+
+.effects-panel__error {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--color-feedback-danger);
+  border-radius: 8px;
+  background: var(--color-sidebar-nav-hover);
+}
+
+.effects-panel__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 24px 20px;
+  border-top: 1px solid var(--color-border-default);
+}
