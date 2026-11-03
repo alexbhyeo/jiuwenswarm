@@ -1597,7 +1597,7 @@ _MCP_VENV_PROBE_TIMEOUT_S = 20
 # 版本必须与种子包 `.venv` 里那份**完全一致**：mcp 2.x 把 FastMCP 改名为
 # MCPServer，`mcp.server.fastmcp` 会直接抛 ModuleNotFoundError；
 # 用 ≥2 装出来的环境看着"装好了"，连接器却起不来。这里的数字取自
-# ``mcp_builtins_v0.3.zip`` 内的 ``*.dist-info``。
+# ``mcp_builtins_v0.4.zip`` 内的 ``*.dist-info``。
 _MCP_PACKAGE_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     # server.py: from qcloud_cos import ... / from mcp.server.fastmcp import FastMCP
     "tencent-cos": ("cos-python-sdk-v5==1.9.44", "mcp==1.30.0"),

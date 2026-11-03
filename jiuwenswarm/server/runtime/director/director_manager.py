@@ -576,6 +576,47 @@ async def mirror_asset_to_cloud_storage(
     return None
 
 
+async def delete_asset_from_cloud_storage(
+    *, file_path: str, asset_type: str, project_id: str
+) -> None:
+    """撤销 mirror_asset_to_cloud_storage 的镜像——删除对应的云端对象。
+
+    对象 key 的拼法必须和 mirror_asset_to_cloud_storage 完全一致（同一套
+    user_id/project_id/<images|videos|audios>/文件名 规则），否则删的是
+    一个根本不存在的 key。没有已连接的云存储连接器、或删除调用本身失败，
+    都只记日志、不往上抛——素材的本地删除已经生效，云端这份清理是"最好
+    删掉"而不是"必须删掉"的收尾动作，不能因为它失败而让已经成功的删除
+    操作看起来像是出错了。
+    """
+    resolved = _resolve_cloud_storage_connector()
+    if resolved is None:
+        return
+    mcp_name, entry = resolved
+    folder = CLOUD_ASSET_FOLDER.get(asset_type, "images")
+    object_key = f"{get_local_user_id()}/{project_id}/{folder}/{os.path.basename(file_path)}"
+    key_param = CLOUD_TOOL_KEY_PARAM.get(mcp_name, "object_key")
+    try:
+        await call_mcp_tool(entry, "delete_object", {key_param: object_key}, timeout_s=20.0)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "[director] cloud storage delete via '%s' for key '%s' failed: %s",
+            mcp_name, object_key, exc,
+        )
+
+
+def _resolve_cloud_storage_connector() -> tuple[str, dict[str, Any]] | None:
+    """挑一个已连接的云存储连接器，和 mirror_asset_to_cloud_storage 用同一套
+    候选顺序/判定逻辑——delete 和 upload 必须用同一个连接器，否则会在
+    A 连接器建的 key 去 B 连接器删，永远删不掉。
+    """
+    _ensure_mcp_providers()
+    for candidate in CLOUD_STORAGE_MCP_CANDIDATES:
+        entry = get_mcp_server_config(candidate)
+        if entry is not None:
+            return candidate, entry
+    return None
+
+
 class DirectorManager:
     """导演模式的项目/生成 RPC 处理器（进程内单例，见 interface.py 构造点）."""
 
@@ -1371,6 +1412,14 @@ class DirectorManager:
                 Path(asset.file_path).unlink(missing_ok=True)
             except OSError:
                 logger.exception("[DirectorManager] 删除素材文件失败: %s", asset.file_path)
+
+        # 素材曾经被镜像到云存储（cloud_url 非空）才有必要清理云端对象；
+        # 后台异步执行、不等待结果——云端清理慢/失败都不该拖慢或打断用户
+        # 已经看到生效的删除操作（见 delete_asset_from_cloud_storage 文档）。
+        if asset.cloud_url and asset.file_path:
+            asyncio.create_task(delete_asset_from_cloud_storage(
+                file_path=asset.file_path, asset_type=asset.type, project_id=project_id,
+            ))
 
         return {"project": project.to_dict(), "asset_counts": self._store.asset_counts()}
 
