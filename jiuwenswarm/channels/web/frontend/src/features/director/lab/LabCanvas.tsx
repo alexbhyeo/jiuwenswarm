@@ -141,6 +141,26 @@ const PROCESS_CARD_ROW_HEIGHT = 480;
 // 压根不会重新拉取 projects 列表，创作 tab 拉取的时机和画布保存请求
 // 完成的时机也是两条独立的异步链路，谁先谁后没有保证。这正是最初只依赖
 // project.lab_nodes 时，切到 剪辑/创作 卡片会丢的根因。
+// 合并卡片的 history/activeHistoryIndex 是在"卡片与它的输出合并成一张"
+// 这次改造里才加上的，早于这次改造创建、之后再没打开过画布重新保存过的
+// 项目（director_state.json 里的旧快照）没有这两个字段——data.history 是
+// undefined，到处假定它一定是数组的读取（.length、.map、[index]）会直接
+// 抛 TypeError，一打开这类项目整个画布就白屏。只在加载旧快照这一个入口
+// 补齐缺省值，不用在每个读取点都加防御。
+function normalizeProcessNode(node: Node): Node {
+  if (node.type !== 'process') return node;
+  const data = node.data as ProcessNodeData;
+  if (Array.isArray(data.history) && typeof data.activeHistoryIndex === 'number') return node;
+  return {
+    ...node,
+    data: {
+      ...data,
+      history: Array.isArray(data.history) ? data.history : [],
+      activeHistoryIndex: typeof data.activeHistoryIndex === 'number' ? data.activeHistoryIndex : 0,
+    },
+  };
+}
+
 function readInitialCanvas(projectId: string | null): { nodes: Node[]; edges: Edge[] } {
   if (!projectId) return { nodes: [], edges: [] };
   const state = useDirectorStore.getState();
@@ -150,7 +170,7 @@ function readInitialCanvas(projectId: string | null): { nodes: Node[]; edges: Ed
   }
   const project = state.projects.find((p) => p.project_id === projectId);
   return {
-    nodes: (project?.lab_nodes as Node[] | undefined) ?? [],
+    nodes: ((project?.lab_nodes as Node[] | undefined) ?? []).map(normalizeProcessNode),
     edges: (project?.lab_edges as Edge[] | undefined) ?? [],
   };
 }
