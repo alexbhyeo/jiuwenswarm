@@ -1,0 +1,141 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: jiuwenswarm-postgres
+    restart: unless-stopped
+    networks:
+      - db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  # The entire login/session/logout gate. Pure deploy-side code (not part of
+  # the jiuwenswarm repo) so pulling a new jiuwenswarm release never touches
+  # this. Only nginx talks to it - "app" and every isolated user's container
+  # have no idea it exists. See deploy/architecture.md.
+  authgate:
+    build:
+      context: ./deploy/authgate
+    container_name: jiuwenswarm-authgate
+    restart: unless-stopped
+    networks:
+      - frontend
+      - db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB}
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      ADMIN_USERNAME: ${ADMIN_USERNAME}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+
+  # A completely unmodified jiuwenswarm instance - no auth code, no Postgres
+  # access, nothing deploy-specific at all beyond FRONTEND_HOST/model env
+  # vars. Every isolated user (deploy/provision_user.sh) is just another
+  # instance of this exact same image, differing only in which Docker
+  # network/volume/env vars it gets. This is what makes "pull a new release"
+  # a plain rebuild with zero merges.
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.claw
+    container_name: jiuwenswarm-app
+    restart: unless-stopped
+    # nginx is the one component dynamically joined to every isolated user's
+    # network (by deploy/provision_user.sh) so it can proxy straight to
+    # whichever backend authgate's session lookup resolves to - see the
+    # comment on the `nginx` service below. `app`/isolated-user containers
+    # themselves never need to be reachable from anywhere but nginx, so they
+    # only ever sit on `frontend` (or, for isolated users, their own
+    # dedicated network - not declared here, see deploy/provision_user.sh).
+    networks:
+      - frontend
+    environment:
+      FRONTEND_HOST: 0.0.0.0
+      # Main chat/LLM model (plain env vars, read via os.getenv - see
+      # jiuwenswarm/common/config.py get_default_models()). Note: on first
+      # boot the app's own .env.template gets copied into its workspace and
+      # loaded with override=True, which can clobber these - if the "模型"
+      # settings page shows a placeholder model after first boot, edit that
+      # one entry once through Settings -> Models; it's then stored in
+      # config.yaml and persists across restarts regardless of this env var.
+      API_KEY: ${API_KEY:-}
+      API_BASE: ${API_BASE:-}
+      MODEL_NAME: ${MODEL_NAME:-}
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-}
+    volumes:
+      - app_workspace:/home/app/.jiuwenswarm
+    expose:
+      - "5173"
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: jiuwenswarm-nginx
+    restart: unless-stopped
+    # Every isolated user gets their OWN dedicated Docker network (created by
+    # deploy/provision_user.sh, one per user - not declared here, since a
+    # static per-user network list would mean editing this file and
+    # redeploying for every new user). nginx is dynamically connected to each
+    # user's network at provision time via `docker network connect` - that
+    # works on an already-running container with no restart, but is NOT
+    # tracked here, so IMPORTANT: after any redeploy/recreate of this service
+    # (docker compose up -d --build nginx, or anything else that recreates
+    # it), you MUST run deploy/reconnect_user_networks.sh afterward, or every
+    # already-provisioned user's routing silently breaks until you do -
+    # Compose only restores the networks declared below, not the imperative
+    # per-user ones. See deploy/architecture.md.
+    networks:
+      - frontend
+    depends_on:
+      - app
+      - authgate
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./deploy/nginx/static:/etc/nginx/static:ro
+      - ./deploy/nginx/certbot-www:/var/www/certbot:ro
+      - ./deploy/nginx/letsencrypt:/etc/letsencrypt:ro
+
+  certbot:
+    image: certbot/certbot
+    container_name: jiuwenswarm-certbot
+    restart: unless-stopped
+    networks:
+      - frontend
+    volumes:
+      - ./deploy/nginx/certbot-www:/var/www/certbot
+      - ./deploy/nginx/letsencrypt:/etc/letsencrypt
+    entrypoint: >
+      sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot; sleep 12h & wait $${!}; done'
+
+networks:
+  # nginx <-> app/authgate only. nginx can never reach postgres directly.
+  frontend:
+  # authgate <-> postgres only. Nothing else (nginx, app, user backends) can
+  # reach the credentials/session store.
+  db:
+  # Per-user networks (jiuwenswarm_user_<username>_net, one per isolated
+  # user) are created and attached imperatively to nginx by
+  # deploy/provision_user.sh, not declared here - see the comment on the
+  # `nginx` service above and deploy/architecture.md. Each one has exactly
+  # two members: nginx and that one user's backend container, so user
+  # backends can never reach each other, and nothing but nginx can ever
+  # reach any of them.
+
+volumes:
+  pg_data:
+  app_workspace:
