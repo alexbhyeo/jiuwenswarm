@@ -24,8 +24,6 @@ if [ -z "$EMAIL" ]; then
   exit 1
 fi
 
-mkdir -p deploy/nginx/certbot-www deploy/nginx/letsencrypt
-
 echo "==> Starting postgres, authgate, app, nginx (HTTP-only config) ..."
 docker compose up -d postgres authgate app nginx
 

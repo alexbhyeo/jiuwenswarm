@@ -105,10 +105,17 @@ services:
       - "80:80"
       - "443:443"
     volumes:
+      # conf.d/static are config this deployment owns, bind-mounted so
+      # editing them on the host takes effect on `nginx -s reload` with no
+      # rebuild. certbot-www/letsencrypt are generated runtime state (ACME
+      # challenge files, the private key material) - named volumes, not a
+      # bind mount into the git checkout, so they're never swept into any
+      # `docker build` context (and Let's Encrypt's restrictive permissions
+      # on them never collide with the checkout's own permissions).
       - ./deploy/nginx/conf.d:/etc/nginx/conf.d:ro
       - ./deploy/nginx/static:/etc/nginx/static:ro
-      - ./deploy/nginx/certbot-www:/var/www/certbot:ro
-      - ./deploy/nginx/letsencrypt:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+      - letsencrypt_data:/etc/letsencrypt:ro
 
   certbot:
     image: certbot/certbot
@@ -117,8 +124,8 @@ services:
     networks:
       - frontend
     volumes:
-      - ./deploy/nginx/certbot-www:/var/www/certbot
-      - ./deploy/nginx/letsencrypt:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+      - letsencrypt_data:/etc/letsencrypt
     entrypoint: >
       sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot; sleep 12h & wait $${!}; done'
 
@@ -139,3 +146,5 @@ networks:
 volumes:
   pg_data:
   app_workspace:
+  certbot_www:
+  letsencrypt_data:
