@@ -337,6 +337,38 @@ class DirectorStore:
         self._save(projects)
         return project
 
+    def bind_asset_name(self, project_id: str, name: str, asset_id: str) -> DirectorProject:
+        """让名称 ``name`` 唯一地指向 ``asset_id`` 这一条素材.
+
+        ``@名称`` 解析走 ``find_asset_by_name``，它按 ``updated_at`` 取同名素材里
+        最新的一条——所以只要项目里存在两条同名素材，「@名称」指向哪一条就变成
+        了"谁后写的算谁的"。两个来源会撞名：剪辑助手生成的素材沿用了用户已有
+        素材的名字；画布上「替换」把卡片换成了另一条素材，但卡片名字没变。
+
+        这里把名字收敛成一对一：目标素材拿到这个名字（并刷新 ``updated_at``），
+        其它同名素材清掉名字（回退展示 prompt），文件本身都保留。这样
+        「@名称」、下游处理卡片按 assetId 解析、以及画布显示的是同一条素材。
+        """
+        projects = self._load()
+        project = projects.get(project_id)
+        if project is None:
+            raise KeyError(project_id)
+        target = name.strip()
+        if not target:
+            raise ValueError("empty name")
+        now = time.time()
+        for asset in project.assets:
+            if asset.asset_id == asset_id:
+                asset.name = target
+                asset.updated_at = now
+                continue
+            if asset.name and asset.name.strip().lower() == target.lower():
+                asset.name = None
+                asset.updated_at = now
+        project.updated_at = now
+        self._save(projects)
+        return project
+
     def delete_asset(self, project_id: str, asset_id: str) -> DirectorProject:
         """从项目里移除该素材的元数据记录（不含磁盘文件删除——调用方
         （DirectorManager）在拿到被删素材的 file_path 后自行处理，

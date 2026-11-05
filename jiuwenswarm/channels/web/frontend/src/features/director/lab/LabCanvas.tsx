@@ -346,7 +346,17 @@ function LabCanvasInner() {
         );
 
         if (data.name) {
-          await useDirectorStore.getState().renameAsset(selectedProjectId, newAsset.asset_id, data.name);
+          // 用 bind_name 而不是 rename：上传的这条要占住卡片的这个名字，而原来
+          // 顶着同一个名字的那条（通常是这张卡片之前生成的图）必须让出名字，
+          // 否则「@名称」按 updated_at 解析到哪一条就成了运气问题，下游再用
+          // `@名称` 生成分镜时可能又回到旧图。
+          const { directorAssetBindName } = await import('../directorApi');
+          const bound = await directorAssetBindName(selectedProjectId, newAsset.asset_id, data.name);
+          useDirectorStore.setState((s) => ({
+            projects: s.projects.map((p) =>
+              p.project_id === bound.project.project_id ? bound.project : p
+            ),
+          }));
         }
       } catch {
         // 上传/改名各自已经把出错信息写进 store 的 uploadError/
@@ -366,16 +376,26 @@ function LabCanvasInner() {
   // 当参考图解析，视频名字换成什么都不影响解析，只会白丢卡片身份）。
   const handleSwapMediaFromAsset = useCallback(
     (nodeId: string, asset: { assetId: string | null; filePath: string; name: string }) => {
+      const node = nodes.find((n) => n.id === nodeId);
+      const mergedMode =
+        node?.type === 'process' ? PROCESS_KIND_MODE[(node.data as ProcessNodeData).kind] : null;
+      // 换完之后这张卡片叫什么——素材库那条已经自带名字时图片卡片会改用它的
+      // 名字（见 swappedEntryName），视频卡片保留自己的。
+      const nextName = node
+        ? node.type === 'process' && (mergedMode === 'image' || mergedMode === 'video')
+          ? swappedEntryName((node.data as ProcessNodeData).name, asset.name, mergedMode)
+          : asset.name
+        : asset.name;
       setNodes((nds) =>
         nds.map((n) => {
           if (n.id !== nodeId) return n;
-          const mergedMode =
+          const nodeMode =
             n.type === 'process' ? PROCESS_KIND_MODE[(n.data as ProcessNodeData).kind] : null;
-          const isMergedSwappableCard = mergedMode === 'image' || mergedMode === 'video';
-          if (n.type !== 'image' && !isMergedSwappableCard) return n;
-          if (isMergedSwappableCard) {
+          const merged = nodeMode === 'image' || nodeMode === 'video';
+          if (n.type !== 'image' && !merged) return n;
+          if (merged) {
             const pd = n.data as ProcessNodeData;
-            const name = swappedEntryName(pd.name, asset.name, mergedMode as 'image' | 'video');
+            const name = swappedEntryName(pd.name, asset.name, nodeMode as 'image' | 'video');
             const history = pd.history.map((entry, i) =>
               i === pd.activeHistoryIndex ? { ...entry, assetId: asset.assetId, filePath: asset.filePath, name } : entry
             );
@@ -386,8 +406,28 @@ function LabCanvasInner() {
           return { ...n, data: { ...n.data, assetId: asset.assetId, filePath: asset.filePath, name: asset.name } };
         })
       );
+      // 画布镜像改完还不够：`@名称` 在服务端按**素材记录**解析，不认画布。
+      // 不把名字重新绑定到换上去的那条素材，后面用 `@名称` 生成分镜、或重建
+      // 流程图时用的仍然是替换前那张生成图——用户看到的就是"我换了图，下游
+      // 还在用旧的"。只有图片/角色有 `@名称` 语义，视频不做绑定。
+      const bindName = mergedMode === 'image' ? (nextName || '').trim() : '';
+      if (selectedProjectId && asset.assetId && bindName) {
+        void (async () => {
+          try {
+            const { directorAssetBindName } = await import('../directorApi');
+            const bound = await directorAssetBindName(selectedProjectId, asset.assetId as string, bindName);
+            useDirectorStore.setState((s) => ({
+              projects: s.projects.map((p) =>
+                p.project_id === bound.project.project_id ? bound.project : p
+              ),
+            }));
+          } catch {
+            // 绑定失败不影响画布已经换好的显示；`@名称` 仍指向原素材。
+          }
+        })();
+      }
     },
-    [setNodes]
+    [nodes, selectedProjectId, setNodes]
   );
 
   const handleDeleteNode = useCallback(

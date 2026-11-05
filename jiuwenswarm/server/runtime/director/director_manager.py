@@ -159,7 +159,11 @@ _EDIT_CHAT_SYSTEM_PROMPT = (
     "之后所有分镜描述里都要用 \"@名称\" 引用这些已经生成的设计图，而不是重新"
     "描述一遍外观——@名称 会被解析成真正的参考图片，保持角色/场景在不同镜头"
     "间的一致性。如果用户提供了参考图片，生成同一个角色/场景时把这些参考图片"
-    "的内容体现在 description 里，帮助保持相似度。\n"
+    "的内容体现在 description 里，帮助保持相似度。**先检查已有的东西，不要"
+    "重复生成**：用户这一轮附带的参考图片、「本项目已有素材」清单里的角色/"
+    "道具/场景、以及用户在文字里用 @名称 点到的素材都算已经有了，直接引用它们"
+    "就好；用户说「@名字 是主角」时那个名字指的就是附件/已有素材本身，不要再"
+    "照着它画一张。只有确实没有的角色/道具/场景才需要生成。\n"
     "3. **分镜列表（Shot List）**：为每个场景写出具体的分镜，每个分镜包含"
     "画面描述（Visual Description，用 @名称 引用出场的角色/道具）、"
     "音效描述（Sound Effects Description），如果有台词也一并给出。\n\n"
@@ -188,6 +192,56 @@ _EDIT_CHAT_SYSTEM_PROMPT = (
 # 编辑它，改完下一轮就生效。技能不存在或读不出来时回退到 _EDIT_CHAT_SYSTEM_PROMPT
 # ——所以删掉技能也不会把助手搞坏。用户在这一轮勾选的其它技能，追加在基础说明之后
 # 作为额外工作流；勾了当前默认技能本身则跳过（同一份说明不重复注入）。
+def _build_asset_context(
+    project: DirectorProject, attached_asset_ids: list[str] | None = None
+) -> str:
+    """把"本项目已有哪些可引用素材"和"这一轮附了哪几张图"告诉模型.
+
+    没有这一段时模型看不见用户的素材库，即使参考图已经作为素材存在（用户还
+    在文字里用 ``@名字`` 指了它），它也会照着流程再 ``generate_design_image``
+    生成一张同名的——于是项目里出现两条同名素材，「@名字」按 ``updated_at``
+    解析到新生成的那条，用户后面怎么替换画布都改不动它。这里把清单和附件
+    对应关系显式给出来，把"复用"变成模型看得见的事实，而不是靠它猜。
+    """
+    usable = [
+        asset
+        for asset in project.assets
+        if asset.name and asset.status == "ready" and asset.type in ("image", "character")
+    ]
+    attached = [a for a in (attached_asset_ids or []) if a]
+    if not usable and not attached:
+        return ""
+    lines = [
+        "## 本项目已有素材（「@名称」可直接引用，**不要重新生成**）",
+        "",
+    ]
+    if usable:
+        for asset in sorted(usable, key=lambda a: (a.name or "").lower()):
+            kind = "角色/道具" if asset.type == "character" else "图片"
+            lines.append(f"- @{asset.name}（{kind}）")
+    else:
+        lines.append("- （暂无已命名素材）")
+    if attached:
+        by_id = {asset.asset_id: asset for asset in project.assets}
+        lines.extend(["", "## 这一轮用户附带的参考图片"])
+        for index, asset_id in enumerate(attached, start=1):
+            asset = by_id.get(asset_id)
+            if asset is None:
+                continue
+            label = f"@{asset.name}" if asset.name else "未命名素材"
+            lines.append(f"{index}. {label} —— 就是附件里的第 {index} 张图片")
+        lines.extend(
+            [
+                "",
+                "附件里的图片本身就是素材：用户说「@某个名字 是主角」时，指的就是这张"
+                "附件（或项目里已有的同名素材）。直接在下一次生成里用 `@名称` 引用它，"
+                "**不要**再调用 generate_design_image 为它生成一张新图；只有项目里确实"
+                "没有、附件里也没有的角色/道具/场景，才需要生成。",
+            ]
+        )
+    return "\n".join(lines)
+
+
 def _build_edit_chat_system_prompt(skill_names: list[str]) -> str:
     default_name = resolve_default_skill_name()
     assistant = load_assistant_skill()
@@ -1228,6 +1282,89 @@ class DirectorManager:
             "asset_counts": self._store.asset_counts(),
         }
 
+    def _bind_mentioned_names_to_attachments(
+        self,
+        project: DirectorProject,
+        text: str,
+        attached_asset_ids: list[str],
+    ) -> DirectorProject:
+        """把用户在这条消息里新点名的 ``@名称`` 绑到本轮附件上.
+
+        典型输入：「@full 是主角。帮我制作一个 15 秒的视频」。附件是那张主角图。
+        ``full`` 在项目里还不存在，模型于是没有可引用的东西，只能再画一张同名的
+        ——项目里就有了两条 ``full``，「@名称」按最新一条解析，后续全都指向新画的
+        那张，用户在画布上替换也改不回来。
+
+        这里按"用户点名 + 附件"把名字补上：只处理项目里不存在的名字，按出现顺序
+        与附件一一对应；已有名字、以及没有对应附件的名字都不动。返回刷新后的
+        project（有绑定发生时才重新读盘）。
+        """
+        if not text or not attached_asset_ids:
+            return project
+        known = {a.name.strip().lower() for a in project.assets if a.name}
+        candidates: list[str] = []
+        for match in re.finditer(r"@([^\s@，。、；：！？,.;:!?）)」』\"']+)", text):
+            name = match.group(1).strip()
+            if not name or name.lower() in known or name in candidates:
+                continue
+            candidates.append(name)
+        # 只在"没有歧义"时猜：一张附件 + 一个项目里还不存在的名字。多个附件
+        # 或多个新名字时，"哪个名字配哪张图"没有可靠依据，宁可留给模型自己
+        # 在文字里澄清，也不要猜错把角色图和场景张冠李戴。
+        if len(candidates) != 1 or len(attached_asset_ids) != 1:
+            return project
+
+        name = candidates[0]
+        asset_id = attached_asset_ids[0]
+        asset = next((a for a in project.assets if a.asset_id == asset_id), None)
+        if asset is None or asset.type not in ("image", "character"):
+            return project
+        # 上传的素材默认用文件名当名字（"heroA.png" → "heroA"），那只是文件名，
+        # 不是用户给这个角色起的名字。用户在文字里明确用 @名字 指它时，以文字的
+        # 名字为准；原来的名字记进 params，方便追溯（文件本身不动）。
+        prior = asset.name
+        try:
+            current = self._store.bind_asset_name(project.project_id, name, asset_id)
+            if prior and prior != name:
+                current = self._store.update_asset(
+                    project.project_id, asset_id, params={**(asset.params or {}), "prior_name": prior}
+                )
+            logger.info(
+                "[director] 剪辑助手：把附件 %s 绑定为用户点名的 @%s（原名 %r，项目 %s）",
+                asset_id,
+                name,
+                prior,
+                project.project_id,
+            )
+            return current
+        except (KeyError, ValueError):
+            logger.warning("[director] 剪辑助手：绑定 @%s 到附件失败，已跳过", name)
+            return project
+
+    async def handle_director_asset_bind_name(self, params: dict) -> dict:
+        """让「@名称」明确指向某一条素材（画布「替换」后由前端调用）.
+
+        画布上的「替换」只改节点自己的镜像字段（assetId/filePath/name），素材库
+        里的记录没动——所以 ``@名称`` 仍然解析到原来那条生成出来的素材。这里把
+        名字收敛到"卡片当前显示的那条素材"上：目标素材拿到这个名字，其它同名
+        素材清掉名字（文件都保留），于是画布、下游处理卡片（按 assetId 解析）
+        和剪辑助手的 ``@名称`` 指向同一条素材。
+        """
+        project_id = str(params.get("project_id") or "").strip()
+        asset_id = str(params.get("asset_id") or "").strip()
+        name = str(params.get("name") or "").strip()
+        if not (project_id and asset_id and name):
+            raise DirectorRpcError("INVALID_PARAMS", "缺少 project_id / asset_id / name")
+
+        project = self._store.get_project(project_id)
+        if project is None:
+            raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")
+        if not any(a.asset_id == asset_id for a in project.assets):
+            raise DirectorRpcError("ASSET_NOT_FOUND", f"未找到素材: {asset_id}")
+
+        project = self._store.bind_asset_name(project_id, name, asset_id)
+        return {"project": project.to_dict()}
+
     async def handle_director_asset_rename(self, params: dict) -> dict:
         project_id = str(params.get("project_id") or "").strip()
         asset_id = str(params.get("asset_id") or "").strip()
@@ -1318,6 +1455,19 @@ class DirectorManager:
             return "kind 必须是 character 或 scene。", None
         if not design_name or not description:
             return "缺少 name 或 description，生成失败。", None
+        # 同名素材已经存在时**不生成**：项目里出现两条同名素材会让「@名称」
+        # 变成"谁后写的算谁的"（find_asset_by_name 取 updated_at 最新那条），
+        # 用户之后在画布上替换、或助手后续引用都会指向错的那一条。把这件事
+        # 明确回给模型，让它改成复用已有素材——真正生成一次再被覆盖掉的钱
+        # 与时间都省了。
+        existing = self._store.find_asset_by_name(project.project_id, design_name)
+        if existing is not None:
+            return (
+                f"素材「{design_name}」已经存在（{existing.type}，状态 {existing.status}），"
+                f"这一张不会再生成。请直接在后续描述里用 @{design_name} 引用它；"
+                f"如果确实需要一张全新的图，换一个名字（例如「{design_name} v2」）再调用。",
+                None,
+            )
         if not (visual_gen_enabled() and visual_gen_configured()):
             return "图片生成未配置，请先在设置中配置「图片处理」，暂时无法生成设计图。", None
 
@@ -1710,6 +1860,12 @@ class DirectorManager:
         if project is None:
             raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")
 
+        # 「@新名字 是主角」+ 附件图片：把用户点名、但项目里还不存在的名字绑到
+        # 附件上。不这么做的话模型只能在"重新生成一张"和"这个 @名字 引用不到
+        # 任何东西"之间选，而这正是用户抱怨"我把主角图给它了它却又画了一张"
+        # 的来源。只绑用户真的写出来的新名字，已有名字一律不动。
+        project = self._bind_mentioned_names_to_attachments(project, text, image_asset_ids)
+
         image_paths = [
             path
             for path in (self._resolve_asset_path(project, asset_id) for asset_id in image_asset_ids)
@@ -1766,6 +1922,13 @@ class DirectorManager:
             *history_messages,
             build_multimodal_user_message(text, image_paths),
         ]
+
+        # 把"项目里已有哪些可引用素材 / 这一轮附了哪几张图"塞进对话最前面
+        # （紧跟在基础说明之后，历史之前）：模型据此复用 @名称 而不是重新
+        # 生成同名素材——见 _build_asset_context 的说明。
+        asset_context = _build_asset_context(project, image_asset_ids)
+        if asset_context:
+            messages.insert(1, {"role": "system", "content": asset_context})
 
         generated_asset_ids: list[str] = []
         final_text = ""

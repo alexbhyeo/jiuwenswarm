@@ -26,6 +26,7 @@ const METHOD = {
   generate: 'director.generate',
   generateCheckStatus: 'director.generate.check_status',
   assetRename: 'director.asset.rename',
+  assetBindName: 'director.asset.bind_name',
   assetDelete: 'director.asset.delete',
   editChatSend: 'director.edit_chat.send',
   editChatSkillGet: 'director.edit_chat.skill_get',
@@ -215,6 +216,26 @@ export function directorGenerateCheckStatus(
 
 export function directorAssetRename(projectId: string, assetId: string, name: string): Promise<ProjectResult> {
   return webRequest<unknown>(METHOD.assetRename, {
+    project_id: projectId,
+    asset_id: assetId,
+    name,
+  })
+    .then(normalizeProjectResult)
+    .catch((err) => {
+      throw toDirectorError(err);
+    });
+}
+
+/**
+ * 让「@名称」明确指向这条素材（画布「替换」之后调用）。
+ *
+ * 画布上的替换只改节点自己的镜像字段，素材库里的记录不动，于是 `@名称` 仍然
+ * 解析到替换前那条生成出来的素材——助手后来生成分镜、或重建流程图时用的还是
+ * 旧图。这里把名字收敛到"卡片当前显示的那条素材"上（同名素材会被清掉名字，
+ * 文件都保留），画布、下游端口与 `@名称` 因此指向同一条素材。
+ */
+export function directorAssetBindName(projectId: string, assetId: string, name: string): Promise<ProjectResult> {
+  return webRequest<unknown>(METHOD.assetBindName, {
     project_id: projectId,
     asset_id: assetId,
     name,
