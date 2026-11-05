@@ -233,3 +233,4 @@ commands at the end of a successful run.
 | `deploy/nginx/static/auth-overlay.js` | The injected logout button (§4). |
 | `deploy/init-letsencrypt.sh` | One-time cert bootstrap for the primary domain. |
 | `deploy/update.md` | Step-by-step procedure for pulling a new upstream release (§0). |
+| `deploy/update_isolated_users.sh` | Recreates every isolated user's container from the freshly-built `jiuwenswarm-app` image after an update - rebuilding the image alone only updates the default/primary account. |

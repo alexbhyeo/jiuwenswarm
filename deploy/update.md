@@ -67,6 +67,23 @@ Only `app` needs rebuilding for an upstream update - `authgate`, `nginx`,
 `postgres`, `certbot` are deploy-owned and don't change just because
 upstream released something.
 
+**This updates the default/primary account only.** `docker compose up -d app`
+recreates just the one container docker-compose manages (`jiuwenswarm-app`,
+the default instance). Rebuilding the image does **not** touch containers
+already running from the old image layer - and every isolated user's
+container (`deploy/provision_user.sh`) was started with a plain `docker run`,
+not docker-compose, so it keeps running the old code silently until
+recreated. Run this too, every time, right after `docker compose up -d app`:
+
+```bash
+bash deploy/update_isolated_users.sh
+```
+
+It finds every provisioned isolated user, recreates each one's container
+from the freshly-built `jiuwenswarm-app` image - same name, same network,
+same volume, so routing and data are untouched - and waits for it to come
+back up. Idempotent, safe to run any time.
+
 **Known build flakiness, not specific to this deployment:**
 - `uv pip install .` clones a few `agent-*` repos from `gitcode.com`. That
   link has been observed to drop mid-clone (`unexpected disconnect while
