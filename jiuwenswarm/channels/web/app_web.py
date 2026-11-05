@@ -67,7 +67,7 @@ class _BadRequestError(ValueError):
 
 def _get_share_image_export_manager() -> ShareImageExportManager:
     """Forward to the gateway-owned singleton (shared job registry)."""
-    from gateway.channel_manager.web.share_image_export import (
+    from agent_gateway.channel_manager.web.share_image_export import (
         get_share_image_export_manager,
     )
 
@@ -114,13 +114,13 @@ def _format_ws_diagnostics(
     *parts: Mapping[str, Any] | None,
     **fields: Any,
 ) -> str:
-    from gateway.common.ws_diagnostics import format_ws_diagnostics
+    from agent_gateway.common.ws_diagnostics import format_ws_diagnostics
 
     return format_ws_diagnostics(*parts, **fields)
 
 
 def _describe_ws_exception(exc: BaseException) -> dict[str, Any]:
-    from gateway.common.ws_diagnostics import describe_ws_exception
+    from agent_gateway.common.ws_diagnostics import describe_ws_exception
 
     return describe_ws_exception(exc)
 
@@ -341,6 +341,10 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
     agent_teams_root = _get_agent_teams_root(project_root)
     logs_root = _get_logs_dir()
     auto_harness_root = project_root / "auto-harness"
+    # Team-organization summaries live under <home>/.organizations, outside
+    # .agent_teams. Without this root, a delivered group attachment 403s and
+    # the chat card labels the existing file expired.
+    organizations_root = project_root / ".organizations"
     # Projectless tasks (no bound project_dir) write their generated media under
     # <Documents>/JiuwenSwarm/<date>/chat-<n>/outputs/, outside workspace_root —
     # without this, any @-referenced or inline-rendered media from a projectless
@@ -1059,6 +1063,7 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
             or cls._is_path_under(Path(cls.agent_teams_root), target_resolved)
             or cls._is_path_under(Path(cls.logs_root), target_resolved)
             or cls._is_path_under(Path(cls.auto_harness_root), target_resolved)
+            or cls._is_path_under(Path(cls.organizations_root), target_resolved)
             or cls._is_path_under(Path(cls.projectless_tasks_root), target_resolved)
             or any(cls._is_path_under(root, target_resolved) for root in cls._registered_project_dirs())
         )
@@ -2121,7 +2126,10 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
             return
 
         if parsed.path == "/file-api/upload":
-            self._handle_file_upload_proxy(parsed)
+            if self._is_designer_upload(parsed):
+                self._handle_designer_upload()
+            else:
+                self._handle_file_upload_proxy(parsed)
             return
 
         if parsed.path == "/file-api/file-content":
@@ -2224,6 +2232,45 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
         status, payload = handle_custom_agent_upload_http(
             content_type=self.headers.get("Content-Type", ""),
             body=self._read_request_body(),
+        )
+        self._write_json(status, payload)
+
+    def _is_designer_upload(self, parsed) -> bool:
+        if parse_qs(parsed.query).get("token"):
+            return False
+        return "multipart/form-data" in self.headers.get("Content-Type", "").lower()
+
+    def _discard_request_body(self, length: int) -> None:
+        # Answering before the body is consumed resets the connection, which
+        # the browser reports as "Failed to fetch" instead of the JSON error.
+        remaining = length
+        while remaining > 0:
+            chunk = self.rfile.read(min(remaining, 1024 * 1024))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+
+    def _handle_designer_upload(self) -> None:
+        from jiuwenswarm.channels.web.designer_upload_http import (
+            MAX_DESIGNER_UPLOAD_REQUEST_BYTES,
+            handle_designer_upload_http,
+        )
+
+        length = self._parse_content_length()
+        # A routed AgentServer keeps uploads in a per-user sandbox this process cannot write.
+        if _uses_agentos_routing():
+            self._discard_request_body(length)
+            self._write_json(503, {"error": "agentserver_file_rpc_required"})
+            return
+        if length > MAX_DESIGNER_UPLOAD_REQUEST_BYTES:
+            self._discard_request_body(length)
+            self._write_json(413, {"error": "file_too_large", "files": [], "errors": [{"error": "file_too_large"}]})
+            return
+        status, payload = handle_designer_upload_http(
+            content_type=self.headers.get("Content-Type", ""),
+            body=self.rfile,
+            length=length,
+            workspace_root=Path(self.workspace_root),
         )
         self._write_json(status, payload)
 
@@ -2483,6 +2530,22 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
                     self.path = quote("/" + rel_path, safe="/")
                     if parsed.query:
                         self.path += "?" + parsed.query
+            # Reuse dev-stable's static-prefix fallback for named public files.
+            # Asset requests stay confined to assets/ and never fall back to public files.
+            missing_public_path = in_base and not target.exists() and not asset_request
+            if missing_public_path and Path(req_path).suffix.lower() in self._STATIC_EXTENSIONS:
+                parts = rel_path.split('/')
+                for index in range(1, len(parts)):
+                    candidate_rel = '/'.join(parts[index:])
+                    candidate = (base_dir / candidate_rel).resolve()
+                    candidate_in_base = os.path.commonpath([str(base_dir), str(candidate)]) == str(base_dir)
+                    if candidate_in_base and candidate.is_file():
+                        rel_path = candidate_rel
+                        target = candidate
+                        self.path = quote('/' + rel_path, safe='/')
+                        if parsed.query:
+                            self.path += '?' + parsed.query
+                        break
         except (OSError, ValueError):
             self._static_cache_control = None
             self._write_json(400, {"error": "invalid_path"})
