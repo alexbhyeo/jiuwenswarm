@@ -232,3 +232,4 @@ commands at the end of a successful run.
 | `deploy/nginx/conf.d/app.conf`, `deploy/nginx/app-ssl.conf` | nginx config: auth gate, dynamic per-session routing, logout-button injection (bootstrap HTTP-only, then swapped to the TLS version post-certbot). |
 | `deploy/nginx/static/auth-overlay.js` | The injected logout button (§4). |
 | `deploy/init-letsencrypt.sh` | One-time cert bootstrap for the primary domain. |
+| `deploy/update.md` | Step-by-step procedure for pulling a new upstream release (§0). |
