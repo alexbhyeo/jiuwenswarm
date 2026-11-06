@@ -27,6 +27,8 @@ dependencies = [
     "openjiuwen-protocol @ git+https://gitcode.com/openJiuwen/agent-protocol.git@cbbadde9101db6e3d75e4ef2b9bdb6029fd92088#subdirectory=openjiuwen-protocol",
     # Gateway 传输层已拆分为独立仓 agent-gateway
     "agent-gateway @ git+https://gitcode.com/openJiuwen/agent-gateway.git@cff3b1b9c2dd02bf29e0cb331dec12be989bc656",
+    # 导演模式把本地素材换成公网直链（视频生视频 / 图音生视频的输入）
+    "cos-python-sdk-v5>=1.9,<2",
     "pgvector>=0.4.2,<0.5",
     "portalocker>=3.2.0,<4",
     "prompt-toolkit>=3.0,<4.0",

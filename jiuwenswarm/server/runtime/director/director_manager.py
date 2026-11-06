@@ -68,6 +68,12 @@ from jiuwenswarm.server.runtime.director.director_team import (
     DirectorTeamOrchestrator,
     resolve_run_scope,
 )
+from jiuwenswarm.server.runtime.director.director_cloud_url import (
+    delete_public_object as _delete_public_object,
+)
+from jiuwenswarm.server.runtime.director.director_cloud_url import (
+    publish_asset as _publish_asset,
+)
 from jiuwenswarm.server.runtime.director.director_store import (
     DirectorAsset,
     DirectorProject,
@@ -576,7 +582,15 @@ class DirectorManager:
         if self._store.get_project(project_id) is None:
             raise DirectorRpcError("PROJECT_NOT_FOUND", f"未找到项目: {project_id}")
 
+        doomed = self._store.get_project(project_id)
+        cloud_keys = [
+            str((asset.params or {}).get("cloud_object_key") or "")
+            for asset in (doomed.assets if doomed else [])
+        ]
         self._store.delete_project(project_id)
+        for key in cloud_keys:
+            if key:
+                await asyncio.to_thread(_delete_public_object, key)
 
         # 尽力删除整个项目目录（素材文件等）；失败只记日志，不影响已经生效
         # 的元数据删除——跟 handle_director_asset_delete 对单个素材文件的
@@ -941,14 +955,27 @@ class DirectorManager:
                     raise DirectorRpcError(
                         "INVALID_PARAMS", "视频生视频需要先连接一个已就绪的视频素材，或填写视频链接"
                     )
-                source_label = (
-                    wired_asset.name or wired_asset.prompt or Path(str(wired_asset.file_path)).name
+                # 连的是本地素材：服务商只认 HTTPS 直链，先把素材传进对象存储
+                # 换成预签名链接；对象存储没配/上传失败才回落到报错。
+                published = await asyncio.to_thread(
+                    _publish_asset, wired_asset.file_path, wired_asset.asset_id,
                 )
-                raise DirectorRpcError(
-                    "INVALID_PARAMS",
-                    f"视频生视频目前只认公网 HTTPS 的视频链接，本地素材「{source_label}」无法直接送给生成接口。"
-                    "请先把这段视频放到可公网访问的地址（如对象存储），再把链接填到卡片的「视频链接」里。",
-                )
+                if published:
+                    source_video_path, cloud_object_key = published
+                    self._store.update_asset(
+                        project_id, wired_asset.asset_id,
+                        params={**(wired_asset.params or {}), "cloud_object_key": cloud_object_key},
+                    )
+                else:
+                    source_label = (
+                        wired_asset.name or wired_asset.prompt or Path(str(wired_asset.file_path)).name
+                    )
+                    raise DirectorRpcError(
+                        "INVALID_PARAMS",
+                        f"视频生视频需要公网 HTTPS 的视频链接，本地素材「{source_label}」也换不到直链"
+                        "（未配置对象存储或上传失败）。请把这段视频放到可公网访问的地址，"
+                        "再把链接填到卡片的「视频链接」里。",
+                    )
             duration_seconds = int(params.get("duration_seconds") or 15)
             # 成片是否带音轨由卡片上的选项决定；没带这个字段（旧画布数据、或别的
             # 调用方）时按"有声音"处理——这张卡片的输入是一段带音轨的源片，重绘
@@ -1059,9 +1086,22 @@ class DirectorManager:
                 # 体积上限，也省得用户自己再去抄链接。没连云存储/上传失败就
                 # 原样走本地文件路径，不影响生成——见
                 # _upload_audio_to_cloud_storage 的取舍说明。
-                cloud_audio_url = await self._upload_audio_to_cloud_storage(audio_asset)
-                if cloud_audio_url:
-                    reference_audio_path = cloud_audio_url
+                # 先试进程内配置好的对象存储（OBS/MinIO 或腾讯云 COS）：
+                # 服务商只认 HTTPS 直链，本地路径会被直接拒掉。
+                published = await asyncio.to_thread(
+                    _publish_asset, audio_asset.file_path, audio_asset.asset_id,
+                )
+                if published:
+                    reference_audio_path, cloud_object_key = published
+                    self._store.update_asset(
+                        project_id, audio_asset.asset_id,
+                        params={**(audio_asset.params or {}), "cloud_object_key": cloud_object_key},
+                    )
+                else:
+                    # 没配对象存储时才退回云存储连接器（azure-blob-storage）。
+                    cloud_audio_url = await self._upload_audio_to_cloud_storage(audio_asset)
+                    if cloud_audio_url:
+                        reference_audio_path = cloud_audio_url
             duration_seconds = int(params.get("duration_seconds") or 15)
             # 成片是否带音轨由卡片上的选项决定；没带这个字段（旧画布数据、
             # 或别的调用方）时按"有声音"处理——这张卡片的输入就是一段音频，
@@ -1395,7 +1435,13 @@ class DirectorManager:
         if asset is None:
             raise DirectorRpcError("ASSET_NOT_FOUND", f"未找到素材: {asset_id}")
 
+        cloud_object_key = str((asset.params or {}).get("cloud_object_key") or "")
         project = self._store.delete_asset(project_id, asset_id)
+
+        # 生成路径把本地素材换成过公网直链时会在对象存储里留一份拷贝；素材被
+        # 删掉后那份拷贝没有引用者了，一并清掉（尽力而为，失败只记日志）。
+        if cloud_object_key:
+            await asyncio.to_thread(_delete_public_object, cloud_object_key)
 
         # 尽力删除磁盘文件；失败只记日志，不影响已经生效的元数据删除
         # （用户在 UI 上看到的"已删除"以 director_state.json 为准）。
