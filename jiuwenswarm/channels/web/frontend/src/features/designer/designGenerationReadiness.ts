@@ -7,6 +7,7 @@ import {
   isGenerationSlotConfigured,
   type GenerationSlot,
 } from '../settings/modules/agent/generationModels';
+import { parseConfigBoolean } from '../settings/services/settingsContract';
 
 export type GenerationKind = 'image' | 'video';
 
@@ -14,10 +15,6 @@ const SLOT: Record<GenerationKind, GenerationSlot> = {
   image: 'visual_gen',
   video: 'video_gen',
 };
-
-function asConfigBoolean(value: unknown): boolean {
-  return value === true || String(value ?? '').trim().toLowerCase() === 'true';
-}
 
 /**
  * Why Design cannot generate this media kind, or null when the slot is switched
@@ -28,7 +25,7 @@ export function generationProblemFromConfig(
   kind: GenerationKind,
 ): string | null {
   const slot = SLOT[kind];
-  if (!asConfigBoolean(config[`${slot}_enabled`])) {
+  if (!parseConfigBoolean(config[`${slot}_enabled`])) {
     return i18n.t(`designer.models.${kind}Off`);
   }
   if (!isGenerationSlotConfigured(config, slot)) {
