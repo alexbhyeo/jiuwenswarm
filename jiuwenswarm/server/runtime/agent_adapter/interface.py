@@ -1440,6 +1440,8 @@ _GAME_ROUTES: dict[ReqMethod, str] = {
     ReqMethod.GAME_FILES_TREE: "handle_game_files_tree",
     ReqMethod.GAME_FILES_READ: "handle_game_files_read",
     ReqMethod.GAME_FILES_WRITE: "handle_game_files_write",
+    ReqMethod.GAME_CHAT_SEND: "handle_game_chat_send",
+    ReqMethod.GAME_CHANGES_REVERT: "handle_game_changes_revert",
     ReqMethod.GAME_BRIDGE_STATUS: "handle_game_bridge_status",
 }
 

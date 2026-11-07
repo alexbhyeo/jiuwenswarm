@@ -96,6 +96,8 @@ class GameProject:
     assets: list[GameAsset] = field(default_factory=list)
     build: dict[str, Any] = field(default_factory=dict)
     params: dict[str, Any] = field(default_factory=dict)
+    chat_messages: list[dict[str, Any]] = field(default_factory=list)
+    last_change_set: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def root_dir(self) -> Path:
@@ -113,6 +115,8 @@ class GameProject:
             "assets": [asset.to_dict() for asset in self.assets],
             "build": dict(self.build),
             "params": dict(self.params),
+            "chat_messages": list(self.chat_messages),
+            "last_change_set": list(self.last_change_set),
         }
 
     @classmethod
@@ -132,6 +136,12 @@ class GameProject:
             ],
             build=dict(data["build"]) if isinstance(data.get("build"), dict) else {},
             params=dict(data["params"]) if isinstance(data.get("params"), dict) else {},
+            chat_messages=[
+                item for item in (data.get("chat_messages") or []) if isinstance(item, dict)
+            ],
+            last_change_set=[
+                item for item in (data.get("last_change_set") or []) if isinstance(item, dict)
+            ],
         )
 
 

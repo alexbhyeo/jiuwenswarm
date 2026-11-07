@@ -14,6 +14,7 @@ import {
   gameApi,
   type GameAsset,
   type GameBridgeStatus,
+  type GameChange,
   type GameFileEntry,
   type GameProject,
 } from './gameApi';
@@ -67,6 +68,9 @@ export function GamePage() {
   const [notice, setNotice] = useState('');
   const [genPrompt, setGenPrompt] = useState('');
   const [genType, setGenType] = useState('character');
+  const [chatText, setChatText] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+  const [lastChanges, setLastChanges] = useState<GameChange[]>([]);
 
   const selected = useMemo(
     () => projects.find((p) => p.project_id === selectedId) ?? null,
@@ -163,6 +167,37 @@ export function GamePage() {
       setNotice(`构建失败：${String(err)}`);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const sendChat = async () => {
+    if (!selected || !chatText.trim()) return;
+    setChatBusy(true);
+    setNotice('助手正在改工程…');
+    try {
+      const { project, reply, changes } = await gameApi.chatSend(selected.project_id, chatText.trim());
+      setChatText('');
+      setLastChanges(changes);
+      setProjects((prev) => prev.map((p) => (p.project_id === project.project_id ? project : p)));
+      await gameApi.filesTree(project.project_id).then(setFiles).catch(() => undefined);
+      setNotice(`助手已回：${reply.slice(0, 80)}${reply.length > 80 ? '…' : ''}`);
+    } catch (err) {
+      setNotice(`助手失败：${String(err)}`);
+    } finally {
+      setChatBusy(false);
+    }
+  };
+
+  const revertChanges = async () => {
+    if (!selected) return;
+    try {
+      const { project, restored } = await gameApi.revertChanges(selected.project_id);
+      setLastChanges([]);
+      setProjects((prev) => prev.map((p) => (p.project_id === project.project_id ? project : p)));
+      await gameApi.filesTree(project.project_id).then(setFiles).catch(() => undefined);
+      setNotice(restored.length ? `已回退：${restored.join('、')}` : '没有需要回退的改动');
+    } catch (err) {
+      setNotice(`回退失败：${String(err)}`);
     }
   };
 
@@ -458,11 +493,55 @@ export function GamePage() {
 
       {/* 助手栏 */}
       <aside style={{ width: 300, display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <div style={card}>
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>游戏开发助手</div>
-          <div style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.8 }}>
-            P0 已完成项目、工程脚手架、素材与代码工作区。对话式修改（变更集）与场景编辑
-            按设计分到 P1/P2；接好 Godot-MCP 后即可开启。
+        <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0, flex: 1 }}>
+          <div style={{ fontWeight: 600 }}>游戏开发助手</div>
+          <div style={{ flex: 1, overflowY: 'auto', minHeight: 120, fontSize: 12, lineHeight: 1.7 }}>
+            {((selected?.chat_messages ?? []) as { role: string; content: string }[]).slice(-8).map((m, i) => (
+              <div
+                key={`${m.role}-${i}`}
+                style={{
+                  marginBottom: 8,
+                  padding: '6px 8px',
+                  borderRadius: 8,
+                  background: m.role === 'user' ? '#eef2ff' : '#f3f4f6',
+                }}
+              >
+                {m.content}
+              </div>
+            ))}
+            {!selected?.chat_messages?.length && (
+              <div style={{ color: '#9ca3af' }}>描述你想改的玩法，例如「按空格让主角跳一下」。</div>
+            )}
+          </div>
+          {lastChanges.length > 0 && (
+            <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                本轮改动（{lastChanges.length}）
+              </div>
+              {lastChanges.map((c) => (
+                <div key={c.path} style={{ fontSize: 12, color: '#374151' }}>
+                  {c.status === 'added' ? '＋' : c.status === 'removed' ? '－' : '±'} {c.path}
+                </div>
+              ))}
+              <button type="button" onClick={() => void revertChanges()} style={{ ...btn, marginTop: 6, width: '100%' }}>
+                回退本轮改动
+              </button>
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              value={chatText}
+              onChange={(e) => setChatText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void sendChat();
+              }}
+              placeholder="描述想修改的玩法…"
+              disabled={!selected || chatBusy}
+              style={{ flex: 1, padding: '6px 8px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 12 }}
+            />
+            <button type="button" onClick={() => void sendChat()} disabled={!selected || chatBusy || !chatText.trim()} style={btn}>
+              {chatBusy ? '…' : '发送'}
+            </button>
           </div>
         </div>
         <div style={card}>

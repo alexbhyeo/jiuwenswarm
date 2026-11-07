@@ -23,6 +23,7 @@ from jiuwenswarm.server.runtime.game.game_store import (
     get_project_assets_dir,
     get_project_dir,
 )
+from jiuwenswarm.server.runtime.game import game_chat
 from jiuwenswarm.server.runtime.game.godot_bridge import GodotBridge
 from jiuwenswarm.server.runtime.game.game_scaffold import scaffold_home_town
 
@@ -261,6 +262,67 @@ class GameManager:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         return {"path": relative, "bytes": len(content.encode("utf-8"))}
+
+    # ------------------------------------------------------------------
+    # 游戏助手（对话 + 变更集）
+    # ------------------------------------------------------------------
+    async def handle_game_chat_send(self, params: dict) -> dict:
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        text = str(params.get("text") or "").strip()
+        if not text:
+            raise GameRpcError("INVALID_PARAMS", "缺少 text")
+
+        root = get_project_dir(project.project_id)
+
+        async def _generate_asset(args: dict) -> dict:
+            result = await self.handle_game_assets_generate({
+                "project_id": project.project_id,
+                "type": args.get("type") or "prop",
+                "prompt": args.get("prompt") or "",
+                "name": args.get("name") or "",
+            })
+            asset = result.get("asset") or {}
+            return {"asset_id": asset.get("asset_id"), "status": asset.get("status"),
+                    "file_path": asset.get("file_path")}
+
+        async def _build_2d() -> dict:
+            result = await self.handle_game_projects_build_2d(
+                {"project_id": project.project_id})
+            return {"created": result.get("created") or []}
+
+        tools = game_chat.GameChatTools(
+            root=root, generate_asset=_generate_asset, build_2d=_build_2d)
+        # 只把用户/助手自然语言轮次喂回模型，工具消息留在本轮内部。
+        history = [
+            {"role": m["role"], "content": m.get("content") or ""}
+            for m in project.chat_messages
+            if m.get("role") in ("user", "assistant") and m.get("content")
+        ]
+        result = await game_chat.run_turn(
+            root=root, history=history, user_text=text, tools=tools)
+
+        messages = list(project.chat_messages)
+        messages.append({"role": "user", "content": text})
+        messages.append({"role": "assistant", "content": result["reply"]})
+        project = self._store.update_project(
+            project.project_id,
+            chat_messages=messages,
+            last_change_set=result["changes"],
+        )
+        return {
+            "project": project.to_dict(),
+            "reply": result["reply"],
+            "changes": result["changes"],
+        }
+
+    async def handle_game_changes_revert(self, params: dict) -> dict:
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        changes = project.last_change_set
+        if not changes:
+            raise GameRpcError("INVALID_PARAMS", "没有可回退的变更")
+        restored = game_chat.revert(get_project_dir(project.project_id), changes)
+        project = self._store.update_project(project.project_id, last_change_set=[])
+        return {"project": project.to_dict(), "restored": restored}
 
     # ------------------------------------------------------------------
     # 桥接状态

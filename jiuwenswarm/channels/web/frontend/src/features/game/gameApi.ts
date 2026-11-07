@@ -28,6 +28,8 @@ export type GameProject = {
   assets: GameAsset[];
   build: Record<string, unknown>;
   params: Record<string, unknown>;
+  chat_messages: GameChatMessage[];
+  last_change_set: GameChange[];
 };
 
 export type GameBridgeStatus = {
@@ -44,6 +46,15 @@ export type GameBridgeStatus = {
 
 export type GameFileEntry = { path: string; size: number; editable: boolean };
 
+export type GameChange = {
+  path: string;
+  status: 'added' | 'modified' | 'removed';
+  before: string | null;
+  after: string | null;
+};
+
+export type GameChatMessage = { role: string; content: string };
+
 const METHOD = {
   projectsList: 'game.projects.list',
   projectsCreate: 'game.projects.create',
@@ -59,6 +70,8 @@ const METHOD = {
   filesTree: 'game.files.tree',
   filesRead: 'game.files.read',
   filesWrite: 'game.files.write',
+  chatSend: 'game.chat.send',
+  changesRevert: 'game.changes.revert',
   bridgeStatus: 'game.bridge.status',
 } as const;
 
@@ -158,6 +171,23 @@ export const gameApi = {
       path,
       content,
     }),
+  chatSend: async (
+    projectId: string,
+    text: string
+  ): Promise<{ project: GameProject; reply: string; changes: GameChange[] }> => {
+    const resp = await webRequest<{ project: GameProject; reply: string; changes: GameChange[] }>(
+      METHOD.chatSend,
+      { project_id: projectId, text }
+    );
+    return { project: resp.project, reply: resp.reply ?? '', changes: resp.changes ?? [] };
+  },
+  revertChanges: async (projectId: string): Promise<{ project: GameProject; restored: string[] }> => {
+    const resp = await webRequest<{ project: GameProject; restored: string[] }>(
+      METHOD.changesRevert,
+      { project_id: projectId }
+    );
+    return { project: resp.project, restored: resp.restored ?? [] };
+  },
   bridgeStatus: async (force = false): Promise<GameBridgeStatus> => {
     const resp = await webRequest<{ bridge: GameBridgeStatus }>(METHOD.bridgeStatus, { force });
     return resp.bridge;

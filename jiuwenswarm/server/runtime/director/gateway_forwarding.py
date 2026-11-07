@@ -60,6 +60,8 @@ GAME_FORWARD_METHODS: frozenset[str] = frozenset({
     "game.files.tree",
     "game.files.read",
     "game.files.write",
+    "game.chat.send",
+    "game.changes.revert",
     "game.bridge.status",
 })
 

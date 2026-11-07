@@ -208,6 +208,8 @@ _ensure_req_method("GAME_ASSETS_DELETE", "game.assets.delete")
 _ensure_req_method("GAME_FILES_TREE", "game.files.tree")
 _ensure_req_method("GAME_FILES_READ", "game.files.read")
 _ensure_req_method("GAME_FILES_WRITE", "game.files.write")
+_ensure_req_method("GAME_CHAT_SEND", "game.chat.send")
+_ensure_req_method("GAME_CHANGES_REVERT", "game.changes.revert")
 _ensure_req_method("GAME_BRIDGE_STATUS", "game.bridge.status")
 # Hub expert/equipment catalog served by AgentServer (dispatch.py / methods.py /
 # http_invoke.py reference this member); 协议包当前 pin 尚未定义。
