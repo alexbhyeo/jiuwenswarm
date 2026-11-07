@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 
 # 代码工作区只暴露工程内这些后缀，避免把任意文件当代码编辑。
 _EDITABLE_SUFFIXES = {".gd", ".cs", ".tscn", ".tres", ".godot", ".json", ".cfg", ".md", ".txt"}
+# Godot 编辑器缓存的折叠/导入状态不是工程产物，列出来只会让文件面板变成噪音。
+_SKIP_DIRS = {".godot", ".import", ".git"}
 _MAX_READ_BYTES = 512 * 1024
 
 
@@ -229,6 +231,8 @@ class GameManager:
                     continue
                 relative = path.relative_to(root).as_posix()
                 if path.suffix.lower() not in _EDITABLE_SUFFIXES:
+                    continue
+                if _SKIP_DIRS.intersection(Path(relative).parts[:-1]):
                     continue
                 entries.append({
                     "path": relative,

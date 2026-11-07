@@ -9,7 +9,7 @@
  * 占位说明呈现，不假装功能已存在。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   gameApi,
   type GameAsset,
@@ -79,7 +79,8 @@ export function GamePage() {
   const [propValue, setPropValue] = useState('');
   const [runState, setRunState] = useState<GameRunState | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
-  const [logCursor, setLogCursor] = useState(0);
+  // 轮询读取日志时 interval 回调里不能用渲染期闭包的光标，统一走 ref。
+  const logCursorRef = useRef(0);
 
   const selected = useMemo(
     () => projects.find((p) => p.project_id === selectedId) ?? null,
@@ -242,7 +243,7 @@ export function GamePage() {
     try {
       setRunState(await gameApi.runStart(selected.project_id, true));
       setLogLines([]);
-      setLogCursor(0);
+      logCursorRef.current = 0;
       setNotice('已启动游戏（headless）');
     } catch (err) {
       setNotice(`运行失败：${String(err)}`);
@@ -258,17 +259,26 @@ export function GamePage() {
     }
   };
 
-  const refreshLogs = async () => {
+  const refreshLogs = useCallback(async () => {
     if (!selected) return;
     try {
-      const resp = await gameApi.runLogs(selected.project_id, logCursor);
+      const resp = await gameApi.runLogs(selected.project_id, logCursorRef.current);
       if (resp.lines.length) setLogLines((prev) => [...prev, ...resp.lines].slice(-400));
-      setLogCursor(resp.next);
+      logCursorRef.current = resp.next;
       setRunState(resp.state);
     } catch (err) {
       setNotice(`日志读取失败：${String(err)}`);
     }
-  };
+  }, [selected]);
+
+  // 运行期间自动追日志，避免用户反复点「刷新日志」却看不到 Godot 输出。
+  useEffect(() => {
+    const status = runState?.status;
+    if (!selected || (status !== 'running' && status !== 'starting')) return;
+    void refreshLogs();
+    const timer = window.setInterval(() => void refreshLogs(), 1500);
+    return () => window.clearInterval(timer);
+  }, [selected, runState?.status, refreshLogs]);
 
   const openFile = async (path: string) => {
     if (!selected) return;

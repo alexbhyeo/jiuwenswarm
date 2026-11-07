@@ -201,6 +201,10 @@ def _prepare_worker_configuration() -> None:
     # Persist missing model/model-group/route IDs before any session or agent is
     # restored. Validation happens against the complete candidate before writing.
     began = time.monotonic()
+    # 迁移会经 common 的 external_providers 反查 session_metadata；该域由实现模块
+    # 在 import 时自注册（见 server/runtime/session/session_metadata.py 末尾）。
+    # 这里必须先把实现模块导入，否则迁移一开始就撞 ExternalProviderUnregistered。
+    import jiuwenswarm.server.runtime.session.session_metadata  # noqa: F401 - 导入即注册
     from jiuwenswarm.common.config import migrate_model_business_ids
 
     migrate_model_business_ids()

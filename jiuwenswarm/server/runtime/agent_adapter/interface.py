@@ -2832,15 +2832,17 @@ class JiuWenSwarm:
                 err_payload["code"] = code.strip()
             return AgentResponse(
                 request_id=request.request_id,
+                channel_id=request.channel_id,
                 ok=False,
                 payload=err_payload,
-                req_method=request.req_method,
+                metadata=request.metadata,
             )
         return AgentResponse(
             request_id=request.request_id,
+            channel_id=request.channel_id,
             ok=True,
             payload=payload,
-            req_method=request.req_method,
+            metadata=request.metadata,
         )
 
     async def _handle_director_request(self, request: AgentRequest) -> AgentResponse | None:
