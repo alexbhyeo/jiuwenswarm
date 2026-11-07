@@ -28,6 +28,7 @@ import { SkillPanel } from './components/SkillPanel';
 import { AgentManagementPanel } from './components/AgentManagementPanel';
 import { RsiPage } from './features/rsi/RsiPage';
 import { DirectorPage } from './features/director/DirectorPage';
+import { GamePage } from './features/game/GamePage';
 import { useDirectorStore } from './features/director/directorStore';
 import { RsiRailPeek } from './features/rsi/components/RsiRailPeek';
 import { useRsiStore } from './features/rsi/rsiStore';
@@ -5102,6 +5103,11 @@ const showWorkspaceDivider = effectiveTeamAreaExpanded && !showConversationNotFo
               onCollapse={() => { closeSidebarPeek(); setSecondarySidebarCollapsed((v) => !v); }}
               openCreateNonce={rsiOpenCreateNonce}
             />
+          </div>
+        )}
+        {activeNav === 'game' && (
+          <div className="app-section">
+            <GamePage />
           </div>
         )}
         {activeNav === 'director' && (

@@ -1,12 +1,12 @@
 ---
 title: 设计文档索引
-author: xinyang_bali
-author_email: 835397263@qq.com
+author: alexbhyeo
+author_email: alexbhyeo@users.noreply.github.com
 generated: true
 ---
 
 <!-- 本文件由 .agents/skills/jw-design/scripts/generate_index.py 自动生成，请勿手改。重新生成：python .agents/skills/jw-design/scripts/generate_index.py -->
-<!-- generated-at: 2026-11-03T16:00+08:00 -->
+<!-- generated-at: 2026-11-07T19:41+08:00 -->
 
 # 设计文档索引 (INDEX)
 
@@ -20,8 +20,11 @@ generated: true
 | [agent_teams/workflow](#module-2) |
 | [jiuwenswarm](#module-3) |
 | [jiuwenswarm/channels/web/frontend](#module-4) |
-| [jiuwenswarm/gateway/channel_manager/web](#module-5) |
-| [jiuwenswarm/observability](#module-6) |
+| [jiuwenswarm/channels/web/frontend/src/features](#module-5) |
+| [jiuwenswarm/common/schema](#module-6) |
+| [jiuwenswarm/gateway/channel_manager/web](#module-7) |
+| [jiuwenswarm/observability](#module-8) |
+| [jiuwenswarm/server/runtime](#module-9) |
 
 <a id="module-1"></a>
 
@@ -69,6 +72,26 @@ generated: true
 
 <a id="module-5"></a>
 
+## jiuwenswarm/channels/web/frontend/src/features
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261107-1637-game-mode](proposals/D-20261107-1637-game-mode/design.md) | 游戏模式（游戏工坊）——用 Godot MCP 构建可运行游戏 | draft | alexbhyeo | core | 2026-11-07 |
+
+<a id="module-6"></a>
+
+## jiuwenswarm/common/schema
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261107-1637-game-mode](proposals/D-20261107-1637-game-mode/design.md) | 游戏模式（游戏工坊）——用 Godot MCP 构建可运行游戏 | draft | alexbhyeo | core | 2026-11-07 |
+
+<a id="module-7"></a>
+
 ## jiuwenswarm/gateway/channel_manager/web
 
 ### 开发前 (proposals)
@@ -77,7 +100,7 @@ generated: true
 |---|---|---|---|---|---|
 | [SDD-0025](proposals/SDD-0025-trajectory-session-store-and-serving/design.md) | 轨迹数据面：会话级 SQLite 存储、实时变更提示与读取 API | draft | @alan_cheng | observability | 2026-09-15 |
 
-<a id="module-6"></a>
+<a id="module-8"></a>
 
 ## jiuwenswarm/observability
 
@@ -86,3 +109,13 @@ generated: true
 | ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
 |---|---|---|---|---|---|
 | [SDD-0025](proposals/SDD-0025-trajectory-session-store-and-serving/design.md) | 轨迹数据面：会话级 SQLite 存储、实时变更提示与读取 API | draft | @alan_cheng | observability | 2026-09-15 |
+
+<a id="module-9"></a>
+
+## jiuwenswarm/server/runtime
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261107-1637-game-mode](proposals/D-20261107-1637-game-mode/design.md) | 游戏模式（游戏工坊）——用 Godot MCP 构建可运行游戏 | draft | alexbhyeo | core | 2026-11-07 |

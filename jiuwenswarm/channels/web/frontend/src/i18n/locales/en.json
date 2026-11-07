@@ -71,7 +71,8 @@
   },
   "nav": {
     "chat": "Chat",
-    "director": "Director",
+"game": "Games",
+        "director": "Director",
     "work": "Tasks",
     "agent": "Experts",
     "design": "Design",

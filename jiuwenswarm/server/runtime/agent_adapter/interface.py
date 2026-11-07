@@ -139,6 +139,7 @@ from jiuwenswarm.server.runtime.agent_adapter.user_turn import (
     UserTurn,
 )
 from jiuwenswarm.server.runtime.director.director_manager import DirectorManager
+from jiuwenswarm.server.runtime.game.game_manager import GameManager
 from jiuwenswarm.server.runtime.session.history_io import (
     run_history_io as _run_history_io,
 )
@@ -1423,6 +1424,25 @@ _DIRECTOR_ROUTES: dict[ReqMethod, str] = {
     ReqMethod.DIRECTOR_CLIP_COMPOSE: "handle_director_clip_compose",
 }
 
+# 游戏模式（游戏工坊）的路由表，与 _DIRECTOR_ROUTES 同构。
+_GAME_ROUTES: dict[ReqMethod, str] = {
+    ReqMethod.GAME_PROJECTS_LIST: "handle_game_projects_list",
+    ReqMethod.GAME_PROJECTS_CREATE: "handle_game_projects_create",
+    ReqMethod.GAME_PROJECTS_GET: "handle_game_projects_get",
+    ReqMethod.GAME_PROJECTS_RENAME: "handle_game_projects_rename",
+    ReqMethod.GAME_PROJECTS_DELETE: "handle_game_projects_delete",
+    ReqMethod.GAME_PROJECTS_SCAFFOLD: "handle_game_projects_scaffold",
+    ReqMethod.GAME_PROJECTS_BUILD_2D: "handle_game_projects_build_2d",
+    ReqMethod.GAME_ASSETS_LIST: "handle_game_assets_list",
+    ReqMethod.GAME_ASSETS_IMPORT: "handle_game_assets_import",
+    ReqMethod.GAME_ASSETS_GENERATE: "handle_game_assets_generate",
+    ReqMethod.GAME_ASSETS_DELETE: "handle_game_assets_delete",
+    ReqMethod.GAME_FILES_TREE: "handle_game_files_tree",
+    ReqMethod.GAME_FILES_READ: "handle_game_files_read",
+    ReqMethod.GAME_FILES_WRITE: "handle_game_files_write",
+    ReqMethod.GAME_BRIDGE_STATUS: "handle_game_bridge_status",
+}
+
 _SESSION_ASSET_ROUTES: dict[ReqMethod, str] = {
     ReqMethod.SESSION_ASSETS_LIST: "handle_session_assets_list",
     ReqMethod.SESSION_ASSETS_REGISTER: "handle_session_assets_register",
@@ -1650,6 +1670,7 @@ class JiuWenSwarm:
         self._sdk_name: str | None = None
         self._skill_manager = SkillManager(workspace_dir=str(get_agent_workspace_dir()))
         self._director_manager = DirectorManager()
+        self._game_manager = GameManager()
         self._session_asset_manager = get_session_asset_manager()
         self._session_manager = SessionManager()
         self._heartbeat_service: Any | None = None
@@ -2775,6 +2796,46 @@ class JiuWenSwarm:
             metadata=request.metadata,
         )
 
+    async def _handle_game_request(self, request: AgentRequest) -> AgentResponse | None:
+        """处理游戏模式（游戏工坊）相关请求，返回 None 表示不是该类请求.
+
+        与 _handle_director_request 同构：不重建 Agent 实例，直接调
+        GameManager 的处理器；错误同样折叠成带 code 的 AgentResponse，
+        让前端的 RPC 客户端拿到稳定的错误形状。
+        """
+        if request.req_method not in _GAME_ROUTES:
+            return None
+
+        handler_name = _GAME_ROUTES[request.req_method]
+        handler = getattr(self._game_manager, handler_name)
+        params: dict = {}
+        try:
+            params = dict(request.params) if isinstance(request.params, dict) else {}
+            payload = await handler(params)
+        except Exception as exc:
+            logger.error(
+                "[JiuWenSwarm] game 请求处理失败: method=%s params=%s error=%s",
+                request.req_method,
+                params,
+                exc,
+            )
+            err_payload: dict = {"error": str(exc), "message": str(exc)}
+            code = getattr(exc, "code", None)
+            if isinstance(code, str) and code.strip():
+                err_payload["code"] = code.strip()
+            return AgentResponse(
+                request_id=request.request_id,
+                ok=False,
+                payload=err_payload,
+                req_method=request.req_method,
+            )
+        return AgentResponse(
+            request_id=request.request_id,
+            ok=True,
+            payload=payload,
+            req_method=request.req_method,
+        )
+
     async def _handle_director_request(self, request: AgentRequest) -> AgentResponse | None:
         """处理导演模式（Director Mode）相关请求，返回 None 表示不是该类请求.
 
@@ -3647,6 +3708,10 @@ class JiuWenSwarm:
         director_response = await self._handle_director_request(request)
         if director_response is not None:
             return director_response
+
+        game_response = await self._handle_game_request(request)
+        if game_response is not None:
+            return game_response
 
         session_asset_response = await self._handle_session_asset_request(request)
         if session_asset_response is not None:

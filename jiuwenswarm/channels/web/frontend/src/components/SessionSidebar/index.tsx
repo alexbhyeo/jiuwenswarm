@@ -98,9 +98,18 @@ const directorNavIcon = (
   </svg>
 );
 
+// "游戏模式"导航图标——手柄隐喻。
+const gameNavIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2.5" y="7.5" width="19" height="9" rx="4.5" />
+    <path d="M7 10.5v3M5.5 12h3M15.5 11h.01M17.5 13h.01" strokeWidth={1.5} />
+  </svg>
+);
+
 const mainNavItems: NavItem[] = [
   { key: 'chat', labelKey: 'nav.work', icon: <WorkIcon aria-hidden /> },
   { key: 'director', labelKey: 'nav.director', icon: directorNavIcon },
+  { key: 'game', labelKey: 'nav.game', icon: gameNavIcon },
   { key: 'agents', labelKey: 'nav.agent', icon: <AgentDesignIcon aria-hidden /> },
   { key: 'skills', labelKey: 'nav.skills', icon: <SkillDesignIcon aria-hidden /> },
   { key: 'connectorMarket', labelKey: 'nav.connectorMarket', icon: connectorMarketNavIcon },

@@ -191,6 +191,24 @@ _ensure_req_method("DIRECTOR_EDIT_CHAT_SKILL_GET", "director.edit_chat.skill_get
 _ensure_req_method("DIRECTOR_EDIT_CHAT_SKILL_SET", "director.edit_chat.skill_set")
 _ensure_req_method("DIRECTOR_LAB_CANVAS_SAVE", "director.lab_canvas.save")
 _ensure_req_method("DIRECTOR_CLIP_COMPOSE", "director.clip.compose")
+# Game Mode（游戏工坊）：项目/素材/代码工作区与 Godot 桥接，见
+# server/runtime/game/game_manager.py。与导演模式同理，协议包不收录这些
+# 方法，运行时补齐即可。
+_ensure_req_method("GAME_PROJECTS_LIST", "game.projects.list")
+_ensure_req_method("GAME_PROJECTS_CREATE", "game.projects.create")
+_ensure_req_method("GAME_PROJECTS_GET", "game.projects.get")
+_ensure_req_method("GAME_PROJECTS_RENAME", "game.projects.rename")
+_ensure_req_method("GAME_PROJECTS_DELETE", "game.projects.delete")
+_ensure_req_method("GAME_PROJECTS_SCAFFOLD", "game.projects.scaffold")
+_ensure_req_method("GAME_PROJECTS_BUILD_2D", "game.projects.build_2d")
+_ensure_req_method("GAME_ASSETS_LIST", "game.assets.list")
+_ensure_req_method("GAME_ASSETS_IMPORT", "game.assets.import")
+_ensure_req_method("GAME_ASSETS_GENERATE", "game.assets.generate")
+_ensure_req_method("GAME_ASSETS_DELETE", "game.assets.delete")
+_ensure_req_method("GAME_FILES_TREE", "game.files.tree")
+_ensure_req_method("GAME_FILES_READ", "game.files.read")
+_ensure_req_method("GAME_FILES_WRITE", "game.files.write")
+_ensure_req_method("GAME_BRIDGE_STATUS", "game.bridge.status")
 # Hub expert/equipment catalog served by AgentServer (dispatch.py / methods.py /
 # http_invoke.py reference this member); 协议包当前 pin 尚未定义。
 _ensure_req_method("HUB_EXPERT_PACKAGES_CATALOG", "hub.expert_packages.catalog")

@@ -71,7 +71,8 @@
   },
   "nav": {
     "chat": "对话",
-    "director": "导演",
+"game": "游戏",
+        "director": "导演",
     "work": "任务",
     "agent": "专家",
     "design": "设计",

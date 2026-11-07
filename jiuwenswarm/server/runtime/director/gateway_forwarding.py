@@ -44,6 +44,25 @@ DIRECTOR_FORWARD_METHODS: frozenset[str] = frozenset({
     "director.clip.compose",
 })
 
+# 游戏模式（游戏工坊）同样由母仓补齐 ReqMethod，网关不会预置这些转发项。
+GAME_FORWARD_METHODS: frozenset[str] = frozenset({
+    "game.projects.list",
+    "game.projects.create",
+    "game.projects.get",
+    "game.projects.rename",
+    "game.projects.delete",
+    "game.projects.scaffold",
+    "game.projects.build_2d",
+    "game.assets.list",
+    "game.assets.import",
+    "game.assets.generate",
+    "game.assets.delete",
+    "game.files.tree",
+    "game.files.read",
+    "game.files.write",
+    "game.bridge.status",
+})
+
 # 剪辑助手的团队轮次（ads-codirector：十几个隔离成员调用 + 一批串行生成）合法地
 # 超过 AgentClient 的 600s 默认值；超时丢响应会让用户看到"失败"，而 AgentServer
 # 其实已经把结果落盘了。
@@ -68,7 +87,7 @@ def _mark(message: str) -> None:
 
 
 def install_director_forward_methods(
-    extra: Iterable[str] = DIRECTOR_FORWARD_METHODS,
+    extra: Iterable[str] = DIRECTOR_FORWARD_METHODS | GAME_FORWARD_METHODS,
 ) -> bool:
     """把 ``extra`` 并进 Web 通道的两个转发方法集合；可重复调用."""
     try:
