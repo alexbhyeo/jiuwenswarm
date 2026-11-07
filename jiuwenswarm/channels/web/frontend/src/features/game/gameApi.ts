@@ -55,6 +55,29 @@ export type GameChange = {
 
 export type GameChatMessage = { role: string; content: string };
 
+export type GameSceneNode = {
+  name: string;
+  type: string;
+  parent: string;
+  path: string;
+  properties: Record<string, string>;
+};
+
+export type GameSceneTree = {
+  path: string;
+  tree: { name: string; type?: string; children?: GameSceneTree['tree'][] };
+  nodes: GameSceneNode[];
+};
+
+export type GameRunState = {
+  project_id: string;
+  status: string;
+  exit_code: number | null;
+  headless: boolean;
+  uptime: number;
+  lines?: number;
+};
+
 const METHOD = {
   projectsList: 'game.projects.list',
   projectsCreate: 'game.projects.create',
@@ -70,6 +93,11 @@ const METHOD = {
   filesTree: 'game.files.tree',
   filesRead: 'game.files.read',
   filesWrite: 'game.files.write',
+  sceneTree: 'game.scene.tree',
+  sceneUpdate: 'game.scene.update',
+  runStart: 'game.run.start',
+  runStop: 'game.run.stop',
+  runLogs: 'game.run.logs',
   chatSend: 'game.chat.send',
   changesRevert: 'game.changes.revert',
   bridgeStatus: 'game.bridge.status',
@@ -170,6 +198,38 @@ export const gameApi = {
       project_id: projectId,
       path,
       content,
+    }),
+  sceneTree: (projectId: string, path = 'scenes/main.tscn') =>
+    webRequest<GameSceneTree>(METHOD.sceneTree, { project_id: projectId, path }),
+  sceneUpdate: (
+    projectId: string,
+    node: string,
+    key: string,
+    value: string,
+    path = 'scenes/main.tscn'
+  ) =>
+    webRequest<GameSceneTree>(METHOD.sceneUpdate, {
+      project_id: projectId,
+      path,
+      node,
+      key,
+      value,
+    }),
+  runStart: async (projectId: string, headless = true): Promise<GameRunState> => {
+    const resp = await webRequest<{ state: GameRunState }>(METHOD.runStart, {
+      project_id: projectId,
+      headless,
+    });
+    return resp.state;
+  },
+  runStop: async (projectId: string): Promise<GameRunState> => {
+    const resp = await webRequest<{ state: GameRunState }>(METHOD.runStop, { project_id: projectId });
+    return resp.state;
+  },
+  runLogs: (projectId: string, since = 0) =>
+    webRequest<{ state: GameRunState; lines: string[]; next: number }>(METHOD.runLogs, {
+      project_id: projectId,
+      since,
     }),
   chatSend: async (
     projectId: string,

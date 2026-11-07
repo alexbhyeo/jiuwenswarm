@@ -17,6 +17,8 @@ import {
   type GameChange,
   type GameFileEntry,
   type GameProject,
+  type GameRunState,
+  type GameSceneNode,
 } from './gameApi';
 
 type TabKey = 'create' | 'workflow' | 'assets' | 'scene' | 'code' | 'logs';
@@ -71,6 +73,13 @@ export function GamePage() {
   const [chatText, setChatText] = useState('');
   const [chatBusy, setChatBusy] = useState(false);
   const [lastChanges, setLastChanges] = useState<GameChange[]>([]);
+  const [sceneNodes, setSceneNodes] = useState<GameSceneNode[]>([]);
+  const [activeNode, setActiveNode] = useState('');
+  const [propKey, setPropKey] = useState('modulate');
+  const [propValue, setPropValue] = useState('');
+  const [runState, setRunState] = useState<GameRunState | null>(null);
+  const [logLines, setLogLines] = useState<string[]>([]);
+  const [logCursor, setLogCursor] = useState(0);
 
   const selected = useMemo(
     () => projects.find((p) => p.project_id === selectedId) ?? null,
@@ -198,6 +207,66 @@ export function GamePage() {
       setNotice(restored.length ? `已回退：${restored.join('、')}` : '没有需要回退的改动');
     } catch (err) {
       setNotice(`回退失败：${String(err)}`);
+    }
+  };
+
+  const loadScene = async () => {
+    if (!selected) return;
+    try {
+      const resp = await gameApi.sceneTree(selected.project_id);
+      setSceneNodes(resp.nodes);
+      setActiveNode((cur) => cur || resp.nodes[0]?.name || '');
+    } catch (err) {
+      setNotice(`读取场景失败：${String(err)}`);
+    }
+  };
+
+  const applyProperty = async () => {
+    if (!selected || !activeNode || !propKey.trim()) return;
+    try {
+      const resp = await gameApi.sceneUpdate(
+        selected.project_id,
+        activeNode,
+        propKey.trim(),
+        propValue.trim()
+      );
+      setSceneNodes(resp.nodes);
+      setNotice(`已更新 ${activeNode}.${propKey.trim()}`);
+    } catch (err) {
+      setNotice(`更新失败：${String(err)}`);
+    }
+  };
+
+  const startRun = async () => {
+    if (!selected) return;
+    try {
+      setRunState(await gameApi.runStart(selected.project_id, true));
+      setLogLines([]);
+      setLogCursor(0);
+      setNotice('已启动游戏（headless）');
+    } catch (err) {
+      setNotice(`运行失败：${String(err)}`);
+    }
+  };
+
+  const stopRun = async () => {
+    if (!selected) return;
+    try {
+      setRunState(await gameApi.runStop(selected.project_id));
+    } catch (err) {
+      setNotice(`停止失败：${String(err)}`);
+    }
+  };
+
+  const refreshLogs = async () => {
+    if (!selected) return;
+    try {
+      const resp = await gameApi.runLogs(selected.project_id, logCursor);
+      if (resp.lines.length) setLogLines((prev) => [...prev, ...resp.lines].slice(-400));
+      setLogCursor(resp.next);
+      setRunState(resp.state);
+    } catch (err) {
+      setNotice(`日志读取失败：${String(err)}`);
     }
   };
 
@@ -407,22 +476,82 @@ export function GamePage() {
           )}
 
           {tab === 'scene' && (
-            <div style={{ fontSize: 13, color: '#4b5563', lineHeight: 1.9 }}>
-              <p>场景编辑需要 Godot 编辑器经由 Godot-MCP 连接。</p>
-              <p>
-                当前桥接状态：
-                <strong> {bridge?.ready ? '可用' : '不可用'}</strong>
-                {bridge && !bridge.ready && (
-                  <>
-                    （Godot {bridge.godot ? bridge.godot_version || '已安装' : '未检测到'}，
-                    .NET {bridge.dotnet ? bridge.dotnet_version : '未检测到'}，
-                    MCP {bridge.mcp ? '已配置' : '未配置'}）
-                  </>
+            <div style={{ display: 'flex', gap: 12, minHeight: 320 }}>
+              <div style={{ width: 240, borderRight: '1px solid #e5e7eb', paddingRight: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                  <div style={{ fontSize: 12, color: '#6b7280' }}>场景树</div>
+                  <button type="button" onClick={() => void loadScene()} disabled={!selected} style={{ ...btn, padding: '2px 8px', fontSize: 12 }}>
+                    载入
+                  </button>
+                </div>
+                {sceneNodes.length === 0 && (
+                  <div style={{ fontSize: 12, color: '#9ca3af' }}>点「载入」读取 main.tscn</div>
                 )}
-              </p>
-              <p style={{ color: '#6b7280' }}>
-                按设计 D-20261107-1637，场景树与属性编辑在 P2 通过 MCP 的 RQL 落地。
-              </p>
+                {sceneNodes.map((node) => (
+                  <button
+                    key={node.path}
+                    type="button"
+                    onClick={() => setActiveNode(node.name)}
+                    style={{
+                      display: 'block',
+                      width: '100%',
+                      textAlign: 'left',
+                      border: 'none',
+                      background: node.name === activeNode ? '#eef2ff' : 'transparent',
+                      padding: '3px 6px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {node.parent && node.parent !== '.' ? '  ' : ''}
+                    {node.name} <span style={{ color: '#9ca3af' }}>({node.type})</span>
+                  </button>
+                ))}
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
+                  {activeNode ? `属性 · ${activeNode}` : '选择左侧节点'}
+                </div>
+                {(() => {
+                  const node = sceneNodes.find((n) => n.name === activeNode);
+                  if (!node) return <div style={{ fontSize: 12, color: '#9ca3af' }}>—</div>;
+                  return (
+                    <>
+                      <table style={{ fontSize: 12, width: '100%', marginBottom: 10 }}>
+                        <tbody>
+                          {Object.entries(node.properties).map(([k, v]) => (
+                            <tr key={k}>
+                              <td style={{ color: '#6b7280', paddingRight: 8, whiteSpace: 'nowrap' }}>{k}</td>
+                              <td style={{ fontFamily: 'ui-monospace, monospace' }}>{v.slice(0, 60)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <input
+                          value={propKey}
+                          onChange={(e) => setPropKey(e.target.value)}
+                          placeholder="属性名，如 modulate"
+                          style={{ width: 160, padding: '5px 8px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 12 }}
+                        />
+                        <input
+                          value={propValue}
+                          onChange={(e) => setPropValue(e.target.value)}
+                          placeholder="值，如 Color(1, 0.9, 0.4, 1)"
+                          style={{ flex: 1, padding: '5px 8px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 12 }}
+                        />
+                        <button type="button" onClick={() => void applyProperty()} style={btn}>
+                          写入
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+                <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 10 }}>
+                  直接改 .tscn 文本；接上 Godot-MCP 后同一面板会切换为 RQL 编辑。
+                </div>
+              </div>
             </div>
           )}
 
@@ -484,8 +613,35 @@ export function GamePage() {
           )}
 
           {tab === 'logs' && (
-            <div style={{ fontSize: 13, color: '#4b5563' }}>
-              运行日志在 P2 接入（`console` 与 `runtime-errors` 两个 MCP 工具）。
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button type="button" onClick={() => void startRun()} disabled={!selected} style={btn}>
+                  运行游戏
+                </button>
+                <button type="button" onClick={() => void stopRun()} disabled={!selected} style={btn}>
+                  停止
+                </button>
+                <button type="button" onClick={() => void refreshLogs()} disabled={!selected} style={btn}>
+                  刷新日志
+                </button>
+                <span style={{ fontSize: 12, color: '#6b7280' }}>
+                  {runState ? `状态：${runState.status}${runState.exit_code !== null ? `（exit ${runState.exit_code}）` : ''}` : '未运行'}
+                </span>
+              </div>
+              <pre style={{
+                flex: 1,
+                minHeight: 260,
+                margin: 0,
+                padding: 10,
+                borderRadius: 8,
+                background: '#0b1020',
+                color: '#d6e2ff',
+                fontSize: 12,
+                overflow: 'auto',
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              }}>
+                {logLines.length ? logLines.join('\n') : '（还没有日志，点「运行游戏」）'}
+              </pre>
             </div>
           )}
         </div>

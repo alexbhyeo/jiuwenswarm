@@ -23,7 +23,7 @@ from jiuwenswarm.server.runtime.game.game_store import (
     get_project_assets_dir,
     get_project_dir,
 )
-from jiuwenswarm.server.runtime.game import game_chat
+from jiuwenswarm.server.runtime.game import game_chat, game_run, game_scene
 from jiuwenswarm.server.runtime.game.godot_bridge import GodotBridge
 from jiuwenswarm.server.runtime.game.game_scaffold import scaffold_home_town
 
@@ -48,6 +48,7 @@ class GameManager:
     def __init__(self) -> None:
         self._store = GameStore()
         self._bridge = GodotBridge()
+        self._runner = game_run.GameRunner()
 
     # ------------------------------------------------------------------
     # 项目
@@ -323,6 +324,71 @@ class GameManager:
         restored = game_chat.revert(get_project_dir(project.project_id), changes)
         project = self._store.update_project(project.project_id, last_change_set=[])
         return {"project": project.to_dict(), "restored": restored}
+
+    # ------------------------------------------------------------------
+    # 场景（.tscn 解析；接了 MCP 后可切到 RQL）
+    # ------------------------------------------------------------------
+    async def handle_game_scene_tree(self, params: dict) -> dict:
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        scene = str(params.get("path") or "").strip() or "scenes/main.tscn"
+        target = self._resolve_inside_project(project, scene)
+        if not target.is_file():
+            raise GameRpcError("NOT_FOUND", f"场景文件不存在: {scene}")
+        nodes = game_scene.parse_scene(target.read_text(encoding="utf-8"))
+        return {
+            "path": scene,
+            "tree": game_scene.build_tree(nodes),
+            "nodes": [node.to_dict() for node in nodes],
+        }
+
+    async def handle_game_scene_update(self, params: dict) -> dict:
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        scene = str(params.get("path") or "").strip() or "scenes/main.tscn"
+        node_name = str(params.get("node") or "").strip()
+        key = str(params.get("key") or "").strip()
+        value = str(params.get("value") or "").strip()
+        if not (node_name and key):
+            raise GameRpcError("INVALID_PARAMS", "缺少 node 或 key")
+        target = self._resolve_inside_project(project, scene)
+        if not target.is_file():
+            raise GameRpcError("NOT_FOUND", f"场景文件不存在: {scene}")
+        text = target.read_text(encoding="utf-8")
+        try:
+            updated = game_scene.set_property(
+                text, node_name, key, value, parent=str(params.get("parent") or ""))
+        except KeyError as exc:
+            raise GameRpcError("NODE_NOT_FOUND", str(exc)) from exc
+        target.write_text(updated, encoding="utf-8")
+        nodes = game_scene.parse_scene(updated)
+        return {
+            "path": scene,
+            "tree": game_scene.build_tree(nodes),
+            "nodes": [node.to_dict() for node in nodes],
+        }
+
+    # ------------------------------------------------------------------
+    # 运行与日志
+    # ------------------------------------------------------------------
+    async def handle_game_run_start(self, params: dict) -> dict:
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        root = get_project_dir(project.project_id)
+        if not (root / "project.godot").is_file():
+            raise GameRpcError("INVALID_PARAMS", "工程还没有脚手架，请先生成 2D 主城")
+        try:
+            state = await self._runner.start(
+                project.project_id, root, headless=bool(params.get("headless", True)))
+        except RuntimeError as exc:
+            raise GameRpcError("GODOT_UNAVAILABLE", str(exc)) from exc
+        return {"state": state}
+
+    async def handle_game_run_stop(self, params: dict) -> dict:
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        return {"state": await self._runner.stop(project.project_id)}
+
+    async def handle_game_run_logs(self, params: dict) -> dict:
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        since = params.get("since")
+        return self._runner.logs(project.project_id, since=int(since or 0))
 
     # ------------------------------------------------------------------
     # 桥接状态

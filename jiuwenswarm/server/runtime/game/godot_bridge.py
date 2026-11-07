@@ -242,10 +242,37 @@ class GodotBridge:
                 "Godot MCP 未配置：请设置 GODOT_MCP_URL 或 GODOT_MCP_COMMAND"
                 "（参考 Godot-MCP README 的 Connect 章节）"
             )
-        # 首期只做链路可达性校验：真正的工具编排在 P1 随游戏助手一起落地。
-        raise GodotUnavailable(
-            f"Godot MCP 工具调用尚未启用（tool={tool}）；当前仅支持工程脚手架与状态查询"
-        )
+        if not url:
+            raise GodotUnavailable(
+                "Godot MCP 仅配置了 GODOT_MCP_COMMAND（stdio 传输）；"
+                "当前实现走 HTTP JSON-RPC，请改配 GODOT_MCP_URL"
+            )
+        import urllib.request
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": tool, "arguments": args or {}},
+        }
+
+        def _post() -> dict[str, Any]:
+            request = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        try:
+            result = await asyncio.to_thread(_post)
+        except Exception as exc:  # noqa: BLE001 - 传输失败同样走降级
+            raise GodotUnavailable(f"Godot MCP 调用失败（{tool}）：{exc}") from exc
+        if isinstance(result, dict) and result.get("error"):
+            raise GodotUnavailable(f"Godot MCP 返回错误（{tool}）：{result['error']}")
+        return result
 
     @staticmethod
     def tool_catalog() -> list[dict[str, str]]:
