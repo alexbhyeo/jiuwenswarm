@@ -30,7 +30,8 @@ from jiuwenswarm.server.runtime.game.game_scaffold import scaffold_home_town
 logger = logging.getLogger(__name__)
 
 # 代码工作区只暴露工程内这些后缀，避免把任意文件当代码编辑。
-_EDITABLE_SUFFIXES = {".gd", ".cs", ".tscn", ".tres", ".godot", ".json", ".cfg", ".md", ".txt"}
+# .py 是工程自带的工具脚本（例如素材流水线 tools/build_sprites.py）。
+_EDITABLE_SUFFIXES = {".gd", ".cs", ".tscn", ".tres", ".godot", ".json", ".cfg", ".md", ".txt", ".py"}
 # Godot 编辑器缓存的折叠/导入状态不是工程产物，列出来只会让文件面板变成噪音。
 _SKIP_DIRS = {".godot", ".import", ".git"}
 _MAX_READ_BYTES = 512 * 1024
