@@ -129,3 +129,4 @@ designer_catalog_skills_reports_trajectory/runs/*
 
 # Local testing handoff documents are not versioned.
 /.agents/agent-docs/designs/testing/
+jiuwenswarm/channels/ide/packages/jetbrains-plugin/bin/*
