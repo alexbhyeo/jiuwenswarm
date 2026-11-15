@@ -207,6 +207,11 @@ class VideoRequest:
     duration_seconds: int
     generate_audio: bool = False
     first_frame_data_uri: str | None = None
+    # First/last-frame (FLF2V) interpolation - MiniMax and BytePlus ModelArk only,
+    # both via the shared ``role: "last_frame"`` content-array convention in
+    # ``_video_content``. DashScope/vLLM-Omni reject it explicitly in
+    # video_gen_tools rather than silently dropping it.
+    last_frame_data_uri: str | None = None
     # Multimodal references (reference-to-video) as already-resolved data URIs:
     # video_gen_tools validates/embeds them, backends only place them in their
     # own request body shape. ``reference_audio_data_uri`` has no generic/multi-
@@ -369,11 +374,17 @@ def _video_references(request: VideoRequest) -> tuple[str | None, list[str]]:
     return frame, refs
 
 
-def _video_content(prompt: str, frame: str | None, refs: list[str]) -> list[dict[str, Any]]:
-    """MiniMax / Seedance ``content``: text, optional first frame, then reference stills."""
+def _video_content(
+    prompt: str, frame: str | None, refs: list[str], last_frame: str | None = None
+) -> list[dict[str, Any]]:
+    """MiniMax / Seedance ``content``: text, optional first frame, optional last frame
+    (role="last_frame" - both providers interpolate between the two when given),
+    then reference stills."""
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     if frame:
         content.append({"type": "image_url", "image_url": {"url": frame}, "role": "first_frame"})
+    if last_frame:
+        content.append({"type": "image_url", "image_url": {"url": last_frame}, "role": "last_frame"})
     content.extend({"type": "image_url", "image_url": {"url": url}, "role": "reference_image"} for url in refs)
     return content
 
@@ -557,13 +568,29 @@ async def _minimax_submit_video(target: GenerationTarget, request: VideoRequest,
     frame, refs = _video_references(request)
     if request.reference_image_data_uri and request.reference_image_data_uri not in refs:
         refs = [*refs, request.reference_image_data_uri]
-    content = _video_content(prompt[:_MINIMAX_VIDEO_PROMPT_LIMIT], frame, refs)
+    last_frame = request.last_frame_data_uri
+    # 首尾帧（FLF2V）不能跟参考图混用——MiniMax 的首尾帧请求只认 content 里
+    # 的 first_frame/last_frame 两张，混进 reference_image 对端会按普通参考图
+    # 请求处理，等于尾帧被悄悄忽略（正是视频连视频"结尾对不上下一段素材"这个
+    # bug 的根因之一）。显式报错，不悄悄退化。
+    if last_frame and refs:
+        return (
+            "[ERROR]: MiniMax first/last-frame video generation cannot be combined with "
+            "reference images in the same request; drop reference_image_path(s) or last_frame_path."
+        )
+    content = _video_content(prompt[:_MINIMAX_VIDEO_PROMPT_LIMIT], frame, refs, last_frame)
     body = {
         "model": model,
         "content": content,
         "resolution": _minimax_video_resolution(resolution),
         "duration": int(duration_seconds),
-        "ratio": aspect_ratio if aspect_ratio in _MINIMAX_VIDEO_RATIOS else "16:9",
+        # 首尾帧（FLF2V）模式下画面几何必须跟着两张帧走，不然服务商按 ratio
+        # 重新构图，尾帧再怎么精确匹配也会被二次裁切/拉伸，跟下一段素材的
+        # 真实首帧对不上——这是文档明确要求的（FL2V 模式 ratio 必须
+        # adaptive）。纯首帧图生视频不改动，维持原有行为。
+        "ratio": "adaptive" if last_frame else (
+            aspect_ratio if aspect_ratio in _MINIMAX_VIDEO_RATIOS else "16:9"
+        ),
     }
     roots = _minimax_candidate_roots(api_base)
     root = roots[0]
@@ -814,7 +841,16 @@ async def _modelark_submit_video(target: GenerationTarget, request: VideoRequest
     frame, refs = _video_references(request)
     if request.reference_image_data_uri and request.reference_image_data_uri not in refs:
         refs = [*refs, request.reference_image_data_uri]
-    content = _video_content(prompt, frame, refs)
+    last_frame = request.last_frame_data_uri
+    # 首尾帧（FLF2V）不能跟参考图/参考音频混用——道理同 MiniMax 分支：混进
+    # reference_image/audio_url 之后服务商按参考媒体请求处理，尾帧被悄悄
+    # 忽略，成片结尾对不上下一段素材却看起来"生成成功"。
+    if last_frame and (refs or request.reference_audio_data_uri):
+        return (
+            "[ERROR]: ModelArk first/last-frame video generation cannot be combined with "
+            "reference images/audio in the same request; drop the references or last_frame_path."
+        )
+    content = _video_content(prompt, frame, refs, last_frame)
     # Audio-reference (lip-sync) has no generic/multi-backend equivalent; only
     # ModelArk Seedance 2.0+ supports it, placed in ``content`` directly.
     if request.reference_audio_data_uri:
@@ -824,9 +860,9 @@ async def _modelark_submit_video(target: GenerationTarget, request: VideoRequest
         "model": model,
         "content": content,
         "resolution": res if res in _MODELARK_VIDEO_RESOLUTIONS else "720p",
-        # With a first frame the output must follow that frame's aspect ratio.
+        # With a first and/or last frame the output must follow that frame's aspect ratio.
         "ratio": (
-            "adaptive" if frame else (aspect_ratio if aspect_ratio in _MODELARK_VIDEO_RATIOS else "16:9")
+            "adaptive" if (frame or last_frame) else (aspect_ratio if aspect_ratio in _MODELARK_VIDEO_RATIOS else "16:9")
         ),
         "duration": int(duration_seconds),
         "generate_audio": bool(generate_audio),

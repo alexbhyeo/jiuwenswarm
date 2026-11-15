@@ -615,8 +615,11 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
             condition the first frame on (image-to-video).
         last_frame_path: Optional local file path, http(s) URL, or data: URI to
             condition the last frame on - combined with first_frame_path this asks
-            the model to interpolate a clip between the two (model-dependent support;
-            the OpenRouter /videos path only - native backends have no last-frame slot).
+            the model to interpolate a clip between the two (FLF2V). Supported on
+            the OpenRouter /videos path and, natively, by MiniMax (MiniMax-H3) and
+            BytePlus ModelArk (Seedance); DashScope and vLLM-Omni reject it rather
+            than silently ignoring it. Cannot be combined with reference images/
+            audio on the native backends (provider limitation).
         reference_image_path: Optional local file path, http(s) URL, or data: URI
             used as a *reference* (not an exact frame) for reference-to-video.
             Unlike first_frame_path this is passed as a multimodal reference, so
@@ -663,6 +666,7 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
     # 1280x720）。所以这里把请求比例传给帧解析，由它对本地帧重新构图（居中裁切）。
     target_ratio = parse_aspect_ratio(aspect_ratio)
     frame_data_uri: str | None = None
+    last_frame_data_uri: str | None = None
     if first_frame_path:
         frame_data_uri, err = _resolve_frame_reference(first_frame_path, target_ratio)
         if err:
@@ -731,18 +735,29 @@ async def generate_video(  # pylint: disable=huawei-too-many-arguments
                 "[ERROR]: reference_video_path (video-to-video) is only supported by the "
                 f"OpenRouter /videos backend, but this deployment uses {backend!r}."
             )
+        # 尾帧（首尾帧生视频）目前只验证过 MiniMax 与 BytePlus ModelArk 的
+        # content[] 支持 role=last_frame（见 gen_toolkits._video_content）；
+        # DashScope/vLLM-Omni 没有对应实现，静默丢掉尾帧会让视频连视频这类
+        # 依赖尾帧约束的调用方悄悄退化成普通图生视频，看起来"生成成功"但
+        # 结尾根本没对上下一段素材——明确报错，而不是悄悄少做一半。
+        if last_frame_data_uri and backend not in (gen_toolkits.MINIMAX, gen_toolkits.MODELARK):
+            return (
+                "[ERROR]: last_frame_path (first/last-frame video) is only supported by the "
+                f"MiniMax or BytePlus ModelArk native backends, but this deployment uses {backend!r}."
+            )
         target = gen_toolkits.GenerationTarget(backend, api_key, api_base, model)
         if backend != gen_toolkits.VLLM_OMNI:
             duration_seconds = _clamp_duration(model, duration_seconds)
         request = gen_toolkits.VideoRequest(
-            prompt,
-            aspect_ratio,
-            resolution,
-            duration_seconds,
-            generate_audio,
-            frame_data_uri,
-            reference_image_data_uri,
-            reference_audio_data_uri,
+            prompt=prompt,
+            aspect_ratio=aspect_ratio,
+            resolution=resolution,
+            duration_seconds=duration_seconds,
+            generate_audio=generate_audio,
+            first_frame_data_uri=frame_data_uri,
+            last_frame_data_uri=last_frame_data_uri,
+            reference_image_data_uri=reference_image_data_uri,
+            reference_audio_data_uri=reference_audio_data_uri,
             reference_image_uris=tuple(reference_uris),
             reference_mode=reference_mode,
         )

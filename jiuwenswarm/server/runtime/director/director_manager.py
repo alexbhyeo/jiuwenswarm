@@ -135,18 +135,27 @@ _NARRATION_PROMPT = (
 
 
 def _video_understanding_configured() -> bool:
-    """视频理解是否可用——视频生音频的第一步要用它写解说文案。
+    """视频理解是否可用——视频生音频的第一步要用它写解说文案，视频连视频
+    用它分析两段源片衔接处的画面内容（见 _describe_clip_edge）。
 
     与 ``video_tools.video_understanding`` 自己的取配置顺序保持一致：先把
     config.yaml 的 models.video 映射进环境变量，再看 key/base 是否齐全；
     不先做这一步，就会在“config.yaml 里配了、.env 里没写”时误报未配置。
+
+    同时要求设置页里的「视频理解」开关（VIDEO_ENABLED）是打开的——key/base
+    齐全但开关关着，应该被当作"用户主动关掉了"，不应该悄悄继续调用。关掉后
+    依赖它的两个功能分别优雅降级：视频生音频会明确报未配置；视频连视频
+    （_describe_clip_edge）只是拿不到 VLM 背景描述，仍然用用户填的过渡
+    提示词 + 两段素材各自的原始生成提示词正常生成，不会因此失败。
     """
     try:
         apply_video_model_config_from_yaml(get_config())
     except Exception:  # noqa: BLE001 - 读配置失败按“未配置”处理，由上层给出明确提示
         logger.warning("[DirectorManager] video model config refresh failed", exc_info=True)
+    enabled = str(os.environ.get("VIDEO_ENABLED", "")).strip().lower() in ("1", "true", "yes", "on")
     return bool(
-        os.environ.get("VIDEO_API_KEY", "").strip()
+        enabled
+        and os.environ.get("VIDEO_API_KEY", "").strip()
         and os.environ.get("VIDEO_API_BASE", "").strip()
     )
 
@@ -669,15 +678,23 @@ class DirectorManager:
             return asset.file_path
         return None
 
-    def _resolve_video_asset_path(self, project: DirectorProject, asset_id: str) -> str | None:
-        """按 asset_id 取一段就绪视频素材的本地路径——视频连视频抓首尾帧时用，
-        与 _resolve_asset_path 同构，只是素材类型换成 video。"""
+    def _resolve_video_asset(self, project: DirectorProject, asset_id: str) -> DirectorAsset | None:
+        """按 asset_id 取一段就绪视频素材本身——视频连视频既要用它的本地
+        路径（抓首尾帧），也要用它的原始生成提示词（拼接过渡提示词的背景
+        信息，见 _compose_video_bridge_prompt），所以返回整个素材对象而不是
+        只返回路径。"""
         if not asset_id:
             return None
         asset = next((a for a in project.assets if a.asset_id == asset_id), None)
         if asset and asset.type == "video" and asset.status == "ready" and asset.file_path:
-            return asset.file_path
+            return asset
         return None
+
+    def _resolve_video_asset_path(self, project: DirectorProject, asset_id: str) -> str | None:
+        """按 asset_id 取一段就绪视频素材的本地路径，与 _resolve_asset_path
+        同构，只是素材类型换成 video。"""
+        asset = self._resolve_video_asset(project, asset_id)
+        return asset.file_path if asset else None
 
     # 图音生视频的参考音频若走云存储连接器（见下面 _upload_audio_to_cloud_storage），
     # 用这个固定名字去查「我的扩展」里是否已连接——目前只接 Azure 存储这一种
@@ -733,11 +750,88 @@ class DirectorManager:
         )
         return None
 
+    async def _describe_clip_edge(self, clip_path: str, edge_label: str) -> str:
+        """用视频理解（VLM）描述一段视频开头/结尾部分的画面内容，供视频连视频
+        拼接过渡提示词时参考。edge_label 是中文方位词（"结尾"/"开头"），直接
+        拼进提问文本里。
+
+        视频理解未配置、或这次分析失败，都返回空字符串——调用方把它当作
+        "这段信息拿不到"处理：FLF2V 本身不依赖这段描述（它只是让过渡提示词
+        更贴合两段源片的实际内容），这一步失败不应该让整个视频连视频生成
+        跟着失败。
+        """
+        if not _video_understanding_configured():
+            return ""
+        query = (
+            f"仔细观看这段视频的{edge_label}部分（最后/最初几秒），用一到两句"
+            "中文描述画面内容：主体是谁/是什么、正在做什么动作、镜头运动方向、"
+            "构图与光线氛围。只输出描述本身，不要标题、时间码或任何解释性文字。"
+        )
+        try:
+            result = (
+                await video_understanding._func({"query": query, "video_path": clip_path}) or ""
+            )
+        except Exception:  # noqa: BLE001 - 这一步是锦上添花，不能让异常中断主流程
+            logger.warning("[director] video_bridge VLM 分析%s失败", edge_label, exc_info=True)
+            return ""
+        result = result.strip()
+        if not result or result.startswith("[ERROR]:"):
+            return ""
+        return result
+
+    @staticmethod
+    def _compose_video_bridge_prompt(
+        base_prompt: str,
+        *,
+        clip1_source_prompt: str,
+        clip2_source_prompt: str,
+        clip1_description: str,
+        clip2_description: str,
+    ) -> str:
+        """把 FLF2V 过渡提示词（base_prompt，用户填写或卡片默认文案）与两段
+        源片各自的背景信息拼成最终提示词：视频理解对结尾/开头画面的描述，
+        以及这两段素材当初各自是用什么提示词生成出来的（asset.prompt）。
+
+        FLF2V 只拿到两张静态首尾帧，不知道"结尾正在发生什么动作"或"这个
+        场景原本是什么"——这段背景信息补上这一块，让生成的过渡更贴合两段
+        原片的实际内容，而不是单纯按两张静态图去猜。四段信息任意一段拿不到
+        就跳过，不强求齐全；全部拿不到时原样返回 base_prompt。
+        """
+        clip1_bits = [
+            bit
+            for bit in (
+                f"原片场景/生成描述: {clip1_source_prompt}" if clip1_source_prompt else "",
+                f"结尾画面内容: {clip1_description}" if clip1_description else "",
+            )
+            if bit
+        ]
+        clip2_bits = [
+            bit
+            for bit in (
+                f"原片场景/生成描述: {clip2_source_prompt}" if clip2_source_prompt else "",
+                f"开头画面内容: {clip2_description}" if clip2_description else "",
+            )
+            if bit
+        ]
+        context_lines = [
+            *(["片段一（衔接处为结尾）—— " + "；".join(clip1_bits)] if clip1_bits else []),
+            *(["片段二（衔接处为开头）—— " + "；".join(clip2_bits)] if clip2_bits else []),
+        ]
+        if not context_lines:
+            return base_prompt
+        context_block = "\n".join(context_lines)
+        return (
+            f"{base_prompt}\n\n"
+            "以下是两段源片各自的背景信息（由视频理解分析画面 + 原始生成提示词"
+            "得到），帮助让过渡的主体、动作和场景衔接更准确：\n"
+            f"{context_block}"
+        )
+
     async def _run_video_bridge_flf2v(
         self,
         *,
-        clip1_path: str,
-        clip2_path: str,
+        clip1_asset: DirectorAsset,
+        clip2_asset: DirectorAsset,
         prompt: str,
         aspect_ratio: str,
         resolution: str,
@@ -745,17 +839,22 @@ class DirectorManager:
         generate_audio: bool,
         save_dir: str,
     ) -> tuple[str, dict[str, Any]]:
-        """核心 FLF2V 桥接调用：抓片段一的最后一帧 + 片段二的第一帧，按
-        first_frame_path/last_frame_path 送给 generate_video。
+        """核心 FLF2V 桥接调用：抓片段一的最后一帧 + 片段二的第一帧，用视频
+        理解（VLM）分析这两处衔接画面、结合两段素材各自的原始生成提示词，
+        把 base prompt 拼成更贴合实际内容的过渡提示词（见
+        _describe_clip_edge / _compose_video_bridge_prompt），再连同首尾帧
+        一起送给 generate_video。
 
         实验室画布的 video_bridge RPC 分支（见上面 handle_director_generate）
         与剪辑助手的 generate_video_bridge 工具（见下面
         _execute_generate_video_bridge）共用这一个实现——两条入口只是
-        clip1_path/clip2_path 的来源不同（前者是连线的 asset_id，后者是
-        @名称/工具参数解析出的素材），FLF2V 调用本身完全一致，不应该维护
-        两份。抓帧失败统一抛 DirectorRpcError("GENERATION_FAILED", ...)，
-        调用方不需要分别处理 ComposeError。
+        clip1_asset/clip2_asset 的来源不同（前者是连线的 asset_id 解析出的
+        素材，后者是 @名称/工具参数解析出的素材），FLF2V 调用本身完全一致，
+        不应该维护两份。抓帧失败统一抛 DirectorRpcError("GENERATION_FAILED",
+        ...)，调用方不需要分别处理 ComposeError。
         """
+        clip1_path = str(clip1_asset.file_path)
+        clip2_path = str(clip2_asset.file_path)
         with tempfile.TemporaryDirectory(prefix="video_bridge_") as tmp_dir:
             try:
                 last_frame_png = await extract_frame(
@@ -766,9 +865,24 @@ class DirectorManager:
                 )
             except ComposeError as exc:
                 raise DirectorRpcError("GENERATION_FAILED", exc.message) from exc
+
+            clip1_description, clip2_description = await asyncio.gather(
+                self._describe_clip_edge(clip1_path, "结尾"),
+                self._describe_clip_edge(clip2_path, "开头"),
+            )
+            effective_prompt = self._compose_video_bridge_prompt(
+                prompt,
+                clip1_source_prompt=clip1_asset.prompt,
+                clip2_source_prompt=clip2_asset.prompt,
+                clip1_description=clip1_description,
+                clip2_description=clip2_description,
+            )
+
             # 两段源片路径记进 params：供前端 buildFlowFromChat 把它们还原成
             # 两条依赖连线（video1/video2 端口），与 input_video_path 的
-            # 还原套路相同，只是这里是两段而不是一段。
+            # 还原套路相同，只是这里是两段而不是一段。VLM 描述与实际送给
+            # 模型的 effective_prompt 也记进去，方便事后追溯这次过渡是基于
+            # 什么背景信息生成的。
             gen_params: dict[str, Any] = {
                 "aspect_ratio": aspect_ratio,
                 "resolution": resolution,
@@ -776,9 +890,12 @@ class DirectorManager:
                 "generate_audio": generate_audio,
                 "bridge_clip1_path": clip1_path,
                 "bridge_clip2_path": clip2_path,
+                "bridge_clip1_description": clip1_description,
+                "bridge_clip2_description": clip2_description,
+                "bridge_effective_prompt": effective_prompt,
             }
             result_str = await generate_video._func(
-                prompt=prompt,
+                prompt=effective_prompt,
                 aspect_ratio=aspect_ratio,
                 resolution=resolution,
                 duration_seconds=duration_seconds,
@@ -1007,14 +1124,16 @@ class DirectorManager:
             # 的首尾帧接口——区别只在首尾帧是自动抓出来的，不是用户挑的图片。
             if not (video_gen_enabled() and video_gen_configured()):
                 raise DirectorRpcError("NOT_CONFIGURED", "视频生成未配置，请先在设置中配置「视频处理」")
-            clip1_path = self._resolve_video_asset_path(project, clip1_asset_id)
-            clip2_path = self._resolve_video_asset_path(project, clip2_asset_id)
-            if not clip1_path or not clip2_path:
+            clip1_asset_obj = self._resolve_video_asset(project, clip1_asset_id)
+            clip2_asset_obj = self._resolve_video_asset(project, clip2_asset_id)
+            if not clip1_asset_obj or not clip2_asset_obj:
                 raise DirectorRpcError(
                     "INVALID_PARAMS", "视频连视频需要先连接两段已就绪的视频素材（片段一 + 片段二）"
                 )
-            # 过渡提示词是模型唯一的方向依据——FLF2V 只给了首尾两张静态图，
-            # 没有提示词时模型无从得知该怎么从第一张动到第二张。
+            # 过渡提示词是模型的方向依据——FLF2V 只给了首尾两张静态图，没有
+            # 提示词时模型无从得知该怎么从第一张动到第二张；_run_video_bridge_flf2v
+            # 会在此基础上再用视频理解 + 两段素材各自的原始生成提示词补上背景
+            # 信息，但这个起点本身仍然必填。
             if not prompt:
                 raise DirectorRpcError(
                     "INVALID_PARAMS", "视频连视频需要填写过渡提示词，说明两段素材之间应该如何衔接"
@@ -1022,8 +1141,8 @@ class DirectorManager:
             duration_seconds = int(params.get("duration_seconds") or 15)
             generate_audio_flag = bool(params.get("generate_audio") or False)
             result_str, gen_params = await self._run_video_bridge_flf2v(
-                clip1_path=clip1_path,
-                clip2_path=clip2_path,
+                clip1_asset=clip1_asset_obj,
+                clip2_asset=clip2_asset_obj,
                 prompt=prompt,
                 aspect_ratio=aspect_ratio,
                 resolution=resolution,
@@ -1743,8 +1862,8 @@ class DirectorManager:
         async with self._lock:
             try:
                 result_str, gen_params = await self._run_video_bridge_flf2v(
-                    clip1_path=clip1_asset.file_path,
-                    clip2_path=clip2_asset.file_path,
+                    clip1_asset=clip1_asset,
+                    clip2_asset=clip2_asset,
                     prompt=prompt,
                     aspect_ratio="16:9",
                     resolution="720p",
@@ -1753,7 +1872,7 @@ class DirectorManager:
                     save_dir=save_dir,
                 )
             except DirectorRpcError as exc:
-                return f"抓取首尾帧失败：{exc.message}", None
+                return f"视频连视频失败：{exc.message}", None
         parsed = _parse_generation_result(result_str)
 
         # 与 _execute_generate_shot_video 同样的理由：generate_video 自身的
