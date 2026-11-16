@@ -7009,6 +7009,10 @@
       "cancel": "取消",
       "confirm": "创建"
     },
+    "myProjects": {
+      "title": "我的项目",
+      "assetCount": "{{count}} 个素材"
+    },
     "rail": {
       "title": "游戏工坊",
       "newProjectPlaceholder": "新游戏项目名称",

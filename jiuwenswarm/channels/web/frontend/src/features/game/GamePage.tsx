@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { gameApi, type GameBridgeStatus, type GameProject } from './gameApi';
-import { GameComposer } from './GameComposer';
+import { GameCreationHome } from './GameCreationHome';
 import { GameRail } from './GameRail';
 import { GameLabCanvas } from './lab/GameLabCanvas';
 import './gamePage.css';
@@ -101,12 +101,15 @@ export function GamePage() {
             ) : (
               <div className="game-rail-empty">{t('gameWorkshop.rail.noProjects')}</div>
             )
-          ) : selected ? (
-            <GameComposer project={selected} onProjectUpdate={onProjectUpdate} />
           ) : (
-            <div className="game-page-create-hint" data-testid="game-workshop-create-hint">
-              {t('gameWorkshop.rail.noProjects')}
-            </div>
+            <GameCreationHome
+              projects={projects}
+              selectedProject={selected}
+              onSelectProject={setSelectedId}
+              onCreateProject={createProject}
+              onProjectUpdate={onProjectUpdate}
+              onOpenLab={() => setTab('lab')}
+            />
           )}
         </div>
       </div>

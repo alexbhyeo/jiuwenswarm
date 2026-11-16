@@ -1,0 +1,118 @@
+/* 游戏工坊 · 创作 tab 主面板。镜像导演模式 .director-detail-scroll +
+   .director-project-grid 系列，颜色改用本仓既有语义变量（var(--color-*)），
+   不复用 Director 私有硬编码色板。 */
+
+.game-create-scroll {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 40px 40px;
+}
+
+.game-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.game-section-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.game-project-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 1100px) {
+  .game-project-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.game-project-new {
+  border: 1.5px dashed var(--color-border-strong, #d4d4d8);
+  border-radius: 16px;
+  min-height: 190px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--color-text-secondary, #6b7280);
+  background: none;
+  cursor: pointer;
+}
+
+.game-project-new:hover {
+  border-color: var(--color-text-secondary, #6b7280);
+  color: var(--color-text, #111827);
+}
+
+.game-project-new-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: 1.5px solid var(--color-border-strong, #d4d4d8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.game-project-card {
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-radius: 16px;
+  background: var(--color-surface, #fff);
+  overflow: hidden;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+.game-project-card:hover {
+  border-color: var(--color-border-strong, #d4d4d8);
+}
+
+.game-project-card:focus-visible {
+  outline: 2px solid var(--color-accent, #6366f1);
+  outline-offset: 2px;
+}
+
+.game-project-thumb {
+  aspect-ratio: 16 / 9;
+  background: linear-gradient(135deg, #dbe6fb, #aecbfa);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.game-project-thumb--empty {
+  background: var(--color-surface-muted, #f3f4f6);
+}
+
+.game-project-thumb--video {
+  background: #000;
+}
+
+.game-project-meta {
+  padding: 12px 14px;
+}
+
+.game-project-name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.game-project-sub {
+  font-size: 11.5px;
+  color: var(--color-text-secondary, #6b7280);
+  margin-top: 3px;
+}

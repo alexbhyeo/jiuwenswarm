@@ -7012,6 +7012,10 @@
       "cancel": "Cancel",
       "confirm": "Create"
     },
+    "myProjects": {
+      "title": "My Projects",
+      "assetCount": "{{count}} assets"
+    },
     "rail": {
       "title": "Game Workshop",
       "newProjectPlaceholder": "New game project name",
