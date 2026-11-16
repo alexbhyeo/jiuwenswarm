@@ -22,11 +22,14 @@ from jiuwenswarm.common.utils import get_agent_root_dir
 
 logger = logging.getLogger(__name__)
 
-GAME_ASSET_TYPES = ("character", "world", "video", "model_part")
+GAME_ASSET_TYPES = ("character", "world", "video", "model_part", "model")
 # 旧类目仍可能出现在历史项目的素材里（D-20261116-1047-game-workshop-lab §7
-# 兼容性）：道具/场景折入 world，model/texture/animation/audio 下线，但
-# 已落盘的旧素材不删除、不改写，素材列表按这个集合识别"历史/其他"兜底分类。
-LEGACY_GAME_ASSET_TYPES = ("prop", "scene", "model", "texture", "audio", "animation")
+# 兼容性）：道具/场景折入 world，texture/animation/audio 下线，但已落盘的
+# 旧素材不删除、不改写，素材列表按这个集合识别"历史/其他"兜底分类。
+# "model" 曾经也是这个兜底集合的一员（没有真实生成路径的占位类目），现在
+# 被 2D 转 3D（Tripo3D image-to-model）接管，提升为一等类目，见 GameAsset
+# 的 source_asset_id 用法：model 的 source_asset_id 指回被转换的 2D 图片。
+LEGACY_GAME_ASSET_TYPES = ("prop", "scene", "texture", "audio", "animation")
 PROJECT_STATUSES = ("draft", "scaffolded", "building", "ready", "failed")
 
 
@@ -64,10 +67,11 @@ class GameAsset:
     status: str = "ready"
     params: dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
-    # 分解流水线专用（D-20261116-1047-game-workshop-lab D-04/D-06）：
-    # source_asset_id 指回被分解的源图素材，decompose_batch_id 把同一次
-    # 分解调用产出的所有部件串成一组，供整批删除/区分多次分解结果。两者
-    # 都只在分解产出的素材上有值，其它素材保持 None。
+    # 分解/2D 转 3D 流水线专用：source_asset_id 指回源图素材（model_part、
+    # model 两种类型都用它）；decompose_batch_id 只给分解用，把同一次分解
+    # 调用产出的所有部件串成一组，供整批删除/区分多次分解结果——2D 转 3D
+    # 一次只产出一个 model，不需要分组。两个字段都只在对应流水线产出的
+    # 素材上有值，其它素材保持 None。
     source_asset_id: str | None = None
     decompose_batch_id: str | None = None
 

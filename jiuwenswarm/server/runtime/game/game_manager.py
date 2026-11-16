@@ -331,6 +331,81 @@ class GameManager:
         return {"project": project.to_dict(), "status": "success", "assets": created_assets}
 
     # ------------------------------------------------------------------
+    # 2D 转 3D（Tripo3D image-to-model，单体模型，不分部件）
+    # ------------------------------------------------------------------
+    async def handle_game_assets_to_model(self, params: dict) -> dict:
+        """提交一次 2D 转 3D：源素材必须是「角色」或「世界」类目下已就绪的
+        图片素材。与分解同一套取舍——这里只提交任务、落一个 pending 占位
+        素材，真正的产物由 check_status 轮询拿回来。
+        """
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        source_asset_id = str(params.get("source_asset_id") or "").strip()
+        if not source_asset_id:
+            raise GameRpcError("INVALID_PARAMS", "缺少 source_asset_id")
+        source = next((a for a in project.assets if a.asset_id == source_asset_id), None)
+        if source is None or source.type not in ("character", "world") or source.status != "ready" or not source.file_path:
+            raise GameRpcError(
+                "INVALID_PARAMS", "2D 转 3D 需要先选中一个已就绪的「角色」或「世界」类目图片素材"
+            )
+
+        try:
+            task_id = await self._decompose.submit_to_model(source.file_path)
+        except GameItemDecomposeError as exc:
+            raise GameRpcError(exc.code, str(exc)) from exc
+
+        placeholder = GameAsset(
+            asset_id=f"gasset_{secrets.token_hex(4)}",
+            type="model",
+            name=f"2D转3D 中…（来自 {source.name}）",
+            status="pending",
+            params={"source": "to_model", "job_id": task_id},
+            source_asset_id=source_asset_id,
+        )
+        project = self._store.append_asset(project.project_id, placeholder)
+        return {
+            "project": project.to_dict(),
+            "placeholder_asset_id": placeholder.asset_id,
+            "job_id": task_id,
+        }
+
+    async def handle_game_assets_to_model_check_status(self, params: dict) -> dict:
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        placeholder_asset_id = str(params.get("placeholder_asset_id") or "").strip()
+        job_id = str(params.get("job_id") or "").strip()
+        if not (placeholder_asset_id and job_id):
+            raise GameRpcError("INVALID_PARAMS", "缺少 placeholder_asset_id / job_id")
+
+        save_dir = str(get_project_assets_dir(project.project_id))
+        status = await self._decompose.poll_to_model(job_id, save_dir=save_dir)
+
+        if status.status == "pending":
+            return {"project": project.to_dict(), "status": "pending"}
+
+        # 同分解一样：先从仍带着占位素材的 project 里取出源信息，再删占位。
+        source = next(
+            (a for a in project.assets if a.asset_id == placeholder_asset_id),
+            None,
+        )
+        source_asset_id = source.source_asset_id if source else None
+        source_name = source.name.removeprefix("2D转3D 中…（来自 ").removesuffix("）") if source else ""
+        project = self._store.delete_asset(project.project_id, placeholder_asset_id)
+
+        if status.status == "failed":
+            return {"project": project.to_dict(), "status": "failed", "error": status.error}
+
+        asset = GameAsset(
+            asset_id=f"gasset_{secrets.token_hex(4)}",
+            type="model",
+            name=f"{source_name} · 2D转3D" if source_name else "2D转3D 模型",
+            file_path=status.model_file_path,
+            status="ready",
+            params={"source": "to_model"},
+            source_asset_id=source_asset_id,
+        )
+        project = self._store.append_asset(project.project_id, asset)
+        return {"project": project.to_dict(), "status": "success", "asset": asset.to_dict()}
+
+    # ------------------------------------------------------------------
     # 实验室画布（与导演模式 director.lab_canvas.save 同构）
     # ------------------------------------------------------------------
     async def handle_game_lab_canvas_save(self, params: dict) -> dict:

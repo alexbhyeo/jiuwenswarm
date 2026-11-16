@@ -9,22 +9,82 @@
   min-height: 480px;
 }
 
-.game-lab-add-decompose {
+/* 悬浮圆形工具栏——镜像导演模式 .lab-toolrail/.lab-toolrail-btn/
+   .lab-add-menu 系列，颜色改用本仓既有语义变量。 */
+
+.game-lab-toolrail {
   position: absolute;
-  left: 16px;
-  bottom: 16px;
+  left: 20px;
+  top: 50%;
+  transform: translateY(-50%);
   z-index: 5;
-  padding: 8px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--color-border, #e5e7eb);
-  background: var(--color-surface, #fff);
-  color: var(--color-text, #111827);
-  cursor: pointer;
-  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
 }
 
-.game-lab-add-decompose:hover {
-  background: var(--color-surface-hover, #f3f4f6);
+.game-lab-toolrail-item {
+  position: relative;
+}
+
+.game-lab-toolrail-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-radius: 999px;
+  background: var(--color-surface, #fff);
+  color: var(--color-text-secondary, #6b7280);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  cursor: pointer;
+}
+
+.game-lab-toolrail-btn:hover {
+  border-color: var(--color-border-strong, #d4d4d8);
+  color: var(--color-text, #111827);
+}
+
+.game-lab-toolrail-btn--active {
+  border-color: var(--color-accent, #6366f1);
+  color: var(--color-accent, #6366f1);
+  background: var(--color-accent-subtle, #eef2ff);
+}
+
+.game-lab-add-menu {
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-radius: 8px;
+  background: var(--color-surface, #fff);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+
+.game-lab-add-menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text, #111827);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.game-lab-add-menu button:hover {
+  background: var(--color-surface-muted, #f3f4f6);
+  color: var(--color-accent, #6366f1);
 }
 
 .game-lab-node {
@@ -121,7 +181,8 @@
   width: 100%;
 }
 
-.game-lab-node--decompose {
+.game-lab-node--decompose,
+.game-lab-node--to-model {
   width: 220px;
 }
 

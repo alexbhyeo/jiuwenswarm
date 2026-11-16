@@ -60,6 +60,19 @@ export type GameDecomposeStatusResult = {
   assets?: GameAsset[];
 };
 
+export type GameToModelSubmitResult = {
+  project: GameProject;
+  placeholder_asset_id: string;
+  job_id: string;
+};
+
+export type GameToModelStatusResult = {
+  project: GameProject;
+  status: 'pending' | 'success' | 'failed';
+  error?: string;
+  asset?: GameAsset;
+};
+
 export type GameBridgeStatus = {
   godot: boolean;
   godot_binary: string;
@@ -88,6 +101,8 @@ const METHOD = {
   assetsDelete: 'game.assets.delete',
   assetsDecompose: 'game.assets.decompose',
   assetsDecomposeCheckStatus: 'game.assets.decompose_check_status',
+  assetsToModel: 'game.assets.to_model',
+  assetsToModelCheckStatus: 'game.assets.to_model_check_status',
   labCanvasSave: 'game.lab_canvas.save',
   filesTree: 'game.files.tree',
   filesRead: 'game.files.read',
@@ -208,6 +223,24 @@ export const gameApi = {
         job_id: jobId,
         decompose_batch_id: decomposeBatchId,
       },
+      { timeoutMs: GAME_DECOMPOSE_STATUS_TIMEOUT_MS }
+    ),
+  /** 提交一次 2D 转 3D（源素材须是已就绪的「角色」或「世界」图片）；产出
+   *  一个单体模型，不分部件，真正的产物由 checkToModelStatus 轮询拿回来。 */
+  toModel: async (projectId: string, sourceAssetId: string): Promise<GameToModelSubmitResult> =>
+    webRequest<GameToModelSubmitResult>(
+      METHOD.assetsToModel,
+      { project_id: projectId, source_asset_id: sourceAssetId },
+      { timeoutMs: GAME_DECOMPOSE_SUBMIT_TIMEOUT_MS }
+    ),
+  checkToModelStatus: async (
+    projectId: string,
+    placeholderAssetId: string,
+    jobId: string
+  ): Promise<GameToModelStatusResult> =>
+    webRequest<GameToModelStatusResult>(
+      METHOD.assetsToModelCheckStatus,
+      { project_id: projectId, placeholder_asset_id: placeholderAssetId, job_id: jobId },
       { timeoutMs: GAME_DECOMPOSE_STATUS_TIMEOUT_MS }
     ),
   /** 实验室画布持久化：整份节点/连线快照覆盖式保存，与导演模式

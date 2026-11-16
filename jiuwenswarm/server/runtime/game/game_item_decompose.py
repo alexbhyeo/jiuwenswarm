@@ -1,16 +1,25 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-"""素材分解：把一张图片经 Tripo3D ``mesh/smartsegment`` 分解成多个独立的
-3D 部件文件（见 D-20261116-1047-game-workshop-lab D-04/D-06）。
+"""素材分解与 2D 转 3D：两条都走 Tripo3D，但调的是不同端点，产物形状也
+不同（见 D-20261116-1047-game-workshop-lab D-04/D-06，以及后续「实验室
+圆形工具栏」需求里新增的 2D 转 3D）。
 
-Tripo3D 的分割类端点（``mesh/segment``、``mesh/smartsegment``）核实下来只
-返回一个合并的 ``.glb``（单个 ``model_url``），不是多个独立文件——"一张图
-→ N 个独立部件"里"拆成 N 个文件"这一半，是本模块自己做的：下载这一个合并
-模型，按 glTF 场景图的顶层节点拆成多份独立的 ``.glb``。
+- **分解**（``submit``/``poll``）：把一张图片经 ``mesh/smartsegment`` 分解——
+  该端点核实下来只返回一个合并的 ``.glb``（单个 ``model_url``），不是多个
+  独立文件，"一张图 → N 个独立部件"里"拆成 N 个文件"这一半是本模块自己
+  做的：下载这一个合并模型，按 glTF 场景图的顶层节点拆成多份独立的
+  ``.glb``（见 ``_split_glb``）。
+- **2D 转 3D**（``submit_to_model``/``poll_to_model``）：把一张图片经
+  ``generation/image-to-model`` 转成**一个**单体模型——没有"多个部件"这
+  一说，产物就是直接下载保存的那一个 ``.glb``，不需要 trimesh 拆分。
+
+两条流水线共用上传/鉴权（``_upload_image``/``_headers``/``_api_base``），
+所以放在同一个 ``GameItemDecompose`` 类里，没有分成两个类。
 
 与导演模式的 ``generate_video``/``check_video_status`` 同构：提交
-（``submit``）只拿一个服务商任务 id，真正的生成仍要轮询（``poll``）——
-Tripo3D 任务时长未知，不适合在一次 RPC 里阻塞等到底。
+（``submit``/``submit_to_model``）只拿一个服务商任务 id，真正的生成仍要
+轮询（``poll``/``poll_to_model``）——Tripo3D 任务时长未知，不适合在一次
+RPC 里阻塞等到底。
 """
 
 from __future__ import annotations
@@ -35,6 +44,10 @@ _API_BASE_DEFAULT = "https://openapi.tripo3d.ai/v3"
 _POLL_INTERVAL_SECONDS = 5
 _PENDING_STATUSES = ("queued", "running")
 _TRANSIENT_HTTP_ERRORS = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
+# image-to-model 的 model 参数是必填项；固定用文档推荐的最新版本，不开放
+# 成用户可选参数——多一个下拉就多一种"选了不存在的版本号"的失败模式，
+# 而这个功能目前没有谁会需要切版本。
+_TO_MODEL_VERSION = "v3.1-20260211"
 
 
 class GameItemDecomposeError(Exception):
@@ -58,6 +71,13 @@ class DecomposedPart:
 class DecomposeStatus:
     status: str  # "pending" | "success" | "failed"
     parts: list[DecomposedPart] = field(default_factory=list)
+    error: str | None = None
+
+
+@dataclass
+class ToModelStatus:
+    status: str  # "pending" | "success" | "failed"
+    model_file_path: str | None = None
     error: str | None = None
 
 
@@ -177,6 +197,92 @@ class GameItemDecompose:
                 error="分解模型没有可拆分的部件（合并模型只有一个整体网格，未能按节点拆分）。",
             )
         return DecomposeStatus(status="success", parts=parts)
+
+    async def submit_to_model(self, image_path: str) -> str:
+        """上传源图并提交 2D 转 3D（单体模型）任务，返回 Tripo3D 的 task_id。"""
+        if not tripo_configured():
+            raise GameItemDecomposeError(
+                "NOT_CONFIGURED", "Tripo3D 2D 转 3D 未配置，请先在设置中配置「3D 分解」。"
+            )
+        path = Path(image_path)
+        if not path.is_file():
+            raise GameItemDecomposeError("INVALID_PARAMS", f"源图不存在: {image_path}")
+
+        try:
+            async with httpx.AsyncClient(timeout=60, verify=get_requests_verify()) as client:
+                file_token = await self._upload_image(client, path)
+                task_id = await self._submit_image_to_model(client, file_token)
+        except _TRANSIENT_HTTP_ERRORS as exc:
+            raise GameItemDecomposeError("UNREACHABLE", f"连接 Tripo3D 失败: {exc!r}") from exc
+        except httpx.HTTPError as exc:
+            raise GameItemDecomposeError("SUBMIT_FAILED", f"提交 Tripo3D 2D 转 3D 任务失败: {exc!r}") from exc
+        return task_id
+
+    async def poll_to_model(self, task_id: str, *, save_dir: str) -> ToModelStatus:
+        """查询 2D 转 3D 任务状态；成功时下载单体模型，失败时返回错误详情。"""
+        try:
+            async with httpx.AsyncClient(timeout=60, verify=get_requests_verify()) as client:
+                resp = await client.get(f"{_api_base()}/tasks/{task_id}", headers=_headers())
+                try:
+                    payload = resp.json()
+                except ValueError:
+                    return ToModelStatus(
+                        status="failed",
+                        error=f"查询 Tripo3D 任务返回了非 JSON 响应: {resp.status_code}",
+                    )
+                if resp.status_code != 200 or _error_detail(payload):
+                    detail = _error_detail(payload) or str(resp.status_code)
+                    return ToModelStatus(status="failed", error=f"查询 Tripo3D 任务失败: {detail}")
+                data = (payload or {}).get("data") or {}
+                status = str(data.get("status") or "").lower()
+                if status in _PENDING_STATUSES:
+                    return ToModelStatus(status="pending")
+                if status != "success":
+                    detail = str(data.get("error") or data.get("message") or status or "unknown")
+                    return ToModelStatus(status="failed", error=f"Tripo3D 2D 转 3D 任务未成功: {detail}")
+
+                output = data.get("output") or {}
+                model_url = str(output.get("model_url") or "")
+                if not model_url:
+                    return ToModelStatus(
+                        status="failed",
+                        error=f"Tripo3D 2D 转 3D 任务成功但没有返回模型地址: {str(output)[:300]}",
+                    )
+
+                model_resp = await client.get(model_url, timeout=120)
+                if model_resp.status_code != 200:
+                    return ToModelStatus(
+                        status="failed",
+                        error=f"下载 Tripo3D 2D 转 3D 模型失败: {model_resp.status_code}",
+                    )
+                model_bytes = model_resp.content
+        except _TRANSIENT_HTTP_ERRORS as exc:
+            return ToModelStatus(status="pending", error=f"轮询暂时失败，稍后重试: {exc!r}")
+        except httpx.HTTPError as exc:
+            return ToModelStatus(status="failed", error=f"查询/下载 Tripo3D 2D 转 3D 任务失败: {exc!r}")
+
+        out_dir = Path(save_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"model_{int(time.time())}_{secrets.token_hex(3)}.glb"
+        dest = out_dir / filename
+        dest.write_bytes(model_bytes)
+        return ToModelStatus(status="success", model_file_path=str(dest))
+
+    async def _submit_image_to_model(self, client: httpx.AsyncClient, file_token: str) -> str:
+        # 与 smartsegment 一致：input 是裸字符串（file_token），不是对象
+        # 包装；这次直接照文档实现，文档对这个端点的请求体给得很明确。
+        body: dict[str, Any] = {"input": file_token, "model": _TO_MODEL_VERSION}
+        resp = await client.post(f"{_api_base()}/generation/image-to-model", headers=_headers(), json=body)
+        payload = resp.json() if resp.content else {}
+        if resp.status_code not in (200, 201, 202) or _error_detail(payload):
+            detail = _error_detail(payload) or resp.status_code
+            raise GameItemDecomposeError("SUBMIT_FAILED", f"提交 Tripo3D 2D 转 3D 任务失败: {detail}")
+        task_id = str(((payload or {}).get("data") or {}).get("task_id") or "")
+        if not task_id:
+            raise GameItemDecomposeError(
+                "SUBMIT_FAILED", f"Tripo3D 2D 转 3D 任务提交后没有返回 task_id: {str(payload)[:300]}"
+            )
+        return task_id
 
     async def _upload_image(self, client: httpx.AsyncClient, path: Path) -> str:
         data = path.read_bytes()

@@ -1439,6 +1439,8 @@ _GAME_ROUTES: dict[ReqMethod, str] = {
     ReqMethod.GAME_ASSETS_DELETE: "handle_game_assets_delete",
     ReqMethod.GAME_ASSETS_DECOMPOSE: "handle_game_assets_decompose",
     ReqMethod.GAME_ASSETS_DECOMPOSE_CHECK_STATUS: "handle_game_assets_decompose_check_status",
+    ReqMethod.GAME_ASSETS_TO_MODEL: "handle_game_assets_to_model",
+    ReqMethod.GAME_ASSETS_TO_MODEL_CHECK_STATUS: "handle_game_assets_to_model_check_status",
     ReqMethod.GAME_LAB_CANVAS_SAVE: "handle_game_lab_canvas_save",
     ReqMethod.GAME_FILES_TREE: "handle_game_files_tree",
     ReqMethod.GAME_FILES_READ: "handle_game_files_read",

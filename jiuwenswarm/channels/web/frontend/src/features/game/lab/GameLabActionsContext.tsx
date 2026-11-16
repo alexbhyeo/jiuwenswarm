@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import type { GameDecomposeNodeData } from './labTypes';
+import type { GameDecomposeNodeData, GameToModelNodeData } from './labTypes';
 
 /** 实验室画布节点可以调用的动作，由 GameLabCanvas 提供实现——与导演模式
  *  LabActionsContext 同一个取舍（节点组件本身不直接碰 React Flow 的
@@ -9,6 +9,8 @@ export interface GameLabActions {
   renameNode: (nodeId: string, name: string) => void;
   patchDecomposeNode: (nodeId: string, patch: Partial<GameDecomposeNodeData>) => void;
   submitDecompose: (nodeId: string) => void;
+  patchToModelNode: (nodeId: string, patch: Partial<GameToModelNodeData>) => void;
+  submitToModel: (nodeId: string) => void;
 }
 
 const GameLabActionsContext = createContext<GameLabActions | null>(null);

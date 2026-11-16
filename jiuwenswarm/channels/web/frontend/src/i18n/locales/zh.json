@@ -7042,11 +7042,16 @@
       "generateFailed": "生成失败：{{error}}",
       "noAssets": "暂无素材",
       "decomposedSection": "分解产物",
+      "modelSection": "3D 模型",
       "deleteBatchButton": "删除整批",
       "dragHint": "拖到实验室画布可作为分解输入"
     },
     "lab": {
-      "addDecomposeCard": "+ 素材分解卡片",
+      "imageGroup": "图片处理",
+      "process": {
+        "decompose": "分解图",
+        "toModel": "2D转3D"
+      },
       "decompose": {
         "title": "素材分解",
         "sourceConnected": "源图：{{name}}",
@@ -7059,6 +7064,15 @@
         "statusRunning": "分解中…",
         "statusSuccess": "已产出 {{count}} 个部件，可在创作面板「分解产物」里查看",
         "statusFailedGeneric": "分解失败"
+      },
+      "toModel": {
+        "title": "2D 转 3D",
+        "sourceConnected": "源图：{{name}}",
+        "sourceMissing": "请从左侧连一张「角色」或「世界」图片",
+        "action": "转换",
+        "statusRunning": "转换中…",
+        "statusSuccess": "已生成 3D 模型，可在创作面板「3D 模型」里查看",
+        "statusFailedGeneric": "转换失败"
       }
     }
   }

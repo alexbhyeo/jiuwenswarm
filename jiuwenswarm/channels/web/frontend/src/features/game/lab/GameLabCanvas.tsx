@@ -22,22 +22,43 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { gameApi, type GameProject } from '../gameApi';
 import { GameLabActionsProvider } from './GameLabActionsContext';
-import { GAME_ASSET_DRAG_MIME, type GameAssetDragPayload, type GameDecomposeNodeData } from './labTypes';
+import {
+  GAME_ASSET_DRAG_MIME,
+  type GameAssetDragPayload,
+  type GameDecomposeNodeData,
+  type GameToModelNodeData,
+} from './labTypes';
 import { GameImageNode } from './nodes/GameImageNode';
 import { GameModelPartNode } from './nodes/GameModelPartNode';
 import { GameDecomposeNode } from './nodes/GameDecomposeNode';
+import { GameToModelNode } from './nodes/GameToModelNode';
 import './gameLab.css';
 
 const nodeTypes: NodeTypes = {
   image: GameImageNode,
   model_part: GameModelPartNode,
   decompose: GameDecomposeNode,
+  to_model: GameToModelNode,
 };
 
 // 与导演模式同一个取舍（LabCanvas.tsx 的 LAB_CANVAS_SAVE_DEBOUNCE_MS）：
 // 拖拽/连线会连续触发多次节点变化，等操作停下来一小段时间再落盘一次。
 const LAB_CANVAS_SAVE_DEBOUNCE_MS = 800;
 const DECOMPOSE_POLL_INTERVAL_MS = 5000;
+
+// 工具栏"图片"分组圆形按钮——镜像导演模式 LabCanvas.tsx 的 imageGroupIcon
+// 同一个 SVG，保持两边视觉一致。
+const imageGroupIcon = (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="4" width="18" height="16" rx="2.5" />
+    <circle cx="9" cy="10" r="1.8" />
+    <path d="m4 18 5.5-5.5a2 2 0 0 1 2.8 0L15 15.2M15.5 12.5l1-1a2 2 0 0 1 2.8 0L21 13.3" />
+  </svg>
+);
+
+type ToolrailMenu = 'image' | null;
+type ImageProcessKind = 'decompose' | 'toModel';
+const IMAGE_PROCESS_KINDS: ImageProcessKind[] = ['toModel', 'decompose'];
 
 function nextNodeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -54,6 +75,7 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
     .current;
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initial.edges);
+  const [openMenu, setOpenMenu] = useState<ToolrailMenu>(null);
   const { screenToFlowPosition } = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const projectIdRef = useRef(project.project_id);
@@ -105,6 +127,13 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
 
   const patchDecomposeNode = useCallback(
     (nodeId: string, patch: Partial<GameDecomposeNodeData>) => {
+      setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n)));
+    },
+    [setNodes]
+  );
+
+  const patchToModelNode = useCallback(
+    (nodeId: string, patch: Partial<GameToModelNodeData>) => {
       setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n)));
     },
     [setNodes]
@@ -173,6 +202,62 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
     [nodes, edges, onProjectUpdate, patchDecomposeNode, pollDecompose]
   );
 
+  const pollToModel = useCallback(
+    (nodeId: string, placeholderAssetId: string, jobId: string) => {
+      const tick = async () => {
+        try {
+          const result = await gameApi.checkToModelStatus(projectIdRef.current, placeholderAssetId, jobId);
+          onProjectUpdate(result.project);
+          if (result.status === 'pending') {
+            pollTimers.current.set(nodeId, setTimeout(tick, DECOMPOSE_POLL_INTERVAL_MS));
+            return;
+          }
+          pollTimers.current.delete(nodeId);
+          if (result.status === 'success') {
+            patchToModelNode(nodeId, { status: 'success', resultAssetId: result.asset?.asset_id });
+          } else {
+            patchToModelNode(nodeId, { status: 'failed', error: result.error });
+          }
+        } catch (err) {
+          pollTimers.current.delete(nodeId);
+          patchToModelNode(nodeId, { status: 'failed', error: err instanceof Error ? err.message : String(err) });
+        }
+      };
+      pollTimers.current.set(nodeId, setTimeout(tick, DECOMPOSE_POLL_INTERVAL_MS));
+    },
+    [onProjectUpdate, patchToModelNode]
+  );
+
+  const submitToModel = useCallback(
+    (nodeId: string) => {
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      const connection = edges.find((e) => e.target === nodeId && e.targetHandle === 'image');
+      const sourceNode = connection ? nodes.find((n) => n.id === connection.source) : null;
+      const assetId = (sourceNode?.data as { assetId?: string } | undefined)?.assetId;
+      if (!assetId) return;
+      patchToModelNode(nodeId, { status: 'submitting', error: undefined });
+      void gameApi
+        .toModel(projectIdRef.current, assetId)
+        .then((result) => {
+          onProjectUpdate(result.project);
+          patchToModelNode(nodeId, {
+            status: 'pending',
+            placeholderAssetId: result.placeholder_asset_id,
+            jobId: result.job_id,
+          });
+          pollToModel(nodeId, result.placeholder_asset_id, result.job_id);
+        })
+        .catch((err) => {
+          patchToModelNode(nodeId, {
+            status: 'failed',
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    },
+    [nodes, edges, onProjectUpdate, patchToModelNode, pollToModel]
+  );
+
   const onDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
@@ -203,22 +288,39 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
     [screenToFlowPosition, setNodes]
   );
 
-  const addDecomposeNode = useCallback(() => {
-    const center = wrapperRef.current
-      ? screenToFlowPosition({ x: wrapperRef.current.clientWidth / 2, y: wrapperRef.current.clientHeight / 2 })
-      : { x: 300, y: 200 };
-    setNodes((nds) =>
-      nds.concat({
-        id: nextNodeId('decompose'),
-        type: 'decompose',
-        position: center,
-        data: { hint: '', granularity: 'medium', status: 'idle' } satisfies GameDecomposeNodeData,
-      })
-    );
-  }, [screenToFlowPosition, setNodes]);
+  const addProcessNode = useCallback(
+    (kind: ImageProcessKind) => {
+      const center = wrapperRef.current
+        ? screenToFlowPosition({ x: wrapperRef.current.clientWidth / 2, y: wrapperRef.current.clientHeight / 2 })
+        : { x: 300, y: 200 };
+      if (kind === 'decompose') {
+        setNodes((nds) =>
+          nds.concat({
+            id: nextNodeId('decompose'),
+            type: 'decompose',
+            position: center,
+            data: { hint: '', granularity: 'medium', status: 'idle' } satisfies GameDecomposeNodeData,
+          })
+        );
+      } else {
+        setNodes((nds) =>
+          nds.concat({
+            id: nextNodeId('to_model'),
+            type: 'to_model',
+            position: center,
+            data: { status: 'idle' } satisfies GameToModelNodeData,
+          })
+        );
+      }
+      setOpenMenu(null);
+    },
+    [screenToFlowPosition, setNodes]
+  );
 
   return (
-    <GameLabActionsProvider value={{ deleteNode, renameNode, patchDecomposeNode, submitDecompose }}>
+    <GameLabActionsProvider
+      value={{ deleteNode, renameNode, patchDecomposeNode, submitDecompose, patchToModelNode, submitToModel }}
+    >
       <div className="game-lab-canvas-wrap" ref={wrapperRef}>
         <ReactFlow
           nodes={nodes}
@@ -234,14 +336,39 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
           <Background />
           <Controls />
         </ReactFlow>
-        <button
-          type="button"
-          className="game-lab-add-decompose"
-          onClick={addDecomposeNode}
-          data-testid="game-workshop-lab-add-decompose-button"
-        >
-          {t('gameWorkshop.lab.addDecomposeCard')}
-        </button>
+
+        {/* 悬浮圆形工具栏——镜像导演模式 LabCanvas.tsx 的 lab-toolrail，
+            目前只有"图片处理"一组，点开侧边菜单选"2D转3D"或"分解图"，
+            往画布中心加一张对应的处理卡片。 */}
+        <div className="game-lab-toolrail">
+          <div className="game-lab-toolrail-item">
+            <button
+              type="button"
+              className={`game-lab-toolrail-btn ${openMenu === 'image' ? 'game-lab-toolrail-btn--active' : ''}`}
+              title={t('gameWorkshop.lab.imageGroup')}
+              onClick={() => setOpenMenu((v) => (v === 'image' ? null : 'image'))}
+              data-testid="game-workshop-lab-toolrail-button"
+              data-variant="image"
+            >
+              {imageGroupIcon}
+            </button>
+            {openMenu === 'image' && (
+              <div className="game-lab-add-menu game-lab-add-menu--side" data-testid="game-workshop-lab-add-menu">
+                {IMAGE_PROCESS_KINDS.map((kind) => (
+                  <button
+                    type="button"
+                    key={kind}
+                    onClick={() => addProcessNode(kind)}
+                    data-testid="game-workshop-lab-add-menu-item"
+                    data-variant={kind}
+                  >
+                    {t(`gameWorkshop.lab.process.${kind}`)}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </GameLabActionsProvider>
   );

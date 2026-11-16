@@ -16,7 +16,7 @@ import { rawFileUrl } from './lab/nodes/gameRawFileUrl';
 import './gameRail.css';
 
 type AssetCategory = 'character' | 'world' | 'video';
-type ExpandedSection = 'projects' | AssetCategory | 'model_part' | null;
+type ExpandedSection = 'projects' | AssetCategory | 'model_part' | 'model' | null;
 
 function handleAssetDragStart(e: React.DragEvent, asset: GameAsset) {
   const payload: GameAssetDragPayload = {
@@ -60,6 +60,14 @@ const modelPartIcon = (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
     <path d="M12 3 3 8v8l9 5 9-5V8z" />
     <path d="M3 8l9 5 9-5M12 13v8" />
+  </svg>
+);
+
+const modelIcon = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3 3 8v8l9 5 9-5V8z" />
+    <path d="M3 8l9 5 9-5" />
+    <circle cx="12" cy="13" r="2.4" />
   </svg>
 );
 
@@ -229,6 +237,11 @@ export function GameRail({
     [decomposedBatches]
   );
 
+  const modelAssets = useMemo(
+    () => (selectedProject?.assets ?? []).filter((a) => a.type === 'model' && a.status === 'ready'),
+    [selectedProject]
+  );
+
   const toggle = (section: ExpandedSection) => {
     setExpanded((prev) => (prev === section ? null : section));
   };
@@ -236,6 +249,12 @@ export function GameRail({
   const deleteBatch = async (decomposeBatchId: string) => {
     if (!selectedProject) return;
     const next = await gameApi.deleteAssetBatch(selectedProject.project_id, decomposeBatchId);
+    onProjectUpdate(next);
+  };
+
+  const deleteModel = async (assetId: string) => {
+    if (!selectedProject) return;
+    const next = await gameApi.deleteAsset(selectedProject.project_id, assetId);
     onProjectUpdate(next);
   };
 
@@ -434,6 +453,61 @@ export function GameRail({
                       </button>
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div
+                role="button"
+                tabIndex={0}
+                className={`game-rail-category-row ${expanded === 'model' ? 'game-rail-category-row--active' : ''}`}
+                onClick={() => toggle('model')}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    toggle('model');
+                  }
+                }}
+                data-testid="game-workshop-rail-section-row"
+                data-variant="model"
+              >
+                <span className="game-rail-category-icon">{modelIcon}</span>
+                <span className="game-rail-category-label">{t('gameWorkshop.rail.modelSection')}</span>
+                <span className="game-rail-category-count">{modelAssets.length}</span>
+                {expanded === 'model' ? chevronDown : chevronRight}
+              </div>
+              {expanded === 'model' && (
+                <div className="game-rail-category-body" data-testid="game-workshop-rail-section-body" data-variant="model">
+                  <div className="game-rail-asset-grid">
+                    {modelAssets.length === 0 && (
+                      <div className="game-rail-empty-hint">{t('gameWorkshop.rail.noAssets')}</div>
+                    )}
+                    {modelAssets.map((asset) => (
+                      <div
+                        key={asset.asset_id}
+                        className="game-rail-asset-item"
+                        data-testid="game-workshop-rail-model-item"
+                        data-variant={asset.asset_id}
+                      >
+                        <a href={asset.file_path ? rawFileUrl(asset.file_path) : undefined} download>
+                          <div className="game-rail-model-icon" aria-hidden>
+                            3D
+                          </div>
+                        </a>
+                        <div className="game-rail-asset-name">{asset.name}</div>
+                        <button
+                          type="button"
+                          className="game-rail-model-delete-btn"
+                          title={t('gameWorkshop.rail.deleteAction')}
+                          onClick={() => void deleteModel(asset.asset_id)}
+                          data-testid="game-workshop-rail-model-delete-button"
+                        >
+                          {trashIcon}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>

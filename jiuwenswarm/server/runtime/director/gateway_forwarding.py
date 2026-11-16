@@ -59,6 +59,8 @@ GAME_FORWARD_METHODS: frozenset[str] = frozenset({
     "game.assets.delete",
     "game.assets.decompose",
     "game.assets.decompose_check_status",
+    "game.assets.to_model",
+    "game.assets.to_model_check_status",
     "game.lab_canvas.save",
     "game.files.tree",
     "game.files.read",

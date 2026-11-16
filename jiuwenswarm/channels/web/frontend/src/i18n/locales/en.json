@@ -7045,11 +7045,16 @@
       "generateFailed": "Generation failed: {{error}}",
       "noAssets": "No assets yet",
       "decomposedSection": "Decomposed parts",
+      "modelSection": "3D models",
       "deleteBatchButton": "Delete batch",
       "dragHint": "Drag onto the Lab canvas to use as a decomposition input"
     },
     "lab": {
-      "addDecomposeCard": "+ Decompose card",
+      "imageGroup": "Image processing",
+      "process": {
+        "decompose": "Decompose",
+        "toModel": "2D to 3D"
+      },
       "decompose": {
         "title": "Decompose",
         "sourceConnected": "Source: {{name}}",
@@ -7062,6 +7067,15 @@
         "statusRunning": "Decomposing…",
         "statusSuccess": "Produced {{count}} parts — see \"Decomposed parts\" in the Create panel",
         "statusFailedGeneric": "Decomposition failed"
+      },
+      "toModel": {
+        "title": "2D to 3D",
+        "sourceConnected": "Source: {{name}}",
+        "sourceMissing": "Connect a \"Character\" or \"World\" image from the left",
+        "action": "Convert",
+        "statusRunning": "Converting…",
+        "statusSuccess": "3D model generated — see \"3D models\" in the Create panel",
+        "statusFailedGeneric": "Conversion failed"
       }
     }
   }
