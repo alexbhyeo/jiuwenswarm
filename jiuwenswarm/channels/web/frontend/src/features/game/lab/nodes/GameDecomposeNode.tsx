@@ -90,6 +90,7 @@ export function GameDecomposeNode({ id, data }: NodeProps & { data: GameDecompos
           </div>
         )}
       </div>
+      <Handle type="source" position={Position.Right} id="parts" />
     </div>
   );
 }

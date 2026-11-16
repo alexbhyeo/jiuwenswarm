@@ -20,12 +20,13 @@ import {
 import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { gameApi, type GameProject } from '../gameApi';
+import { gameApi, type GameAsset, type GameProject } from '../gameApi';
 import { GameLabActionsProvider } from './GameLabActionsContext';
 import {
   GAME_ASSET_DRAG_MIME,
   type GameAssetDragPayload,
   type GameDecomposeNodeData,
+  type GameModelPartNodeData,
   type GameToModelNodeData,
 } from './labTypes';
 import { GameImageNode } from './nodes/GameImageNode';
@@ -81,6 +82,18 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
   const projectIdRef = useRef(project.project_id);
   projectIdRef.current = project.project_id;
   const pollTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // 与导演模式同一个取舍（LabCanvas.tsx 的 nextSpawnOffset），但步长按本模块
+  // 卡片的实际尺寸放大：分解卡产出结果后会纵向长到 ~250px 高（标题+连线提示
+  // +提示词框+粒度选择+按钮+结果文案一次性全展开，不像导演模式那样把结果
+  // 拆成另外的小节点），卡片本身宽 220px（gameLab.css 的
+  // .game-lab-node--decompose/--to-model）。横向错开一张卡的宽度+间距，
+  // 纵向错开一点，避免后加的卡片被前一张放大后的卡片完全盖住。
+  const spawnOffset = useRef(0);
+  const nextSpawnOffset = useCallback(() => {
+    const step = spawnOffset.current % 6;
+    spawnOffset.current += 1;
+    return { dx: step * 260, dy: step * 40 };
+  }, []);
 
   useEffect(
     () => () => {
@@ -139,6 +152,52 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
     [setNodes]
   );
 
+  // 分解成功后，把产出的部件直接摆到画布上——以分解卡片为锚点，向下方铺开
+  // 一个宽而矮的网格（而不是往右，右边是工具栏加卡片时新卡片的落点，见
+  // nextSpawnOffset），并用边把每个部件连回分解卡片的 "parts" 输出口
+  // （镜像用户给的参考图：产出的部件是接在处理卡片上的、而不是只出现在
+  // 素材库里）。
+  const spawnModelPartNodes = useCallback(
+    (decomposeNodeId: string, parts: GameAsset[]) => {
+      if (parts.length === 0) return;
+      const PART_COLS = 4;
+      const PART_GAP_X = 200;
+      const PART_GAP_Y = 170;
+      setNodes((nds) => {
+        const decomposeNode = nds.find((n) => n.id === decomposeNodeId);
+        const baseX = decomposeNode?.position.x ?? 0;
+        const baseY = (decomposeNode?.position.y ?? 0) + 320;
+        const newNodes: Node[] = parts.map((asset, i) => ({
+          id: nextNodeId('model_part'),
+          type: 'model_part',
+          position: {
+            x: baseX + (i % PART_COLS) * PART_GAP_X,
+            y: baseY + Math.floor(i / PART_COLS) * PART_GAP_Y,
+          },
+          data: {
+            assetId: asset.asset_id,
+            filePath: asset.file_path ?? '',
+            name: asset.name,
+            status: asset.status,
+          } satisfies GameModelPartNodeData,
+        }));
+        setEdges((eds) =>
+          eds.concat(
+            newNodes.map((n) => ({
+              id: `e_${decomposeNodeId}_${n.id}`,
+              source: decomposeNodeId,
+              sourceHandle: 'parts',
+              target: n.id,
+              targetHandle: 'in',
+            }))
+          )
+        );
+        return nds.concat(newNodes);
+      });
+    },
+    [setNodes, setEdges]
+  );
+
   const pollDecompose = useCallback(
     (nodeId: string, placeholderAssetId: string, jobId: string, decomposeBatchId: string) => {
       const tick = async () => {
@@ -156,7 +215,9 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
           }
           pollTimers.current.delete(nodeId);
           if (result.status === 'success') {
-            patchDecomposeNode(nodeId, { status: 'success', resultCount: result.assets?.length ?? 0 });
+            const parts = result.assets ?? [];
+            patchDecomposeNode(nodeId, { status: 'success', resultCount: parts.length });
+            spawnModelPartNodes(nodeId, parts);
           } else {
             patchDecomposeNode(nodeId, { status: 'failed', error: result.error });
           }
@@ -167,7 +228,7 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
       };
       pollTimers.current.set(nodeId, setTimeout(tick, DECOMPOSE_POLL_INTERVAL_MS));
     },
-    [onProjectUpdate, patchDecomposeNode]
+    [onProjectUpdate, patchDecomposeNode, spawnModelPartNodes]
   );
 
   const submitDecompose = useCallback(
@@ -290,9 +351,13 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
 
   const addProcessNode = useCallback(
     (kind: ImageProcessKind) => {
+      const { dx, dy } = nextSpawnOffset();
       const center = wrapperRef.current
-        ? screenToFlowPosition({ x: wrapperRef.current.clientWidth / 2, y: wrapperRef.current.clientHeight / 2 })
-        : { x: 300, y: 200 };
+        ? screenToFlowPosition({
+            x: wrapperRef.current.clientWidth / 2 + dx,
+            y: wrapperRef.current.clientHeight / 2 + dy,
+          })
+        : { x: 300 + dx, y: 200 + dy };
       if (kind === 'decompose') {
         setNodes((nds) =>
           nds.concat({
@@ -314,7 +379,7 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
       }
       setOpenMenu(null);
     },
-    [screenToFlowPosition, setNodes]
+    [screenToFlowPosition, setNodes, nextSpawnOffset]
   );
 
   return (
@@ -331,7 +396,8 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
           nodeTypes={nodeTypes}
           onDrop={onDrop}
           onDragOver={onDragOver}
-          fitView
+          fitView={false}
+          defaultViewport={{ x: 80, y: 40, zoom: 0.85 }}
         >
           <Background />
           <Controls />
