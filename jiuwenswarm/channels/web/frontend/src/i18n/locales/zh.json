@@ -43,6 +43,7 @@
     "ok": "确定",
     "and": "和",
     "modify": "修改",
+    "download": "下载",
     "collapse": "收起",
     "expand": "展开",
     "expandAndPin": "展开并固定",
@@ -1001,6 +1002,8 @@
       "visualGenConfigTitle": "配置图像生成模型",
       "audioGenConfigTitle": "配置语音生成模型",
       "editChatConfigTitle": "配置剪辑对话模型",
+      "tripoConfigTitle": "配置 3D 分解凭据",
+      "tripoConfigured": "已配置",
       "toggleCapability": "切换{{name}}能力",
       "saveAndEnable": "保存并启用",
       "savedRestartRequired": "配置已保存，重启后生效。",
@@ -1354,6 +1357,18 @@
       "edit_chat_enabled": {
         "title": "剪辑对话",
         "description": "启用「导演模式 · 剪辑」里的 AI 对话助手；关闭后仍保留已保存的模型配置。"
+      },
+      "tripo_api_base": {
+        "title": "API 地址",
+        "placeholder": "例如 https://openapi.tripo3d.ai/v3"
+      },
+      "tripo_api_key": {
+        "title": "API 密钥",
+        "placeholder": "例如 tsk_..."
+      },
+      "tripo_enabled": {
+        "title": "3D 分解",
+        "description": "启用「游戏工坊 · 实验室」里把图片分解成多个独立 3D 部件的能力；关闭后仍保留已保存的凭据。"
       },
       "permissions_mode": {
         "title": "全局权限模式",
@@ -6981,6 +6996,52 @@
       "in_progress": "执行中",
       "blocked": "等待中",
       "stopped": "已停止"
+    }
+  },
+  "gameWorkshop": {
+    "tabs": {
+      "create": "创作",
+      "lab": "实验室"
+    },
+    "rail": {
+      "newProjectPlaceholder": "新游戏项目名称",
+      "newProjectButton": "新建游戏项目",
+      "projectsCount": "项目 · {{count}}",
+      "noProjects": "还没有游戏项目",
+      "scaffoldButton": "生成/修复工程脚手架",
+      "scaffoldSuccess": "已补充文件：{{files}}",
+      "scaffoldComplete": "工程结构已完整",
+      "buildButton": "生成 2D 主城工程",
+      "buildSuccess": "已生成 2D 主城工程：{{files}}",
+      "bridgeUnavailable": "Godot/MCP 暂不可用，工程脚手架可以照常生成，场景编辑与运行留到后续阶段接入。",
+      "categoryCharacter": "角色",
+      "categoryWorld": "世界",
+      "categoryVideo": "视频",
+      "promptPlaceholder": "描述想要生成的内容…",
+      "generateButton": "生成",
+      "generating": "正在生成…",
+      "generateSuccess": "素材已生成：{{name}}",
+      "generateFailed": "生成失败：{{error}}",
+      "noAssets": "暂无素材",
+      "decomposedSection": "分解产物",
+      "deleteBatchButton": "删除整批",
+      "dragHint": "拖到实验室画布可作为分解输入"
+    },
+    "lab": {
+      "addDecomposeCard": "+ 素材分解卡片",
+      "decompose": {
+        "title": "素材分解",
+        "sourceConnected": "源图：{{name}}",
+        "sourceMissing": "请从左侧连一张「角色」或「世界」图片",
+        "hintPlaceholder": "分解依据（可选），例如：weapon, belt, necklace, head, hair, legs, torso, pants, shirt",
+        "granularityCoarse": "粗粒度",
+        "granularityMedium": "中等粒度",
+        "granularityFine": "细粒度",
+        "action": "分解",
+        "statusRunning": "分解中…",
+        "statusSuccess": "已产出 {{count}} 个部件，可在创作面板「分解产物」里查看",
+        "statusFailedGeneric": "分解失败"
+      }
     }
   }
 }

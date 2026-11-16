@@ -201,6 +201,10 @@ MULTIMODAL_RELOAD_ENV_KEYS = {
     "EDIT_CHAT_MODEL_NAME",
     "EDIT_CHAT_PROVIDER",
     "EDIT_CHAT_PROTOCOL",
+    # 3D 分解（游戏工坊 · 实验室，D-20261116-1047-game-workshop-lab）。
+    "TRIPO_ENABLED",
+    "TRIPO_API_BASE",
+    "TRIPO_API_KEY",
 }
 ASR_ENV_KEYS = {
     "ASR_API_BASE",
@@ -344,6 +348,12 @@ CONFIG_SET_ENV_MAP = {
     "edit_chat_provider": "EDIT_CHAT_PROVIDER",
     "edit_chat_protocol": "EDIT_CHAT_PROTOCOL",
     "edit_chat_enabled": "EDIT_CHAT_ENABLED",
+    # 3D 分解（游戏工坊 · 实验室）- 独立的凭据槽，不复用图片/视频生成的
+    # key/base，换供应商不会连带影响这里。没有 model/provider/protocol
+    # 字段：Tripo3D 只有一套固定的 REST 接口，没有可切换的供应商。
+    "tripo_api_base": "TRIPO_API_BASE",
+    "tripo_api_key": "TRIPO_API_KEY",
+    "tripo_enabled": "TRIPO_ENABLED",
     # audio 模型
     "audio_api_base": "AUDIO_API_BASE",
     "audio_api_key": "AUDIO_API_KEY",

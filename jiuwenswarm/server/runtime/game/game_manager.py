@@ -3,8 +3,9 @@
 """游戏模式的 RPC 处理器（``game.*``）.
 
 与 ``director_manager.DirectorManager`` 同构：一个方法一个处理器，返回可直接
-序列化的 dict。这里只做 P0 范围（设计 D-20261107-1637 第 8 节）：项目生命周期、
-脚手架、素材登记、文件工作区读写、桥接状态。
+序列化的 dict。P0 范围（设计 D-20261107-1637 第 8 节）：项目生命周期、脚手架、
+素材登记、文件工作区读写、桥接状态；D-20261116-1047-game-workshop-lab 在此
+基础上加了素材分解（Tripo3D）与实验室画布持久化。
 """
 
 from __future__ import annotations
@@ -15,6 +16,10 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from jiuwenswarm.server.runtime.game.game_item_decompose import (
+    GameItemDecompose,
+    GameItemDecomposeError,
+)
 from jiuwenswarm.server.runtime.game.game_store import (
     GAME_ASSET_TYPES,
     GameAsset,
@@ -47,6 +52,7 @@ class GameManager:
     def __init__(self) -> None:
         self._store = GameStore()
         self._bridge = GodotBridge()
+        self._decompose = GameItemDecompose()
 
     # ------------------------------------------------------------------
     # 项目
@@ -155,10 +161,12 @@ class GameManager:
         return {"project": project.to_dict(), "asset": asset.to_dict()}
 
     async def handle_game_assets_generate(self, params: dict) -> dict:
-        """用 ``generate_visual`` 生成一张游戏素材并登记到项目.
+        """用 ``generate_visual``/``generate_video`` 生成一张/一段游戏素材
+        并登记到项目.
 
         与导演模式的生成卡同理：参数已由前端完全确定，再走一次 LLM 回合只会
-        增加延迟与不确定性，所以这里直接调工具函数。
+        增加延迟与不确定性，所以这里直接调工具函数。``video`` 类目复用
+        导演模式已验证的 ``generate_video``（D-03），不等 Godot-MCP 落地。
         """
         project = self._require_project(str(params.get("project_id") or "").strip())
         prompt = str(params.get("prompt") or "").strip()
@@ -171,19 +179,39 @@ class GameManager:
                 f"不支持的素材类型 {asset_type}；可选：{', '.join(GAME_ASSET_TYPES)}",
             )
 
-        from jiuwenswarm.agents.harness.common.tools.visual_gen_tools import generate_visual
         from jiuwenswarm.server.runtime.director.director_manager import (
             _parse_generation_result,
         )
 
         save_dir = str(get_project_assets_dir(project.project_id))
-        result_str = await generate_visual._func(
-            prompt=prompt,
-            aspect_ratio=str(params.get("aspect_ratio") or "1:1"),
-            resolution=str(params.get("resolution") or "1k"),
-            reference_image_paths=params.get("reference_image_paths") or None,
-            save_dir=save_dir,
-        )
+        if asset_type == "video":
+            from jiuwenswarm.agents.harness.common.tools.video_gen_tools import (
+                video_gen_configured,
+                video_gen_enabled,
+            )
+
+            if not (video_gen_enabled() and video_gen_configured()):
+                raise GameRpcError("NOT_CONFIGURED", "视频生成未配置，请先在设置中配置「视频处理」")
+
+            from jiuwenswarm.agents.harness.common.tools.video_gen_tools import generate_video
+
+            result_str = await generate_video._func(
+                prompt=prompt,
+                aspect_ratio=str(params.get("aspect_ratio") or "16:9"),
+                resolution=str(params.get("resolution") or "720p"),
+                duration_seconds=int(params.get("duration_seconds") or 5),
+                save_dir=save_dir,
+            )
+        else:
+            from jiuwenswarm.agents.harness.common.tools.visual_gen_tools import generate_visual
+
+            result_str = await generate_visual._func(
+                prompt=prompt,
+                aspect_ratio=str(params.get("aspect_ratio") or "1:1"),
+                resolution=str(params.get("resolution") or "1k"),
+                reference_image_paths=params.get("reference_image_paths") or None,
+                save_dir=save_dir,
+            )
         parsed = _parse_generation_result(result_str)
         name = str(params.get("name") or "").strip() or prompt[:24]
         asset = GameAsset(
@@ -203,9 +231,119 @@ class GameManager:
     async def handle_game_assets_delete(self, params: dict) -> dict:
         project = self._require_project(str(params.get("project_id") or "").strip())
         asset_id = str(params.get("asset_id") or "").strip()
+        decompose_batch_id = str(params.get("decompose_batch_id") or "").strip()
+        if decompose_batch_id:
+            # 整批删除同一次分解产出的所有部件（D-06），不要求逐个点掉。
+            return {
+                "project": self._store.delete_assets_by_batch(
+                    project.project_id, decompose_batch_id
+                ).to_dict()
+            }
         if not any(a.asset_id == asset_id for a in project.assets):
             raise GameRpcError("ASSET_NOT_FOUND", f"未找到素材: {asset_id}")
         return {"project": self._store.delete_asset(project.project_id, asset_id).to_dict()}
+
+    # ------------------------------------------------------------------
+    # 素材分解（Tripo3D，D-20261116-1047-game-workshop-lab D-04/D-06）
+    # ------------------------------------------------------------------
+    async def handle_game_assets_decompose(self, params: dict) -> dict:
+        """提交一次分解：源素材必须是「角色」或「世界」类目下已就绪的图片
+        素材。与导演模式的 video_bridge/视频生成一致——这里只提交任务、
+        落一个 pending 占位素材，真正的产物由 check_status 轮询拿回来。
+        """
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        source_asset_id = str(params.get("source_asset_id") or "").strip()
+        if not source_asset_id:
+            raise GameRpcError("INVALID_PARAMS", "缺少 source_asset_id")
+        source = next((a for a in project.assets if a.asset_id == source_asset_id), None)
+        if source is None or source.type not in ("character", "world") or source.status != "ready" or not source.file_path:
+            raise GameRpcError(
+                "INVALID_PARAMS", "分解需要先选中一个已就绪的「角色」或「世界」类目图片素材"
+            )
+        hint = str(params.get("hint") or "").strip() or None
+        granularity = str(params.get("granularity") or "medium").strip()
+
+        try:
+            task_id = await self._decompose.submit(source.file_path, hint=hint, granularity=granularity)
+        except GameItemDecomposeError as exc:
+            raise GameRpcError(exc.code, str(exc)) from exc
+
+        decompose_batch_id = f"gbatch_{secrets.token_hex(4)}"
+        placeholder = GameAsset(
+            asset_id=f"gasset_{secrets.token_hex(4)}",
+            type="model_part",
+            name=f"分解中…（来自 {source.name}）",
+            status="pending",
+            params={"source": "decompose", "job_id": task_id},
+            source_asset_id=source_asset_id,
+            decompose_batch_id=decompose_batch_id,
+        )
+        project = self._store.append_asset(project.project_id, placeholder)
+        return {
+            "project": project.to_dict(),
+            "placeholder_asset_id": placeholder.asset_id,
+            "decompose_batch_id": decompose_batch_id,
+            "job_id": task_id,
+        }
+
+    async def handle_game_assets_decompose_check_status(self, params: dict) -> dict:
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        placeholder_asset_id = str(params.get("placeholder_asset_id") or "").strip()
+        job_id = str(params.get("job_id") or "").strip()
+        decompose_batch_id = str(params.get("decompose_batch_id") or "").strip()
+        if not (placeholder_asset_id and job_id and decompose_batch_id):
+            raise GameRpcError(
+                "INVALID_PARAMS", "缺少 placeholder_asset_id / job_id / decompose_batch_id"
+            )
+
+        save_dir = str(get_project_assets_dir(project.project_id))
+        status = await self._decompose.poll(job_id, save_dir=save_dir)
+
+        if status.status == "pending":
+            return {"project": project.to_dict(), "status": "pending"}
+
+        # 先从仍带着占位素材的 project 里取出 source_asset_id，再删占位——
+        # 占位无论成功还是失败都要清掉：成功时被真正的部件素材替换，失败时
+        # 不留一个永远 pending 的孤儿。
+        source_asset_id = next(
+            (a.source_asset_id for a in project.assets if a.asset_id == placeholder_asset_id),
+            None,
+        )
+        project = self._store.delete_asset(project.project_id, placeholder_asset_id)
+
+        if status.status == "failed":
+            return {"project": project.to_dict(), "status": "failed", "error": status.error}
+
+        created_assets: list[dict[str, Any]] = []
+        for part in status.parts:
+            asset = GameAsset(
+                asset_id=f"gasset_{secrets.token_hex(4)}",
+                type="model_part",
+                name=part.name,
+                file_path=part.file_path,
+                status="ready",
+                params={"source": "decompose", "rendered_image_path": part.rendered_image_path},
+                source_asset_id=source_asset_id,
+                decompose_batch_id=decompose_batch_id,
+            )
+            project = self._store.append_asset(project.project_id, asset)
+            created_assets.append(asset.to_dict())
+        return {"project": project.to_dict(), "status": "success", "assets": created_assets}
+
+    # ------------------------------------------------------------------
+    # 实验室画布（与导演模式 director.lab_canvas.save 同构）
+    # ------------------------------------------------------------------
+    async def handle_game_lab_canvas_save(self, params: dict) -> dict:
+        project_id = str(params.get("project_id") or "").strip()
+        self._require_project(project_id)
+        nodes = params.get("nodes")
+        edges = params.get("edges")
+        project = self._store.save_lab_canvas(
+            project_id,
+            nodes if isinstance(nodes, list) else [],
+            edges if isinstance(edges, list) else [],
+        )
+        return {"project": project.to_dict()}
 
     # ------------------------------------------------------------------
     # 代码工作区

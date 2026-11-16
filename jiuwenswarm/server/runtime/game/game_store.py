@@ -22,7 +22,11 @@ from jiuwenswarm.common.utils import get_agent_root_dir
 
 logger = logging.getLogger(__name__)
 
-GAME_ASSET_TYPES = ("character", "prop", "scene", "model", "texture", "audio", "animation")
+GAME_ASSET_TYPES = ("character", "world", "video", "model_part")
+# 旧类目仍可能出现在历史项目的素材里（D-20261116-1047-game-workshop-lab §7
+# 兼容性）：道具/场景折入 world，model/texture/animation/audio 下线，但
+# 已落盘的旧素材不删除、不改写，素材列表按这个集合识别"历史/其他"兜底分类。
+LEGACY_GAME_ASSET_TYPES = ("prop", "scene", "model", "texture", "audio", "animation")
 PROJECT_STATUSES = ("draft", "scaffolded", "building", "ready", "failed")
 
 
@@ -60,6 +64,12 @@ class GameAsset:
     status: str = "ready"
     params: dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
+    # 分解流水线专用（D-20261116-1047-game-workshop-lab D-04/D-06）：
+    # source_asset_id 指回被分解的源图素材，decompose_batch_id 把同一次
+    # 分解调用产出的所有部件串成一组，供整批删除/区分多次分解结果。两者
+    # 都只在分解产出的素材上有值，其它素材保持 None。
+    source_asset_id: str | None = None
+    decompose_batch_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -70,18 +80,22 @@ class GameAsset:
             "status": self.status,
             "params": dict(self.params),
             "created_at": self.created_at,
+            "source_asset_id": self.source_asset_id,
+            "decompose_batch_id": self.decompose_batch_id,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GameAsset":
         return cls(
             asset_id=str(data.get("asset_id") or ""),
-            type=str(data.get("type") or "prop"),
+            type=str(data.get("type") or "world"),
             name=str(data.get("name") or ""),
             file_path=(str(data["file_path"]) if data.get("file_path") else None),
             status=str(data.get("status") or "ready"),
             params=dict(data["params"]) if isinstance(data.get("params"), dict) else {},
             created_at=float(data.get("created_at") or time.time()),
+            source_asset_id=(str(data["source_asset_id"]) if data.get("source_asset_id") else None),
+            decompose_batch_id=(str(data["decompose_batch_id"]) if data.get("decompose_batch_id") else None),
         )
 
 
@@ -96,6 +110,10 @@ class GameProject:
     assets: list[GameAsset] = field(default_factory=list)
     build: dict[str, Any] = field(default_factory=dict)
     params: dict[str, Any] = field(default_factory=dict)
+    # 实验室画布持久化（与 DirectorProject 同构，见
+    # director_store.py:115-116）：前端整体覆盖式保存当前节点/连线快照。
+    lab_nodes: list[dict[str, Any]] = field(default_factory=list)
+    lab_edges: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def root_dir(self) -> Path:
@@ -113,11 +131,15 @@ class GameProject:
             "assets": [asset.to_dict() for asset in self.assets],
             "build": dict(self.build),
             "params": dict(self.params),
+            "lab_nodes": self.lab_nodes,
+            "lab_edges": self.lab_edges,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GameProject":
         raw_assets = data.get("assets")
+        raw_lab_nodes = data.get("lab_nodes")
+        raw_lab_edges = data.get("lab_edges")
         return cls(
             project_id=str(data.get("project_id") or ""),
             name=str(data.get("name") or ""),
@@ -132,6 +154,12 @@ class GameProject:
             ],
             build=dict(data["build"]) if isinstance(data.get("build"), dict) else {},
             params=dict(data["params"]) if isinstance(data.get("params"), dict) else {},
+            lab_nodes=[item for item in raw_lab_nodes if isinstance(item, dict)]
+            if isinstance(raw_lab_nodes, list)
+            else [],
+            lab_edges=[item for item in raw_lab_edges if isinstance(item, dict)]
+            if isinstance(raw_lab_edges, list)
+            else [],
         )
 
 
@@ -230,6 +258,51 @@ class GameStore:
             if project is None:
                 raise KeyError(f"未找到项目: {project_id}")
             project.assets = [a for a in project.assets if a.asset_id != asset_id]
+            project.updated_at = time.time()
+            self._save(projects)
+            return project
+
+    def delete_assets_by_batch(self, project_id: str, decompose_batch_id: str) -> GameProject:
+        """整批删除同一次分解产出的所有部件素材（D-06）."""
+        with self._lock:
+            projects = self._load()
+            project = projects.get(project_id)
+            if project is None:
+                raise KeyError(f"未找到项目: {project_id}")
+            project.assets = [a for a in project.assets if a.decompose_batch_id != decompose_batch_id]
+            project.updated_at = time.time()
+            self._save(projects)
+            return project
+
+    def update_asset(self, project_id: str, asset_id: str, **patch: Any) -> GameProject:
+        with self._lock:
+            projects = self._load()
+            project = projects.get(project_id)
+            if project is None:
+                raise KeyError(f"未找到项目: {project_id}")
+            for asset in project.assets:
+                if asset.asset_id == asset_id:
+                    for key, value in patch.items():
+                        if hasattr(asset, key):
+                            setattr(asset, key, value)
+                    break
+            project.updated_at = time.time()
+            self._save(projects)
+            return project
+
+    def save_lab_canvas(
+        self, project_id: str, nodes: list[dict[str, Any]], edges: list[dict[str, Any]]
+    ) -> GameProject:
+        """整体覆盖式保存实验室画布，与 ``DirectorStore.save_lab_canvas``
+        同构（见该方法注释）：前端每次都传完整快照，不做增量 diff。
+        """
+        with self._lock:
+            projects = self._load()
+            project = projects.get(project_id)
+            if project is None:
+                raise KeyError(f"未找到项目: {project_id}")
+            project.lab_nodes = nodes
+            project.lab_edges = edges
             project.updated_at = time.time()
             self._save(projects)
             return project

@@ -79,6 +79,9 @@ dependencies = [
     "gitcode-api>=1.2.20,<2",
     "faiss-cpu>=1.7.0,<2",
     "numpy>=1.24.0,<3",
+    # 游戏工坊素材分解（D-20261116-1047-game-workshop-lab）：把 Tripo3D
+    # mesh/smartsegment 返回的单个合并 glTF 按节点拆成多个独立 .glb。
+    "trimesh>=4.4.0,<5",
     "tree-sitter>=0.25.0,<0.26.0",
     "tree-sitter-bash>=0.25.0,<0.26.0",
     "playwright>=1.40,<2",

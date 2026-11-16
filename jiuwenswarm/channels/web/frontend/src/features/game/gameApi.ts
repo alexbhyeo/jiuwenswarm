@@ -15,6 +15,8 @@ export type GameAsset = {
   status: string;
   params: Record<string, unknown>;
   created_at: number;
+  source_asset_id: string | null;
+  decompose_batch_id: string | null;
 };
 
 export type GameProject = {
@@ -28,6 +30,22 @@ export type GameProject = {
   assets: GameAsset[];
   build: Record<string, unknown>;
   params: Record<string, unknown>;
+  lab_nodes: Record<string, unknown>[];
+  lab_edges: Record<string, unknown>[];
+};
+
+export type GameDecomposeSubmitResult = {
+  project: GameProject;
+  placeholder_asset_id: string;
+  decompose_batch_id: string;
+  job_id: string;
+};
+
+export type GameDecomposeStatusResult = {
+  project: GameProject;
+  status: 'pending' | 'success' | 'failed';
+  error?: string;
+  assets?: GameAsset[];
 };
 
 export type GameBridgeStatus = {
@@ -56,6 +74,9 @@ const METHOD = {
   assetsList: 'game.assets.list',
   assetsImport: 'game.assets.import',
   assetsDelete: 'game.assets.delete',
+  assetsDecompose: 'game.assets.decompose',
+  assetsDecomposeCheckStatus: 'game.assets.decompose_check_status',
+  labCanvasSave: 'game.lab_canvas.save',
   filesTree: 'game.files.tree',
   filesRead: 'game.files.read',
   filesWrite: 'game.files.write',
@@ -136,6 +157,54 @@ export const gameApi = {
     const resp = await webRequest<{ project: GameProject }>(METHOD.assetsDelete, {
       project_id: projectId,
       asset_id: assetId,
+    });
+    return resp.project;
+  },
+  /** 整批删除同一次分解产出的所有部件（D-06），不必逐个点掉。 */
+  deleteAssetBatch: async (projectId: string, decomposeBatchId: string): Promise<GameProject> => {
+    const resp = await webRequest<{ project: GameProject }>(METHOD.assetsDelete, {
+      project_id: projectId,
+      decompose_batch_id: decomposeBatchId,
+    });
+    return resp.project;
+  },
+  /** 提交一次素材分解（源素材须是已就绪的「角色」或「世界」图片）；真正的
+   *  产物由 checkDecomposeStatus 轮询拿回来，见 D-20261116-1047 §5.7。 */
+  decomposeAsset: async (
+    projectId: string,
+    sourceAssetId: string,
+    hint?: string,
+    granularity?: 'coarse' | 'medium' | 'fine'
+  ): Promise<GameDecomposeSubmitResult> =>
+    webRequest<GameDecomposeSubmitResult>(METHOD.assetsDecompose, {
+      project_id: projectId,
+      source_asset_id: sourceAssetId,
+      hint,
+      granularity,
+    }),
+  checkDecomposeStatus: async (
+    projectId: string,
+    placeholderAssetId: string,
+    jobId: string,
+    decomposeBatchId: string
+  ): Promise<GameDecomposeStatusResult> =>
+    webRequest<GameDecomposeStatusResult>(METHOD.assetsDecomposeCheckStatus, {
+      project_id: projectId,
+      placeholder_asset_id: placeholderAssetId,
+      job_id: jobId,
+      decompose_batch_id: decomposeBatchId,
+    }),
+  /** 实验室画布持久化：整份节点/连线快照覆盖式保存，与导演模式
+   *  directorLabCanvasSave 同构，不做增量 diff。 */
+  labCanvasSave: async (
+    projectId: string,
+    nodes: unknown[],
+    edges: unknown[]
+  ): Promise<GameProject> => {
+    const resp = await webRequest<{ project: GameProject }>(METHOD.labCanvasSave, {
+      project_id: projectId,
+      nodes,
+      edges,
     });
     return resp.project;
   },

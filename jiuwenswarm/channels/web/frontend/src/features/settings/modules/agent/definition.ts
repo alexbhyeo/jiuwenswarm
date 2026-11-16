@@ -5,6 +5,7 @@ import {
   AgentSearchSettings,
   AudioGenSettings,
   EditChatSettings,
+  TripoSettings,
   VideoGenSettings,
   VisualGenSettings,
 } from './AgentSettings';
@@ -47,6 +48,7 @@ export const agentModule: SettingsModuleDefinition = {
         { id: 'visual-gen-settings', component: 'custom', render: VisualGenSettings },
         { id: 'audio-gen-settings', component: 'custom', render: AudioGenSettings },
         { id: 'edit-chat-settings', component: 'custom', render: EditChatSettings },
+        { id: 'tripo-settings', component: 'custom', render: TripoSettings },
       ],
     },
     {

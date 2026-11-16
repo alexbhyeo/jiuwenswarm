@@ -43,6 +43,7 @@
     "ok": "OK",
     "and": "and",
     "modify": "Modify",
+    "download": "Download",
     "collapse": "Collapse",
     "expand": "Expand",
     "expandAndPin": "Expand and pin",
@@ -1001,6 +1002,8 @@
       "visualGenConfigTitle": "Configure visual generation model",
       "audioGenConfigTitle": "Configure audio generation model",
       "editChatConfigTitle": "Configure Edit chat model",
+      "tripoConfigTitle": "Configure 3D decomposition credentials",
+      "tripoConfigured": "Configured",
       "toggleCapability": "Toggle {{name}} capability",
       "saveAndEnable": "Save and enable",
       "savedRestartRequired": "Saved; takes effect after restart.",
@@ -1354,6 +1357,18 @@
       "edit_chat_enabled": {
         "title": "Edit chat",
         "description": "Enable the AI chat assistant in Director Mode's Edit tab; disabling it keeps the saved model configuration."
+      },
+      "tripo_api_base": {
+        "title": "API URL",
+        "placeholder": "e.g. https://openapi.tripo3d.ai/v3"
+      },
+      "tripo_api_key": {
+        "title": "API key",
+        "placeholder": "e.g. tsk_..."
+      },
+      "tripo_enabled": {
+        "title": "3D decomposition",
+        "description": "Enable splitting an image into separate 3D part assets in Game Workshop's Lab tab; disabling it keeps the saved credentials."
       },
       "permissions_mode": {
         "title": "Global permission mode",
@@ -6984,6 +6999,52 @@
       "in_progress": "In progress",
       "blocked": "Waiting",
       "stopped": "Stopped"
+    }
+  },
+  "gameWorkshop": {
+    "tabs": {
+      "create": "Create",
+      "lab": "Lab"
+    },
+    "rail": {
+      "newProjectPlaceholder": "New game project name",
+      "newProjectButton": "New game project",
+      "projectsCount": "Projects · {{count}}",
+      "noProjects": "No game projects yet",
+      "scaffoldButton": "Generate/repair project scaffold",
+      "scaffoldSuccess": "Files added: {{files}}",
+      "scaffoldComplete": "Project structure is already complete",
+      "buildButton": "Generate 2D home-town project",
+      "buildSuccess": "2D home-town project generated: {{files}}",
+      "bridgeUnavailable": "Godot/MCP is not available yet; the project scaffold can still be generated, scene editing and running will land in a later phase.",
+      "categoryCharacter": "Character",
+      "categoryWorld": "World",
+      "categoryVideo": "Video",
+      "promptPlaceholder": "Describe what to generate…",
+      "generateButton": "Generate",
+      "generating": "Generating…",
+      "generateSuccess": "Asset generated: {{name}}",
+      "generateFailed": "Generation failed: {{error}}",
+      "noAssets": "No assets yet",
+      "decomposedSection": "Decomposed parts",
+      "deleteBatchButton": "Delete batch",
+      "dragHint": "Drag onto the Lab canvas to use as a decomposition input"
+    },
+    "lab": {
+      "addDecomposeCard": "+ Decompose card",
+      "decompose": {
+        "title": "Decompose",
+        "sourceConnected": "Source: {{name}}",
+        "sourceMissing": "Connect a \"Character\" or \"World\" image from the left",
+        "hintPlaceholder": "Decomposition hint (optional), e.g. weapon, belt, necklace, head, hair, legs, torso, pants, shirt",
+        "granularityCoarse": "Coarse",
+        "granularityMedium": "Medium",
+        "granularityFine": "Fine",
+        "action": "Decompose",
+        "statusRunning": "Decomposing…",
+        "statusSuccess": "Produced {{count}} parts — see \"Decomposed parts\" in the Create panel",
+        "statusFailedGeneric": "Decomposition failed"
+      }
     }
   }
 }

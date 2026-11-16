@@ -1,0 +1,203 @@
+/* 游戏工坊 · 实验室画布样式。与导演模式 director.css 的 .lab-node 系列
+ * 相互独立（各自的 CSS 只在各自 feature 顶层组件里被 import，两边不复用
+ * class 名避免串样）。颜色全部走既有语义变量，不写死色值。 */
+
+.game-lab-canvas-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 480px;
+}
+
+.game-lab-add-decompose {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 5;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border, #e5e7eb);
+  background: var(--color-surface, #fff);
+  color: var(--color-text, #111827);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.game-lab-add-decompose:hover {
+  background: var(--color-surface-hover, #f3f4f6);
+}
+
+.game-lab-node {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border, #e5e7eb);
+  background: var(--color-surface, #fff);
+  padding: 8px;
+  width: 180px;
+}
+
+.game-lab-node-media {
+  position: relative;
+  width: 100%;
+  height: 120px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--color-surface-muted, #f3f4f6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.game-lab-node-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.game-lab-node-media--model {
+  flex-direction: column;
+}
+
+.game-lab-node-model-icon {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--color-text-secondary, #6b7280);
+}
+
+.game-lab-node-media-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 4px;
+}
+
+.game-lab-node-media-actions button,
+.game-lab-node-media-actions a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: none;
+  background: var(--color-overlay, rgba(0, 0, 0, 0.5));
+  color: #fff;
+  cursor: pointer;
+}
+
+.game-lab-node-delete {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: none;
+  background: var(--color-overlay, rgba(0, 0, 0, 0.5));
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.game-lab-node-name {
+  font-size: 12px;
+  color: var(--color-text, #111827);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: text;
+}
+
+.game-lab-node-name-input {
+  font-size: 12px;
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-radius: 4px;
+  padding: 2px 4px;
+  width: 100%;
+}
+
+.game-lab-node--decompose {
+  width: 220px;
+}
+
+.game-lab-node-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text, #111827);
+}
+
+.game-lab-node-header button {
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary, #6b7280);
+  cursor: pointer;
+}
+
+.game-lab-node-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.game-lab-node-connected-hint {
+  font-size: 11px;
+  color: var(--color-text-secondary, #6b7280);
+}
+
+.game-lab-node-hint-input {
+  width: 100%;
+  min-height: 48px;
+  font-size: 12px;
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-radius: 6px;
+  padding: 4px 6px;
+  resize: vertical;
+}
+
+.game-lab-node-granularity {
+  width: 100%;
+  font-size: 12px;
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+
+.game-lab-node-decompose-button {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: none;
+  background: var(--color-accent, #6366f1);
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.game-lab-node-decompose-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.game-lab-node-status {
+  font-size: 11px;
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+
+.game-lab-node-status--success {
+  background: var(--color-success-subtle, #ecfdf5);
+  color: var(--color-success, #059669);
+}
+
+.game-lab-node-status--failed {
+  background: var(--color-danger-subtle, #fef2f2);
+  color: var(--color-danger, #dc2626);
+}

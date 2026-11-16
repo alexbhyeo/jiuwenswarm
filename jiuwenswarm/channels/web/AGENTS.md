@@ -160,3 +160,5 @@
 | `features/A4PAuthorizationModal` | `a4p-authorization` | A4P 授权卡片及范围选择 |
 
 | `features/groupChat` | `group-chat` | 群聊创建、成员、公开消息、任务卡片与产物 |
+
+| `features/game` | `game-workshop` | 游戏工坊工作区；创作面板（角色/世界/视频生成与浏览、分解产物）；实验室画布（图片/3D 部件节点、素材分解处理卡片） |

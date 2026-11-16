@@ -1,0 +1,117 @@
+/* 游戏工坊工作区顶层布局。颜色走既有语义变量，不写死色值。 */
+
+.game-page {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.game-page-sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-right: 1px solid var(--color-border, #e5e7eb);
+  overflow-y: auto;
+}
+
+.game-page-sidebar-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.game-page-sidebar-card input {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border, #d1d5db);
+}
+
+.game-page-sidebar-card button {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: none;
+  background: var(--color-accent, #6366f1);
+  color: #fff;
+  cursor: pointer;
+}
+
+.game-page-sidebar-card button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.game-page-sidebar-count {
+  font-size: 12px;
+  color: var(--color-text-secondary, #6b7280);
+  margin-bottom: 6px;
+}
+
+.game-page-sidebar-empty {
+  font-size: 13px;
+  color: var(--color-text-secondary, #9ca3af);
+}
+
+.game-page-sidebar-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border, #e5e7eb);
+  background: var(--color-surface, #fff);
+  cursor: pointer;
+}
+
+.game-page-sidebar-item[aria-pressed='true'] {
+  border-color: var(--color-accent, #6366f1);
+  background: var(--color-accent-subtle, #eef2ff);
+}
+
+.game-page-sidebar-item-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.game-page-sidebar-item-meta {
+  font-size: 11px;
+  color: var(--color-text-secondary, #6b7280);
+}
+
+.game-page-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.game-page-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px 0;
+  border-bottom: 1px solid var(--color-border, #e5e7eb);
+}
+
+.game-page-tabs button {
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--color-text-secondary, #6b7280);
+  border-bottom: 2px solid transparent;
+}
+
+.game-page-tabs button[aria-pressed='true'] {
+  color: var(--color-text, #111827);
+  border-bottom-color: var(--color-accent, #6366f1);
+  font-weight: 600;
+}
+
+.game-page-tab-content {
+  flex: 1;
+  min-height: 0;
+}

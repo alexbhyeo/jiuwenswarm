@@ -150,6 +150,11 @@ export const SETTINGS_CONFIG_FIELDS: readonly ConfigFieldContract[] = [
   envField('edit_chat_provider', 'agent', 'text', 'EDIT_CHAT_PROVIDER'),
   envField('edit_chat_protocol', 'agent', 'text', 'EDIT_CHAT_PROTOCOL'),
   envField('edit_chat_enabled', 'agent', 'boolean', 'EDIT_CHAT_ENABLED'),
+  // 3D 分解（游戏工坊 · 实验室，D-20261116-1047-game-workshop-lab）- 独立
+  // 凭据槽，没有 model/provider/protocol：Tripo3D 只有一套固定接口。
+  envField('tripo_api_base', 'agent', 'text', 'TRIPO_API_BASE'),
+  envField('tripo_api_key', 'agent', 'text', 'TRIPO_API_KEY'),
+  envField('tripo_enabled', 'agent', 'boolean', 'TRIPO_ENABLED'),
 
   yamlField('permissions_enabled', 'security', 'boolean', 'permissions.enabled'),
 

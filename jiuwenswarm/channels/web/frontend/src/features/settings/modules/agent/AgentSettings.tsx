@@ -58,6 +58,9 @@ const audioGenFields = [
   'audio_gen_api_key',
   'audio_gen_model',
 ] as const;
+// 3D 分解（游戏工坊 · 实验室）：只有固定的 REST 接口，没有模型/供应商/协议
+// 可选，字段比其它生成槽位少。
+const tripoFields = ['tripo_api_base', 'tripo_api_key'] as const;
 
 export type SaveConfig = (updates: Record<string, string>, operation: string) => Promise<unknown>;
 
@@ -846,6 +849,124 @@ export function EditChatSettings({ disabled }: SettingsCustomItemProps) {
           save={
             dialog.enableOnSave
               ? (updates, operation) => saveConfig({ ...updates, edit_chat_enabled: toConfigBoolean(true) }, operation)
+              : saveConfig
+          }
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+      <SettingsConfirmDialog
+        open={deleteTarget}
+        title={t('settingsPanel.agent.deleteModelTitle')}
+        message={t('settingsPanel.agent.deleteModelConfirm', { name })}
+        confirming={deleting}
+        error={deleteError}
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => {
+          if (!deleting) setDeleteTarget(false);
+        }}
+      />
+    </>
+  );
+}
+
+export function TripoSettings({ disabled }: SettingsCustomItemProps) {
+  const { t } = useTranslation();
+  const { isConnected } = useSettingsServices();
+  const { values, savingKeys, save } = useSettingsSource();
+  const [dialog, setDialog] = useState<{ enableOnSave: boolean } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const saveConfig: SaveConfig = (updates, operation) => save(updates, operation);
+
+  const configured = tripoFields.every((name) => String(values[name] ?? '').trim());
+  const enabled = configured && parseConfigBoolean(values.tripo_enabled);
+  const busy = [...tripoFields, 'tripo_enabled'].some((field) => savingKeys.has(field));
+  const name = t('settingsPanel.fields.tripo_enabled.title');
+
+  const toggle = async (nextEnabled: boolean) => {
+    if (nextEnabled && !configured) {
+      setDialog({ enableOnSave: true });
+      return;
+    }
+    try {
+      await saveConfig({ tripo_enabled: toConfigBoolean(nextEnabled) }, 'settingsPanel.fields.tripo_enabled.title');
+    } catch {
+      // Surfaced via savingKeys/isConnected state already; nothing further to do here.
+    }
+  };
+
+  const confirmDelete = async () => {
+    const updates: Record<string, string> = Object.fromEntries(tripoFields.map((field) => [field, '']));
+    if (parseConfigBoolean(values.tripo_enabled)) {
+      updates.tripo_enabled = toConfigBoolean(false);
+    }
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await saveConfig(updates, 'settingsPanel.fields.tripo_enabled.title');
+      setDeleteTarget(false);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : t('settingsPanel.feedback.saveFailed'));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <>
+      <SettingRow
+        className="settings-agent-media__row"
+        title={name}
+        description={t('settingsPanel.fields.tripo_enabled.description')}
+        subSettings={
+          configured ? (
+            <div className="settings-agent-media__model-card">
+              <strong className="settings-agent-media__model-name">
+                {t('settingsPanel.agent.tripoConfigured')}
+              </strong>
+              <div className="settings-agent-media__actions">
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  icon={<settingsActionIcons.edit aria-hidden />}
+                  title={t('common.modify')}
+                  aria-label={`${t('common.modify')} ${name}`}
+                  disabled={disabled || !isConnected || busy}
+                  onClick={() => setDialog({ enableOnSave: false })}
+                />
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  icon={<settingsActionIcons.delete aria-hidden />}
+                  title={t('common.delete')}
+                  aria-label={`${t('common.delete')} ${name}`}
+                  disabled={disabled || !isConnected || busy}
+                  onClick={() => {
+                    setDeleteError('');
+                    setDeleteTarget(true);
+                  }}
+                />
+              </div>
+            </div>
+          ) : null
+        }
+      >
+        <Switch
+          checked={enabled}
+          disabled={disabled || !isConnected || busy}
+          aria-label={t('settingsPanel.agent.toggleCapability', { name })}
+          onChange={(nextEnabled) => void toggle(nextEnabled)}
+        />
+      </SettingRow>
+      {dialog ? (
+        <AgentConfigDialog
+          titleKey="settingsPanel.agent.tripoConfigTitle"
+          fields={tripoFields}
+          config={values}
+          save={
+            dialog.enableOnSave
+              ? (updates, operation) => saveConfig({ ...updates, tripo_enabled: toConfigBoolean(true) }, operation)
               : saveConfig
           }
           onClose={() => setDialog(null)}
