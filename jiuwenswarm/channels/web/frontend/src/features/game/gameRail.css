@@ -228,29 +228,12 @@
   background: var(--color-surface, #fff);
 }
 
-/* ---------- 项目级操作（脚手架/构建）+ 桥接提示 ---------- */
-
-.game-rail-project-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 4px;
-}
-
-.game-rail-project-actions button {
-  padding: 6px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--color-border, #e5e7eb);
-  background: var(--color-surface, #fff);
-  cursor: pointer;
-  font-size: 12px;
-}
+/* ---------- 桥接提示 ---------- */
 
 .game-rail-bridge-notice {
   font-size: 11px;
   color: var(--color-text-secondary, #6b7280);
-  flex-basis: 100%;
+  margin-bottom: 4px;
 }
 
 /* ---------- 生成表单（分类展开区内，角色/世界/视频专属） ---------- */

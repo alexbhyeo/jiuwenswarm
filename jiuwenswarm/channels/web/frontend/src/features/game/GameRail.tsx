@@ -257,38 +257,6 @@ export function GameRail({
     }
   };
 
-  const scaffold = async () => {
-    if (!selectedProject) return;
-    setBusy(true);
-    try {
-      const resp = await gameApi.scaffoldProject(selectedProject.project_id);
-      onProjectUpdate(resp.project);
-      setNotice(
-        resp.created.length
-          ? t('gameWorkshop.rail.scaffoldSuccess', { files: resp.created.join('、') })
-          : t('gameWorkshop.rail.scaffoldComplete')
-      );
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const build2d = async () => {
-    if (!selectedProject) return;
-    setBusy(true);
-    try {
-      const resp = await gameApi.build2d(selectedProject.project_id);
-      onProjectUpdate(resp.project);
-      setNotice(t('gameWorkshop.rail.buildSuccess', { files: resp.created.join('、') }));
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const deleteBatch = async (decomposeBatchId: string) => {
     if (!selectedProject) return;
     const next = await gameApi.deleteAssetBatch(selectedProject.project_id, decomposeBatchId);
@@ -385,19 +353,11 @@ export function GameRail({
 
       {selectedProject && (
         <>
-          <div className="game-rail-project-actions">
-            <button type="button" disabled={busy} onClick={() => void scaffold()} data-testid="game-workshop-rail-scaffold-button">
-              {t('gameWorkshop.rail.scaffoldButton')}
-            </button>
-            <button type="button" disabled={busy} onClick={() => void build2d()} data-testid="game-workshop-rail-build2d-button">
-              {t('gameWorkshop.rail.buildButton')}
-            </button>
-            {bridge && !bridge.ready && (
-              <div className="game-rail-bridge-notice" data-testid="game-workshop-rail-bridge-notice">
-                {t('gameWorkshop.rail.bridgeUnavailable')}
-              </div>
-            )}
-          </div>
+          {bridge && !bridge.ready && (
+            <div className="game-rail-bridge-notice" data-testid="game-workshop-rail-bridge-notice">
+              {t('gameWorkshop.rail.bridgeUnavailable')}
+            </div>
+          )}
 
           <div className="game-rail-section-label">{t('gameWorkshop.rail.assetsSection')}</div>
 
