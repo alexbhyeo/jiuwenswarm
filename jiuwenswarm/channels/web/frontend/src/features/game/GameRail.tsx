@@ -200,9 +200,6 @@ export function GameRail({
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState<ExpandedSection>('character');
   const [newProjectDialogOpen, setNewProjectDialogOpen] = useState(false);
-  const [prompt, setPrompt] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState('');
 
   const assetsByCategory = useMemo(() => {
     const assets = selectedProject?.assets ?? [];
@@ -234,28 +231,6 @@ export function GameRail({
 
   const toggle = (section: ExpandedSection) => {
     setExpanded((prev) => (prev === section ? null : section));
-    setPrompt('');
-    setNotice('');
-  };
-
-  const generate = async (cat: AssetCategory) => {
-    if (!selectedProject || !prompt.trim()) return;
-    setBusy(true);
-    setNotice(t('gameWorkshop.rail.generating'));
-    try {
-      const resp = await gameApi.generateAsset(selectedProject.project_id, prompt.trim(), cat, prompt.trim().slice(0, 24));
-      onProjectUpdate(resp.project);
-      if (resp.asset.status === 'ready') {
-        setNotice(t('gameWorkshop.rail.generateSuccess', { name: resp.asset.name }));
-        setPrompt('');
-      } else {
-        setNotice(t('gameWorkshop.rail.generateFailed', { error: resp.asset.status }));
-      }
-    } catch (err) {
-      setNotice(t('gameWorkshop.rail.generateFailed', { error: err instanceof Error ? err.message : String(err) }));
-    } finally {
-      setBusy(false);
-    }
   };
 
   const deleteBatch = async (decomposeBatchId: string) => {
@@ -366,28 +341,6 @@ export function GameRail({
                 </div>
                 {expanded === c.key && (
                   <div className="game-rail-category-body" data-testid="game-workshop-rail-section-body" data-variant={c.key}>
-                    <div className="game-rail-generate">
-                      <textarea
-                        value={prompt}
-                        onChange={(e) => setPrompt(e.target.value)}
-                        placeholder={t('gameWorkshop.rail.promptPlaceholder')}
-                        disabled={busy}
-                        data-testid="game-workshop-rail-prompt-input"
-                      />
-                      <button
-                        type="button"
-                        disabled={busy || !prompt.trim()}
-                        onClick={() => void generate(c.key)}
-                        data-testid="game-workshop-rail-generate-button"
-                      >
-                        {busy ? t('gameWorkshop.rail.generating') : t('gameWorkshop.rail.generateButton')}
-                      </button>
-                    </div>
-                    {notice && (
-                      <div className="game-rail-notice" data-testid="game-workshop-rail-notice">
-                        {notice}
-                      </div>
-                    )}
                     <div className="game-rail-asset-grid" data-testid="game-workshop-rail-asset-grid">
                       {assetsByCategory[c.key].length === 0 && (
                         <div className="game-rail-empty-hint">{t('gameWorkshop.rail.noAssets')}</div>

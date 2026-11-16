@@ -1,0 +1,106 @@
+/* 游戏工坊 · 创作面板生成输入框。镜像导演模式 .director-composer 系列，
+   颜色改用本仓既有语义变量（var(--color-*)），不复用 Director 私有硬编码
+   色板。 */
+
+.game-composer {
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-radius: 24px;
+  background: var(--color-surface, #fff);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  padding: 18px 20px 14px;
+  margin: 20px;
+}
+
+.game-composer-modes {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--color-surface-muted, #f3f4f6);
+  margin-bottom: 14px;
+}
+
+.game-composer-mode {
+  padding: 7px 16px;
+  border-radius: 999px;
+  color: var(--color-text-secondary, #6b7280);
+  font-size: 12.5px;
+  font-weight: 600;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.game-composer-mode--active {
+  background: var(--color-surface, #fff);
+  color: var(--color-text, #111827);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.game-composer-textarea {
+  width: 100%;
+  min-height: 52px;
+  border: none;
+  outline: none;
+  resize: none;
+  font-size: 14.5px;
+  font-family: inherit;
+  color: var(--color-text, #111827);
+  background: transparent;
+  padding: 2px 0 12px;
+}
+
+.game-composer-textarea::placeholder {
+  color: var(--color-text-secondary, #9ca3af);
+}
+
+.game-composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border, #e5e7eb);
+}
+
+.game-composer-send-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--color-accent, #6366f1);
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  cursor: pointer;
+}
+
+.game-composer-send-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.game-composer-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  animation: game-composer-spin 0.7s linear infinite;
+}
+
+@keyframes game-composer-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.game-composer-error {
+  margin-top: 12px;
+  font-size: 12.5px;
+  color: var(--color-danger, #dc2626);
+  background: var(--color-danger-subtle, rgba(220, 38, 38, 0.08));
+  border-radius: 8px;
+  padding: 10px 14px;
+}
