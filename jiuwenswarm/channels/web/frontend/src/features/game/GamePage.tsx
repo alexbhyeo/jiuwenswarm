@@ -124,14 +124,17 @@ export function GamePage() {
             {t('gameWorkshop.tabs.lab')}
           </button>
         </div>
-        <div className="game-page-tab-content">
-          {tab === 'create' ? (
-            <GameRail project={selected} onProjectUpdate={onProjectUpdate} bridge={bridge} />
-          ) : selected ? (
-            <GameLabCanvas project={selected} onProjectUpdate={onProjectUpdate} />
-          ) : (
-            <div className="game-rail-empty">{t('gameWorkshop.rail.noProjects')}</div>
-          )}
+        {/* GameRail 跨两个 tab 常驻（镜像 DirectorPage.tsx 里 DirectorRail 常驻、
+            只切换右侧主内容的布局）——实验室拖拽的素材来源就是这个 rail，
+            放进 tab 互斥分支会导致切到实验室时 rail 卸载、拖拽源不存在。 */}
+        <div className={`game-page-tab-content${tab === 'lab' ? ' game-page-tab-content--lab' : ''}`}>
+          <GameRail project={selected} onProjectUpdate={onProjectUpdate} bridge={bridge} />
+          {tab === 'lab' &&
+            (selected ? (
+              <GameLabCanvas project={selected} onProjectUpdate={onProjectUpdate} />
+            ) : (
+              <div className="game-rail-empty">{t('gameWorkshop.rail.noProjects')}</div>
+            ))}
         </div>
       </div>
     </div>

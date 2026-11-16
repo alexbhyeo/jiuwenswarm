@@ -7,6 +7,18 @@
 
 import { webRequest } from '../../services/webClient';
 
+// 生成/分解都真的调用外部模型接口，耗时远超 webClient 15s 的默认超时——
+// 与导演模式 directorApi.ts 的 GENERATE_TIMEOUT_MS 同一个取舍（实测角色图
+// 生成就要 16-20s，视频更久；分解要先上传图片再调 Tripo3D，同样不能用默认值）。
+const GAME_GENERATE_TIMEOUT_MS = 300_000;
+const GAME_DECOMPOSE_SUBMIT_TIMEOUT_MS = 60_000;
+// check_status 在 Tripo3D 任务 success 的那一次轮询里，会同步下载合并模型
+// 并用 trimesh 拆分（game_item_decompose.py GameItemDecompose.poll），不是
+// 一次纯状态查询；后端自己给下载开了 120s 的 httpx 超时，这里要盖过它，
+// 否则真的跑到下载那一步时，前端会比后端先超时、把本可轮询成功的任务判
+// 成失败（实测踩过一次：30s 超时在下载阶段命中，卡片显示"请求超时"）。
+const GAME_DECOMPOSE_STATUS_TIMEOUT_MS = 150_000;
+
 export type GameAsset = {
   asset_id: string;
   type: string;
@@ -122,7 +134,8 @@ export const gameApi = {
   ): Promise<{ project: GameProject; asset: GameAsset }> => {
     const resp = await webRequest<{ project: GameProject; asset: GameAsset }>(
       METHOD.assetsGenerate,
-      { project_id: projectId, prompt, type, name }
+      { project_id: projectId, prompt, type, name },
+      { timeoutMs: GAME_GENERATE_TIMEOUT_MS }
     );
     return resp;
   },
@@ -176,24 +189,27 @@ export const gameApi = {
     hint?: string,
     granularity?: 'coarse' | 'medium' | 'fine'
   ): Promise<GameDecomposeSubmitResult> =>
-    webRequest<GameDecomposeSubmitResult>(METHOD.assetsDecompose, {
-      project_id: projectId,
-      source_asset_id: sourceAssetId,
-      hint,
-      granularity,
-    }),
+    webRequest<GameDecomposeSubmitResult>(
+      METHOD.assetsDecompose,
+      { project_id: projectId, source_asset_id: sourceAssetId, hint, granularity },
+      { timeoutMs: GAME_DECOMPOSE_SUBMIT_TIMEOUT_MS }
+    ),
   checkDecomposeStatus: async (
     projectId: string,
     placeholderAssetId: string,
     jobId: string,
     decomposeBatchId: string
   ): Promise<GameDecomposeStatusResult> =>
-    webRequest<GameDecomposeStatusResult>(METHOD.assetsDecomposeCheckStatus, {
-      project_id: projectId,
-      placeholder_asset_id: placeholderAssetId,
-      job_id: jobId,
-      decompose_batch_id: decomposeBatchId,
-    }),
+    webRequest<GameDecomposeStatusResult>(
+      METHOD.assetsDecomposeCheckStatus,
+      {
+        project_id: projectId,
+        placeholder_asset_id: placeholderAssetId,
+        job_id: jobId,
+        decompose_batch_id: decomposeBatchId,
+      },
+      { timeoutMs: GAME_DECOMPOSE_STATUS_TIMEOUT_MS }
+    ),
   /** 实验室画布持久化：整份节点/连线快照覆盖式保存，与导演模式
    *  directorLabCanvasSave 同构，不做增量 diff。 */
   labCanvasSave: async (
