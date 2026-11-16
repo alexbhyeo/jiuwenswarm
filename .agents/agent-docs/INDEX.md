@@ -30,23 +30,27 @@ generated: true
 | [jiuwenswarm/channels/web](#module-13) |
 | [jiuwenswarm/channels/web/frontend](#module-14) |
 | [jiuwenswarm/channels/web/frontend/src/features](#module-15) |
-| [jiuwenswarm/common/schema](#module-16) |
-| [jiuwenswarm/extensions/sdk](#module-17) |
-| [jiuwenswarm/gateway/channel_manager/web](#module-18) |
-| [jiuwenswarm/observability](#module-19) |
-| [jiuwenswarm/resources/plugins/ttse](#module-20) |
-| [jiuwenswarm/server](#module-21) |
-| [jiuwenswarm/server/runtime](#module-22) |
-| [jiuwenswarm/server/runtime/agent_adapter](#module-23) |
-| [jiuwenswarm/server/runtime/skill](#module-24) |
-| [jiuwenswarm/server/worker](#module-25) |
-| [scripts](#module-26) |
-| [tests/fixtures/ttse_plugin](#module-27) |
-| [tests/unit_tests/agentserver](#module-28) |
-| [tests/unit_tests/gateway](#module-29) |
-| [tests/unit_tests/personal_context](#module-30) |
-| [tests/unit_tests/server/extensions](#module-31) |
-| [未分类](#module-32) |
+| [jiuwenswarm/channels/web/frontend/src/features/director](#module-16) |
+| [jiuwenswarm/channels/web/frontend/src/features/game](#module-17) |
+| [jiuwenswarm/common/schema](#module-18) |
+| [jiuwenswarm/extensions/sdk](#module-19) |
+| [jiuwenswarm/gateway/channel_manager/web](#module-20) |
+| [jiuwenswarm/observability](#module-21) |
+| [jiuwenswarm/resources/plugins/ttse](#module-22) |
+| [jiuwenswarm/server](#module-23) |
+| [jiuwenswarm/server/runtime](#module-24) |
+| [jiuwenswarm/server/runtime/agent_adapter](#module-25) |
+| [jiuwenswarm/server/runtime/director](#module-26) |
+| [jiuwenswarm/server/runtime/game](#module-27) |
+| [jiuwenswarm/server/runtime/skill](#module-28) |
+| [jiuwenswarm/server/worker](#module-29) |
+| [scripts](#module-30) |
+| [tests/fixtures/ttse_plugin](#module-31) |
+| [tests/unit_tests/agentserver](#module-32) |
+| [tests/unit_tests/gateway](#module-33) |
+| [tests/unit_tests/personal_context](#module-34) |
+| [tests/unit_tests/server/extensions](#module-35) |
+| [未分类](#module-36) |
 
 <a id="module-1"></a>
 
@@ -188,13 +192,29 @@ generated: true
 
 <a id="module-16"></a>
 
+## jiuwenswarm/channels/web/frontend/src/features/director
+
+| ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
+|---|---|---|---|---|---|---|
+| [D-20261116-1047-game-workshop-lab](designs/proposals/D-20261116-1047-game-workshop-lab/design.md) | D | 游戏工坊工作区重构——创作/实验室双 Tab 与素材分解能力 | alexbhyeo | jiuwenswarm/server/runtime/game, jiuwenswarm/channels/web/frontend/src/features/game, jiuwenswarm/server/runtime/director, jiuwenswarm/channels/web/frontend/src/features/director | — | — |
+
+<a id="module-17"></a>
+
+## jiuwenswarm/channels/web/frontend/src/features/game
+
+| ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
+|---|---|---|---|---|---|---|
+| [D-20261116-1047-game-workshop-lab](designs/proposals/D-20261116-1047-game-workshop-lab/design.md) | D | 游戏工坊工作区重构——创作/实验室双 Tab 与素材分解能力 | alexbhyeo | jiuwenswarm/server/runtime/game, jiuwenswarm/channels/web/frontend/src/features/game, jiuwenswarm/server/runtime/director, jiuwenswarm/channels/web/frontend/src/features/director | — | — |
+
+<a id="module-18"></a>
+
 ## jiuwenswarm/common/schema
 
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
 | [D-20261107-1637-game-mode](designs/proposals/D-20261107-1637-game-mode/design.md) | D | 游戏模式（游戏工坊）——用 Godot MCP 构建可运行游戏 | alexbhyeo | jiuwenswarm/server/runtime, jiuwenswarm/common/schema, jiuwenswarm/channels/web/frontend/src/features | — | — |
 
-<a id="module-17"></a>
+<a id="module-19"></a>
 
 ## jiuwenswarm/extensions/sdk
 
@@ -203,7 +223,7 @@ generated: true
 | [F_20261027_1843_ttse-plugin-rail](features/F_20261027_1843_ttse-plugin-rail.md) | F | TTSE 以插件 Rail 接入主 Coding Agent | xinyang_bali | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/agents/harness, jiuwenswarm/extensions/sdk, jiuwenswarm/resources/plugins/ttse | jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/interface_code.py, jiuwenswarm/extensions/sdk/plugin_runtime.py, jiuwenswarm/agents/harness/agent_observability.py, jiuwenswarm/resources/plugins/ttse/manifest.json, scripts/package_ttse_plugin.py | 无独立 D：用户确认执行 D:/files/自演进/方案/ttse适配code agent 中的外部适配方案，该资料没有仓内 D 标识。 |
 | [S_03_native-plugin-runtime](specs/jiuwenswarm/server/runtime/agent_adapter/S_03_native-plugin-runtime.md) | S | 原生插件通用运行服务与生命周期 | xinyang_bali | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/extensions/sdk | jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, jiuwenswarm/extensions/sdk/plugin_runtime.py | — |
 
-<a id="module-18"></a>
+<a id="module-20"></a>
 
 ## jiuwenswarm/gateway/channel_manager/web
 
@@ -211,7 +231,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [SDD-0025](designs/proposals/SDD-0025-trajectory-session-store-and-serving/design.md) | D | 轨迹数据面：会话级 SQLite 存储、实时变更提示与读取 API | @alan_cheng | jiuwenswarm/observability, jiuwenswarm/gateway/channel_manager/web | — | — |
 
-<a id="module-19"></a>
+<a id="module-21"></a>
 
 ## jiuwenswarm/observability
 
@@ -219,7 +239,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [SDD-0025](designs/proposals/SDD-0025-trajectory-session-store-and-serving/design.md) | D | 轨迹数据面：会话级 SQLite 存储、实时变更提示与读取 API | @alan_cheng | jiuwenswarm/observability, jiuwenswarm/gateway/channel_manager/web | — | — |
 
-<a id="module-20"></a>
+<a id="module-22"></a>
 
 ## jiuwenswarm/resources/plugins/ttse
 
@@ -228,7 +248,7 @@ generated: true
 | [F_20261027_1843_ttse-plugin-rail](features/F_20261027_1843_ttse-plugin-rail.md) | F | TTSE 以插件 Rail 接入主 Coding Agent | xinyang_bali | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/agents/harness, jiuwenswarm/extensions/sdk, jiuwenswarm/resources/plugins/ttse | jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/interface_code.py, jiuwenswarm/extensions/sdk/plugin_runtime.py, jiuwenswarm/agents/harness/agent_observability.py, jiuwenswarm/resources/plugins/ttse/manifest.json, scripts/package_ttse_plugin.py | 无独立 D：用户确认执行 D:/files/自演进/方案/ttse适配code agent 中的外部适配方案，该资料没有仓内 D 标识。 |
 | [S_02_ttse-plugin-runtime](specs/jiuwenswarm/server/runtime/agent_adapter/S_02_ttse-plugin-runtime.md) | S | TTSE Coding 插件运行契约 | xinyang_bali | jiuwenswarm/resources/plugins/ttse | jiuwenswarm/resources/plugins/ttse/rails/ttse_plugin_rail.py, jiuwenswarm/resources/plugins/ttse/manifest.json | — |
 
-<a id="module-21"></a>
+<a id="module-23"></a>
 
 ## jiuwenswarm/server
 
@@ -237,7 +257,7 @@ generated: true
 | [B_20261029_0927_missing-supervisor-entry](bugfix/jiuwenswarm/server/B_20261029_0927_missing-supervisor-entry.md) | B | 重启 AgentServer 时缺少 supervisor 启动函数 | xinyang_bali | jiuwenswarm/server | jiuwenswarm/server/app_agentserver.py | 无独立 D：用户请求重启时发现当前工作区入口不完整，恢复既有 Front/Worker 启动契约。 |
 | [B_20261031_1042_pr9317-review](bugfix/jiuwenswarm/server/B_20261031_1042_pr9317-review.md) | B | PR 9317 插件模式校验与 Front 遗留启动链清理 | xinyang_bali | jiuwenswarm/server, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/server/app_agentserver.py, jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, tests/unit_tests/test_app_agentserver.py, tests/unit_tests/agentserver/test_ttse_plugin_runtime.py | 无独立 D：根据 openJiuwen-bot 检视意见清理现有实现，不引入新接口或架构方案，无独立 D。 |
 
-<a id="module-22"></a>
+<a id="module-24"></a>
 
 ## jiuwenswarm/server/runtime
 
@@ -245,7 +265,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [D-20261107-1637-game-mode](designs/proposals/D-20261107-1637-game-mode/design.md) | D | 游戏模式（游戏工坊）——用 Godot MCP 构建可运行游戏 | alexbhyeo | jiuwenswarm/server/runtime, jiuwenswarm/common/schema, jiuwenswarm/channels/web/frontend/src/features | — | — |
 
-<a id="module-23"></a>
+<a id="module-25"></a>
 
 ## jiuwenswarm/server/runtime/agent_adapter
 
@@ -261,7 +281,23 @@ generated: true
 | [S_01_tool-discovery-language](specs/jiuwenswarm/agents/harness/common/tools/S_01_tool-discovery-language.md) | S | 渐进式工具发现语言与原始执行契约 | MengHan18 | jiuwenswarm/agents/harness/common/tools, jiuwenswarm/agents/harness/common/rails, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/agents/harness/common/tools/tool_discovery_catalog.py, jiuwenswarm/agents/harness/common/tools/tool_retrieval_toolkits.py, jiuwenswarm/agents/harness/common/rails/tool_retrieval_prompt_rail.py, jiuwenswarm/agents/harness/code/rails/heartbeat_rail.py, jiuwenswarm/agents/harness/team/rails/team_member_skill_toolkit_rail.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/interface_code.py | — |
 | [S_03_native-plugin-runtime](specs/jiuwenswarm/server/runtime/agent_adapter/S_03_native-plugin-runtime.md) | S | 原生插件通用运行服务与生命周期 | xinyang_bali | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/extensions/sdk | jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, jiuwenswarm/extensions/sdk/plugin_runtime.py | — |
 
-<a id="module-24"></a>
+<a id="module-26"></a>
+
+## jiuwenswarm/server/runtime/director
+
+| ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
+|---|---|---|---|---|---|---|
+| [D-20261116-1047-game-workshop-lab](designs/proposals/D-20261116-1047-game-workshop-lab/design.md) | D | 游戏工坊工作区重构——创作/实验室双 Tab 与素材分解能力 | alexbhyeo | jiuwenswarm/server/runtime/game, jiuwenswarm/channels/web/frontend/src/features/game, jiuwenswarm/server/runtime/director, jiuwenswarm/channels/web/frontend/src/features/director | — | — |
+
+<a id="module-27"></a>
+
+## jiuwenswarm/server/runtime/game
+
+| ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
+|---|---|---|---|---|---|---|
+| [D-20261116-1047-game-workshop-lab](designs/proposals/D-20261116-1047-game-workshop-lab/design.md) | D | 游戏工坊工作区重构——创作/实验室双 Tab 与素材分解能力 | alexbhyeo | jiuwenswarm/server/runtime/game, jiuwenswarm/channels/web/frontend/src/features/game, jiuwenswarm/server/runtime/director, jiuwenswarm/channels/web/frontend/src/features/director | — | — |
+
+<a id="module-28"></a>
 
 ## jiuwenswarm/server/runtime/skill
 
@@ -269,7 +305,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261103_0936_skill-action-param-type-validation](bugfix/jiuwenswarm/server/runtime/skill/B_20261103_0936_skill-action-param-type-validation.md) | B | 技能安装/更新/卸载入口参数类型校验缺失修复 | openjiuwen_ai | jiuwenswarm/server/runtime/skill | jiuwenswarm/server/runtime/skill/skill_manager.py, tests/unit_tests/agentserver/test_skill_manager_enterprise_state.py | 无独立 D：三个入口的参数契约（string 标识、boolean force）已由前端 webHttpClient 与 EnterpriseSkillSourcePanel 既有调用形态声明，本次为入口 类型校验层缺失的补接，无独立设计。 |
 
-<a id="module-25"></a>
+<a id="module-29"></a>
 
 ## jiuwenswarm/server/worker
 
@@ -277,7 +313,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261105_1518_worker-dispatch-slot-accounting](bugfix/jiuwenswarm/server/worker/B_20261105_1518_worker-dispatch-slot-accounting.md) | B | Worker 派发容量排除已返回的 handler | kdgmpw | jiuwenswarm/server/worker | jiuwenswarm/server/worker/event_store.py | 无独立 D：按会话中确认的最小修复方案调整 Worker 内部计数。 |
 
-<a id="module-26"></a>
+<a id="module-30"></a>
 
 ## scripts
 
@@ -285,7 +321,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261031_1006_ttse-runtime-fixture](bugfix/tests/unit_tests/agentserver/B_20261031_1006_ttse-runtime-fixture.md) | B | TTSE runtime UT 使用版本化夹具修复整批 setup error | xinyang_bali | tests/unit_tests/agentserver, tests/unit_tests/server/extensions, tests/fixtures/ttse_plugin, scripts | tests/unit_tests/agentserver/test_ttse_plugin_runtime.py, tests/unit_tests/server/extensions/test_ttse_plugin_package.py, tests/unit_tests/conftest.py, tests/fixtures/ttse_plugin/manifest.json, tests/fixtures/ttse_plugin/config.yaml, tests/fixtures/ttse_plugin/rails/ttse_plugin_rail.py, scripts/package_ttse_plugin.py | 无独立 D：修复用户报告的 CI 测试数据缺失，保持现有 plugin_runtime v1 与生产默认打包路径，无独立 D。 |
 
-<a id="module-27"></a>
+<a id="module-31"></a>
 
 ## tests/fixtures/ttse_plugin
 
@@ -293,7 +329,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261031_1006_ttse-runtime-fixture](bugfix/tests/unit_tests/agentserver/B_20261031_1006_ttse-runtime-fixture.md) | B | TTSE runtime UT 使用版本化夹具修复整批 setup error | xinyang_bali | tests/unit_tests/agentserver, tests/unit_tests/server/extensions, tests/fixtures/ttse_plugin, scripts | tests/unit_tests/agentserver/test_ttse_plugin_runtime.py, tests/unit_tests/server/extensions/test_ttse_plugin_package.py, tests/unit_tests/conftest.py, tests/fixtures/ttse_plugin/manifest.json, tests/fixtures/ttse_plugin/config.yaml, tests/fixtures/ttse_plugin/rails/ttse_plugin_rail.py, scripts/package_ttse_plugin.py | 无独立 D：修复用户报告的 CI 测试数据缺失，保持现有 plugin_runtime v1 与生产默认打包路径，无独立 D。 |
 
-<a id="module-28"></a>
+<a id="module-32"></a>
 
 ## tests/unit_tests/agentserver
 
@@ -302,7 +338,7 @@ generated: true
 | [B_20261031_1006_ttse-runtime-fixture](bugfix/tests/unit_tests/agentserver/B_20261031_1006_ttse-runtime-fixture.md) | B | TTSE runtime UT 使用版本化夹具修复整批 setup error | xinyang_bali | tests/unit_tests/agentserver, tests/unit_tests/server/extensions, tests/fixtures/ttse_plugin, scripts | tests/unit_tests/agentserver/test_ttse_plugin_runtime.py, tests/unit_tests/server/extensions/test_ttse_plugin_package.py, tests/unit_tests/conftest.py, tests/fixtures/ttse_plugin/manifest.json, tests/fixtures/ttse_plugin/config.yaml, tests/fixtures/ttse_plugin/rails/ttse_plugin_rail.py, scripts/package_ttse_plugin.py | 无独立 D：修复用户报告的 CI 测试数据缺失，保持现有 plugin_runtime v1 与生产默认打包路径，无独立 D。 |
 | [B_20261031_1048_ttse-core-dependent-ut](bugfix/tests/unit_tests/agentserver/B_20261031_1048_ttse-core-dependent-ut.md) | B | 暂时移除依赖未合入 core 工厂能力的插件 UT | xinyang_bali | tests/unit_tests/agentserver | tests/unit_tests/agentserver/test_ttse_plugin_runtime.py | 无独立 D：用户明确要求暂时删除依赖 core 的相关 UT，不调整依赖或运行实现，无独立 D。 |
 
-<a id="module-29"></a>
+<a id="module-33"></a>
 
 ## tests/unit_tests/gateway
 
@@ -310,7 +346,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261031_1038_cron-migration-ut](bugfix/tests/unit_tests/B_20261031_1038_cron-migration-ut.md) | B | cron 会话迁移的实时流测试与类清点兼容修复 | kdgmpw | tests/unit_tests/gateway, tests/unit_tests/personal_context | tests/unit_tests/gateway/test_cron_live_bus.py, tests/unit_tests/personal_context/test_closed_class_inventory.py | 无独立 D：对现有测试契约和解释器兼容性的小范围修复，无独立设计。 |
 
-<a id="module-30"></a>
+<a id="module-34"></a>
 
 ## tests/unit_tests/personal_context
 
@@ -318,7 +354,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261031_1038_cron-migration-ut](bugfix/tests/unit_tests/B_20261031_1038_cron-migration-ut.md) | B | cron 会话迁移的实时流测试与类清点兼容修复 | kdgmpw | tests/unit_tests/gateway, tests/unit_tests/personal_context | tests/unit_tests/gateway/test_cron_live_bus.py, tests/unit_tests/personal_context/test_closed_class_inventory.py | 无独立 D：对现有测试契约和解释器兼容性的小范围修复，无独立设计。 |
 
-<a id="module-31"></a>
+<a id="module-35"></a>
 
 ## tests/unit_tests/server/extensions
 
@@ -326,7 +362,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261031_1006_ttse-runtime-fixture](bugfix/tests/unit_tests/agentserver/B_20261031_1006_ttse-runtime-fixture.md) | B | TTSE runtime UT 使用版本化夹具修复整批 setup error | xinyang_bali | tests/unit_tests/agentserver, tests/unit_tests/server/extensions, tests/fixtures/ttse_plugin, scripts | tests/unit_tests/agentserver/test_ttse_plugin_runtime.py, tests/unit_tests/server/extensions/test_ttse_plugin_package.py, tests/unit_tests/conftest.py, tests/fixtures/ttse_plugin/manifest.json, tests/fixtures/ttse_plugin/config.yaml, tests/fixtures/ttse_plugin/rails/ttse_plugin_rail.py, scripts/package_ttse_plugin.py | 无独立 D：修复用户报告的 CI 测试数据缺失，保持现有 plugin_runtime v1 与生产默认打包路径，无独立 D。 |
 
-<a id="module-32"></a>
+<a id="module-36"></a>
 
 ## 未分类
 

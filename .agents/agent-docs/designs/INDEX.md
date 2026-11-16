@@ -6,7 +6,7 @@ generated: true
 ---
 
 <!-- 本文件由 .agents/skills/jw-design/scripts/generate_index.py 自动生成，请勿手改。重新生成：python .agents/skills/jw-design/scripts/generate_index.py -->
-<!-- generated-at: 2026-11-07T19:41+08:00 -->
+<!-- generated-at: 2026-11-16T11:37+08:00 -->
 
 # 设计文档索引 (INDEX)
 
@@ -21,10 +21,14 @@ generated: true
 | [jiuwenswarm](#module-3) |
 | [jiuwenswarm/channels/web/frontend](#module-4) |
 | [jiuwenswarm/channels/web/frontend/src/features](#module-5) |
-| [jiuwenswarm/common/schema](#module-6) |
-| [jiuwenswarm/gateway/channel_manager/web](#module-7) |
-| [jiuwenswarm/observability](#module-8) |
-| [jiuwenswarm/server/runtime](#module-9) |
+| [jiuwenswarm/channels/web/frontend/src/features/director](#module-6) |
+| [jiuwenswarm/channels/web/frontend/src/features/game](#module-7) |
+| [jiuwenswarm/common/schema](#module-8) |
+| [jiuwenswarm/gateway/channel_manager/web](#module-9) |
+| [jiuwenswarm/observability](#module-10) |
+| [jiuwenswarm/server/runtime](#module-11) |
+| [jiuwenswarm/server/runtime/director](#module-12) |
+| [jiuwenswarm/server/runtime/game](#module-13) |
 
 <a id="module-1"></a>
 
@@ -82,6 +86,26 @@ generated: true
 
 <a id="module-6"></a>
 
+## jiuwenswarm/channels/web/frontend/src/features/director
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261116-1047-game-workshop-lab](proposals/D-20261116-1047-game-workshop-lab/design.md) | 游戏工坊工作区重构——创作/实验室双 Tab 与素材分解能力 | approved | alexbhyeo | core | 2026-11-16 |
+
+<a id="module-7"></a>
+
+## jiuwenswarm/channels/web/frontend/src/features/game
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261116-1047-game-workshop-lab](proposals/D-20261116-1047-game-workshop-lab/design.md) | 游戏工坊工作区重构——创作/实验室双 Tab 与素材分解能力 | approved | alexbhyeo | core | 2026-11-16 |
+
+<a id="module-8"></a>
+
 ## jiuwenswarm/common/schema
 
 ### 开发前 (proposals)
@@ -90,7 +114,7 @@ generated: true
 |---|---|---|---|---|---|
 | [D-20261107-1637-game-mode](proposals/D-20261107-1637-game-mode/design.md) | 游戏模式（游戏工坊）——用 Godot MCP 构建可运行游戏 | draft | alexbhyeo | core | 2026-11-07 |
 
-<a id="module-7"></a>
+<a id="module-9"></a>
 
 ## jiuwenswarm/gateway/channel_manager/web
 
@@ -100,7 +124,7 @@ generated: true
 |---|---|---|---|---|---|
 | [SDD-0025](proposals/SDD-0025-trajectory-session-store-and-serving/design.md) | 轨迹数据面：会话级 SQLite 存储、实时变更提示与读取 API | draft | @alan_cheng | observability | 2026-09-15 |
 
-<a id="module-8"></a>
+<a id="module-10"></a>
 
 ## jiuwenswarm/observability
 
@@ -110,7 +134,7 @@ generated: true
 |---|---|---|---|---|---|
 | [SDD-0025](proposals/SDD-0025-trajectory-session-store-and-serving/design.md) | 轨迹数据面：会话级 SQLite 存储、实时变更提示与读取 API | draft | @alan_cheng | observability | 2026-09-15 |
 
-<a id="module-9"></a>
+<a id="module-11"></a>
 
 ## jiuwenswarm/server/runtime
 
@@ -119,3 +143,23 @@ generated: true
 | ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
 |---|---|---|---|---|---|
 | [D-20261107-1637-game-mode](proposals/D-20261107-1637-game-mode/design.md) | 游戏模式（游戏工坊）——用 Godot MCP 构建可运行游戏 | draft | alexbhyeo | core | 2026-11-07 |
+
+<a id="module-12"></a>
+
+## jiuwenswarm/server/runtime/director
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261116-1047-game-workshop-lab](proposals/D-20261116-1047-game-workshop-lab/design.md) | 游戏工坊工作区重构——创作/实验室双 Tab 与素材分解能力 | approved | alexbhyeo | core | 2026-11-16 |
+
+<a id="module-13"></a>
+
+## jiuwenswarm/server/runtime/game
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261116-1047-game-workshop-lab](proposals/D-20261116-1047-game-workshop-lab/design.md) | 游戏工坊工作区重构——创作/实验室双 Tab 与素材分解能力 | approved | alexbhyeo | core | 2026-11-16 |
