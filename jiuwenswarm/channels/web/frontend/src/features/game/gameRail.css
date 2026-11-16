@@ -26,37 +26,25 @@
   font-size: 13px;
 }
 
-.game-rail-new-project {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-.game-rail-new-project input {
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--color-border, #d1d5db);
-}
-
 .game-rail-new-project-btn {
+  width: 100%;
+  min-height: 32px;
+  margin-bottom: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 8px 10px;
   border-radius: 999px;
   border: none;
-  background: var(--color-accent, #6366f1);
+  background: var(--color-text, #111827);
   color: #fff;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
 }
 
-.game-rail-new-project-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.game-rail-new-project-btn:hover {
+  background: var(--color-text-secondary, #333);
 }
 
 /* ---------- 项目/素材 可展开分组行（镜像 director-category-row） ---------- */

@@ -10,6 +10,7 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { gameApi, type GameAsset, type GameBridgeStatus, type GameProject } from './gameApi';
+import { GameNewProjectDialog } from './GameNewProjectDialog';
 import { GAME_ASSET_DRAG_MIME, type GameAssetDragPayload } from './lab/labTypes';
 import { rawFileUrl } from './lab/nodes/gameRawFileUrl';
 import './gameRail.css';
@@ -198,7 +199,7 @@ export function GameRail({
 }: GameRailProps) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState<ExpandedSection>('character');
-  const [draftName, setDraftName] = useState('');
+  const [newProjectDialogOpen, setNewProjectDialogOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -263,43 +264,23 @@ export function GameRail({
     onProjectUpdate(next);
   };
 
-  const handleCreateProject = async () => {
-    const name = draftName.trim();
-    if (!name) return;
-    setBusy(true);
-    try {
-      await onCreateProject(name);
-      setDraftName('');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <div className="game-rail">
       <div className="game-rail-title">{t('gameWorkshop.rail.title')}</div>
 
-      <div className="game-rail-new-project">
-        <input
-          value={draftName}
-          onChange={(e) => setDraftName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void handleCreateProject();
-          }}
-          placeholder={t('gameWorkshop.rail.newProjectPlaceholder')}
-          data-testid="game-workshop-new-project-input"
-        />
-        <button
-          type="button"
-          className="game-rail-new-project-btn"
-          onClick={() => void handleCreateProject()}
-          disabled={busy || !draftName.trim()}
-          data-testid="game-workshop-new-project-button"
-        >
-          {plusIcon}
-          {t('gameWorkshop.rail.newProjectButton')}
-        </button>
-      </div>
+      <button
+        type="button"
+        className="game-rail-new-project-btn"
+        onClick={() => setNewProjectDialogOpen(true)}
+        data-testid="game-workshop-new-project-button"
+      >
+        {plusIcon}
+        {t('gameWorkshop.rail.newProjectButton')}
+      </button>
+
+      {newProjectDialogOpen && (
+        <GameNewProjectDialog onCreate={onCreateProject} onClose={() => setNewProjectDialogOpen(false)} />
+      )}
 
       {projects.length > 0 && (
         <div className="game-rail-categories game-rail-categories--projects">

@@ -7003,6 +7003,12 @@
       "create": "创作",
       "lab": "实验室"
     },
+    "newProjectDialog": {
+      "title": "新建项目",
+      "placeholder": "项目名称",
+      "cancel": "取消",
+      "confirm": "创建"
+    },
     "rail": {
       "title": "游戏工坊",
       "newProjectPlaceholder": "新游戏项目名称",

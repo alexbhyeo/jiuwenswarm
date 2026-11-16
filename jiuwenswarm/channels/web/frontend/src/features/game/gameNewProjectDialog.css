@@ -1,0 +1,77 @@
+/* 新建游戏项目弹窗。镜像导演模式 .director-dialog* 系列，颜色改用本仓
+   既有语义变量（var(--color-*)），不复用 Director 私有硬编码色板。 */
+
+.game-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.game-dialog {
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  background: var(--color-surface, #fff);
+  border-radius: 12px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  padding: 20px;
+}
+
+.game-dialog-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 14px;
+  color: var(--color-text, #111827);
+}
+
+.game-dialog-input {
+  width: 100%;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border, #d1d5db);
+  padding: 0 12px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--color-text, #111827);
+  outline: none;
+  margin-bottom: 16px;
+}
+
+.game-dialog-input:focus {
+  border-color: var(--color-accent, #6366f1);
+}
+
+.game-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.game-dialog-btn {
+  height: 32px;
+  padding: 0 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.game-dialog-btn--cancel {
+  background: none;
+  border: 1px solid var(--color-border, #d1d5db);
+  color: var(--color-text-secondary, #6b7280);
+}
+
+.game-dialog-btn--confirm {
+  background: var(--color-accent, #6366f1);
+  border: none;
+  color: #fff;
+}
+
+.game-dialog-btn--confirm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

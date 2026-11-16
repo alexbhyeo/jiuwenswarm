@@ -7006,6 +7006,12 @@
       "create": "Create",
       "lab": "Lab"
     },
+    "newProjectDialog": {
+      "title": "New Project",
+      "placeholder": "Project name",
+      "cancel": "Cancel",
+      "confirm": "Create"
+    },
     "rail": {
       "title": "Game Workshop",
       "newProjectPlaceholder": "New game project name",
