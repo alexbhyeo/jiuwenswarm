@@ -7004,10 +7004,18 @@
       "lab": "实验室"
     },
     "rail": {
+      "title": "游戏工坊",
       "newProjectPlaceholder": "新游戏项目名称",
       "newProjectButton": "新建游戏项目",
       "projectsCount": "项目 · {{count}}",
+      "projectsSection": "项目",
+      "assetsSection": "素材",
       "noProjects": "还没有游戏项目",
+      "createHint": "在左侧生成或选择素材；素材分解等处理流程在「实验室」标签完成。",
+      "renameAction": "重命名",
+      "renamePlaceholder": "名称（不含空格）",
+      "deleteAction": "删除",
+      "deleteConfirm": "确定要删除「{{name}}」吗？此操作无法撤销。",
       "scaffoldButton": "生成/修复工程脚手架",
       "scaffoldSuccess": "已补充文件：{{files}}",
       "scaffoldComplete": "工程结构已完整",

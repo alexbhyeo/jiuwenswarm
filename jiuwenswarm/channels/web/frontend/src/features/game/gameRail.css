@@ -1,12 +1,23 @@
-/* 游戏工坊 · 创作面板样式。颜色走既有语义变量，不写死色值。 */
+/* 游戏工坊 · 常驻 rail 样式——项目列表 + 素材分类的可展开分组，布局/交互
+   镜像导演模式 director.css 的 .director-rail 系列类，颜色改用本仓既有的
+   语义变量（var(--color-*)），不复用 Director 私有的硬编码色板。 */
 
 .game-rail {
+  width: 260px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 4px;
   padding: 16px;
   height: 100%;
   overflow-y: auto;
+  border-right: 1px solid var(--color-border, #e5e7eb);
+}
+
+.game-rail-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 12px;
 }
 
 .game-rail-empty {
@@ -15,11 +26,216 @@
   font-size: 13px;
 }
 
+.game-rail-new-project {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.game-rail-new-project input {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border, #d1d5db);
+}
+
+.game-rail-new-project-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 999px;
+  border: none;
+  background: var(--color-accent, #6366f1);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.game-rail-new-project-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---------- 项目/素材 可展开分组行（镜像 director-category-row） ---------- */
+
+.game-rail-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary, #6b7280);
+  letter-spacing: 0.02em;
+  margin: 4px 0 4px;
+}
+
+.game-rail-categories {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.game-rail-categories--projects {
+  margin-bottom: 12px;
+}
+
+.game-rail-category-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: none;
+  background: none;
+  color: var(--color-text, #111827);
+  cursor: pointer;
+}
+
+.game-rail-category-row:hover {
+  background: var(--color-surface-muted, #f3f4f6);
+}
+
+.game-rail-category-row--active {
+  background: var(--color-accent-subtle, #eef2ff);
+  color: var(--color-accent, #6366f1);
+}
+
+.game-rail-category-row--active:hover {
+  background: var(--color-accent-subtle, #eef2ff);
+}
+
+.game-rail-category-icon {
+  display: flex;
+  color: var(--color-text-secondary, #6b7280);
+}
+
+.game-rail-category-row--active .game-rail-category-icon {
+  color: var(--color-accent, #6366f1);
+}
+
+.game-rail-category-label {
+  flex: 1;
+  text-align: left;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.game-rail-category-count {
+  font-size: 11px;
+  color: var(--color-text-secondary, #6b7280);
+  background: var(--color-surface-muted, #f3f4f6);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.game-rail-category-row--active .game-rail-category-count {
+  color: var(--color-accent, #6366f1);
+  background: #fff;
+}
+
+.game-rail-category-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 4px 14px;
+}
+
+/* ---------- 项目列表（镜像 director-project-row） ---------- */
+
+.game-rail-project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0 6px;
+}
+
+.game-rail-project-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  border-radius: 8px;
+  padding: 0 8px 0 29px;
+  background: none;
+  border: none;
+  width: 100%;
+  color: var(--color-text-secondary, #6b7280);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.game-rail-project-row:hover {
+  background: var(--color-surface-muted, #f3f4f6);
+}
+
+.game-rail-project-row--active {
+  background: var(--color-accent-subtle, #eef2ff);
+  color: var(--color-accent, #6366f1);
+  font-weight: 600;
+}
+
+.game-rail-project-row-name {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.game-rail-project-rename-btn {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  color: var(--color-text-secondary, #6b7280);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.game-rail-project-row:hover .game-rail-project-rename-btn {
+  opacity: 1;
+}
+
+.game-rail-project-rename-btn:hover {
+  background: #fff;
+  color: var(--color-text, #111827);
+}
+
+.game-rail-project-delete-btn:hover {
+  background: var(--color-danger-subtle, rgba(220, 38, 38, 0.1));
+  color: var(--color-danger, #dc2626);
+}
+
+.game-rail-project-row-name-input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  font-size: 12.5px;
+  font-family: inherit;
+  color: var(--color-text, #111827);
+  border: 1px solid var(--color-accent, #6366f1);
+  border-radius: 6px;
+  padding: 0 4px;
+  outline: none;
+  background: var(--color-surface, #fff);
+}
+
+/* ---------- 项目级操作（脚手架/构建）+ 桥接提示 ---------- */
+
 .game-rail-project-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  margin-bottom: 4px;
 }
 
 .game-rail-project-actions button {
@@ -37,27 +253,7 @@
   flex-basis: 100%;
 }
 
-.game-rail-categories {
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid var(--color-border, #e5e7eb);
-}
-
-.game-rail-category-tab {
-  padding: 6px 12px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--color-text-secondary, #6b7280);
-  border-bottom: 2px solid transparent;
-}
-
-.game-rail-category-tab[aria-pressed='true'] {
-  color: var(--color-text, #111827);
-  border-bottom-color: var(--color-accent, #6366f1);
-  font-weight: 600;
-}
+/* ---------- 生成表单（分类展开区内，角色/世界/视频专属） ---------- */
 
 .game-rail-generate {
   display: flex;
@@ -96,6 +292,8 @@
   color: var(--color-text-secondary, #6b7280);
 }
 
+/* ---------- 素材网格/缩略图 ---------- */
+
 .game-rail-asset-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
@@ -113,6 +311,7 @@
   flex-direction: column;
   gap: 4px;
   cursor: grab;
+  min-width: 0;
 }
 
 .game-rail-asset-item img,
@@ -157,18 +356,7 @@
   color: var(--color-text-secondary, #6b7280);
 }
 
-.game-rail-decomposed {
-  border-top: 1px solid var(--color-border, #e5e7eb);
-  padding-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.game-rail-decomposed-title {
-  font-size: 13px;
-  font-weight: 600;
-}
+/* ---------- 分解产物（按批次分组，归在"分解产物"分类展开区内） ---------- */
 
 .game-rail-decomposed-batch {
   display: flex;

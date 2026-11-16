@@ -3,8 +3,8 @@
  *
  * 按 D-20261116-1047-game-workshop-lab 重构：导航收敛为「创作 / 实验室」
  * 两个标签（原「工作流/素材/场景/代码/日志」下线，见该设计 Q1/D-01）。
- * 左侧项目栏（新建项目 + 项目列表）保留，不属于某一个标签，两个标签共用
- * 同一个已选中项目。
+ * GameRail（项目列表 + 角色/世界/视频/分解产物素材分类，均可展开/收起，
+ * 镜像导演模式 DirectorRail）跨两个标签常驻，只有主面板内容随标签切换。
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -22,8 +22,6 @@ export function GamePage() {
   const [selectedId, setSelectedId] = useState<string>('');
   const [tab, setTab] = useState<TabKey>('create');
   const [bridge, setBridge] = useState<GameBridgeStatus | null>(null);
-  const [draftName, setDraftName] = useState('');
-  const [busy, setBusy] = useState(false);
 
   const selected = projects.find((p) => p.project_id === selectedId) ?? null;
 
@@ -42,64 +40,35 @@ export function GamePage() {
     setProjects((prev) => prev.map((p) => (p.project_id === next.project_id ? next : p)));
   }, []);
 
-  const createProject = async () => {
-    const name = draftName.trim();
-    if (!name) return;
-    setBusy(true);
-    try {
-      const project = await gameApi.createProject(name);
-      await gameApi.scaffoldProject(project.project_id);
-      setDraftName('');
-      await refresh();
-      setSelectedId(project.project_id);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const createProject = useCallback(async (name: string) => {
+    const project = await gameApi.createProject(name);
+    await gameApi.scaffoldProject(project.project_id);
+    await refresh();
+    setSelectedId(project.project_id);
+  }, [refresh]);
+
+  const renameProject = useCallback(async (projectId: string, name: string) => {
+    const project = await gameApi.renameProject(projectId, name);
+    onProjectUpdate(project);
+  }, [onProjectUpdate]);
+
+  const deleteProject = useCallback(async (projectId: string) => {
+    await gameApi.deleteProject(projectId);
+    await refresh();
+  }, [refresh]);
 
   return (
     <div className="game-page">
-      <aside className="game-page-sidebar">
-        <div className="game-page-sidebar-card">
-          <input
-            value={draftName}
-            onChange={(e) => setDraftName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void createProject();
-            }}
-            placeholder={t('gameWorkshop.rail.newProjectPlaceholder')}
-            data-testid="game-workshop-new-project-input"
-          />
-          <button
-            type="button"
-            onClick={() => void createProject()}
-            disabled={busy || !draftName.trim()}
-            data-testid="game-workshop-new-project-button"
-          >
-            {t('gameWorkshop.rail.newProjectButton')}
-          </button>
-        </div>
-        <div className="game-page-sidebar-list">
-          <div className="game-page-sidebar-count">{t('gameWorkshop.rail.projectsCount', { count: projects.length })}</div>
-          {projects.length === 0 && <div className="game-page-sidebar-empty">{t('gameWorkshop.rail.noProjects')}</div>}
-          {projects.map((p) => (
-            <button
-              key={p.project_id}
-              type="button"
-              className="game-page-sidebar-item"
-              aria-pressed={p.project_id === selectedId}
-              onClick={() => setSelectedId(p.project_id)}
-              data-testid="game-workshop-project-list-item"
-              data-variant={p.project_id}
-            >
-              <div className="game-page-sidebar-item-name">{p.name}</div>
-              <div className="game-page-sidebar-item-meta">
-                {p.status} · {p.assets.length}
-              </div>
-            </button>
-          ))}
-        </div>
-      </aside>
+      <GameRail
+        projects={projects}
+        selectedProject={selected}
+        onSelectProject={setSelectedId}
+        onCreateProject={createProject}
+        onRenameProject={renameProject}
+        onDeleteProject={deleteProject}
+        onProjectUpdate={onProjectUpdate}
+        bridge={bridge}
+      />
 
       <div className="game-page-main">
         <div className="game-page-tabs" role="tablist">
@@ -124,17 +93,18 @@ export function GamePage() {
             {t('gameWorkshop.tabs.lab')}
           </button>
         </div>
-        {/* GameRail 跨两个 tab 常驻（镜像 DirectorPage.tsx 里 DirectorRail 常驻、
-            只切换右侧主内容的布局）——实验室拖拽的素材来源就是这个 rail，
-            放进 tab 互斥分支会导致切到实验室时 rail 卸载、拖拽源不存在。 */}
-        <div className={`game-page-tab-content${tab === 'lab' ? ' game-page-tab-content--lab' : ''}`}>
-          <GameRail project={selected} onProjectUpdate={onProjectUpdate} bridge={bridge} />
-          {tab === 'lab' &&
-            (selected ? (
+        <div className="game-page-tab-content">
+          {tab === 'lab' ? (
+            selected ? (
               <GameLabCanvas project={selected} onProjectUpdate={onProjectUpdate} />
             ) : (
               <div className="game-rail-empty">{t('gameWorkshop.rail.noProjects')}</div>
-            ))}
+            )
+          ) : (
+            <div className="game-page-create-hint" data-testid="game-workshop-create-hint">
+              {selected ? t('gameWorkshop.rail.createHint') : t('gameWorkshop.rail.noProjects')}
+            </div>
+          )}
         </div>
       </div>
     </div>

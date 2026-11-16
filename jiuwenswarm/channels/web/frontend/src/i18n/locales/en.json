@@ -7007,10 +7007,18 @@
       "lab": "Lab"
     },
     "rail": {
+      "title": "Game Workshop",
       "newProjectPlaceholder": "New game project name",
       "newProjectButton": "New game project",
       "projectsCount": "Projects · {{count}}",
+      "projectsSection": "Projects",
+      "assetsSection": "Assets",
       "noProjects": "No game projects yet",
+      "createHint": "Generate or pick assets from the panel on the left; processing like decomposition happens in the Lab tab.",
+      "renameAction": "Rename",
+      "renamePlaceholder": "Name (no spaces)",
+      "deleteAction": "Delete",
+      "deleteConfirm": "Delete \"{{name}}\"? This can't be undone.",
       "scaffoldButton": "Generate/repair project scaffold",
       "scaffoldSuccess": "Files added: {{files}}",
       "scaffoldComplete": "Project structure is already complete",
