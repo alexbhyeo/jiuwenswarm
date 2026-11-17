@@ -38,6 +38,9 @@ import './gameLab.css';
 const nodeTypes: NodeTypes = {
   image: GameImageNode,
   model_part: GameModelPartNode,
+  // "model"（2D 转 3D 的单体产出）复用同一个组件——见
+  // GameModelPartNode.tsx 顶部注释，两种产出数据形状、交互完全一致。
+  model: GameModelPartNode,
   decompose: GameDecomposeNode,
   to_model: GameToModelNode,
 };
@@ -157,22 +160,28 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
   // nextSpawnOffset），并用边把每个部件连回分解卡片的 "parts" 输出口
   // （镜像用户给的参考图：产出的部件是接在处理卡片上的、而不是只出现在
   // 素材库里）。
-  const spawnModelPartNodes = useCallback(
-    (decomposeNodeId: string, parts: GameAsset[]) => {
-      if (parts.length === 0) return;
-      const PART_COLS = 4;
-      const PART_GAP_X = 200;
-      const PART_GAP_Y = 170;
+  // 分解/2D 转 3D 成功后，把产出的模型直接摆到画布上——以来源处理卡片为
+  // 锚点，向下方铺开一个宽而矮的网格（而不是往右，右边是工具栏加卡片时
+  // 新卡片的落点，见 nextSpawnOffset），并用边把每个产出连回来源卡片的
+  // 输出口（镜像用户给的参考图：产出是接在处理卡片上的、而不是只出现在
+  // 素材库里）。分解产出 N 个部件、2D 转 3D 产出 1 个模型，共用这一套
+  // 布局/连线逻辑，只是 assets 数组长度不同。
+  const spawnModelResultNodes = useCallback(
+    (sourceNodeId: string, sourceHandle: string, nodeType: 'model_part' | 'model', assets: GameAsset[]) => {
+      if (assets.length === 0) return;
+      const COLS = 4;
+      const GAP_X = 200;
+      const GAP_Y = 170;
       setNodes((nds) => {
-        const decomposeNode = nds.find((n) => n.id === decomposeNodeId);
-        const baseX = decomposeNode?.position.x ?? 0;
-        const baseY = (decomposeNode?.position.y ?? 0) + 320;
-        const newNodes: Node[] = parts.map((asset, i) => ({
-          id: nextNodeId('model_part'),
-          type: 'model_part',
+        const sourceNode = nds.find((n) => n.id === sourceNodeId);
+        const baseX = sourceNode?.position.x ?? 0;
+        const baseY = (sourceNode?.position.y ?? 0) + 320;
+        const newNodes: Node[] = assets.map((asset, i) => ({
+          id: nextNodeId(nodeType),
+          type: nodeType,
           position: {
-            x: baseX + (i % PART_COLS) * PART_GAP_X,
-            y: baseY + Math.floor(i / PART_COLS) * PART_GAP_Y,
+            x: baseX + (i % COLS) * GAP_X,
+            y: baseY + Math.floor(i / COLS) * GAP_Y,
           },
           data: {
             assetId: asset.asset_id,
@@ -184,9 +193,9 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
         setEdges((eds) =>
           eds.concat(
             newNodes.map((n) => ({
-              id: `e_${decomposeNodeId}_${n.id}`,
-              source: decomposeNodeId,
-              sourceHandle: 'parts',
+              id: `e_${sourceNodeId}_${n.id}`,
+              source: sourceNodeId,
+              sourceHandle,
               target: n.id,
               targetHandle: 'in',
             }))
@@ -217,7 +226,7 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
           if (result.status === 'success') {
             const parts = result.assets ?? [];
             patchDecomposeNode(nodeId, { status: 'success', resultCount: parts.length });
-            spawnModelPartNodes(nodeId, parts);
+            spawnModelResultNodes(nodeId, 'parts', 'model_part', parts);
           } else {
             patchDecomposeNode(nodeId, { status: 'failed', error: result.error });
           }
@@ -228,7 +237,7 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
       };
       pollTimers.current.set(nodeId, setTimeout(tick, DECOMPOSE_POLL_INTERVAL_MS));
     },
-    [onProjectUpdate, patchDecomposeNode, spawnModelPartNodes]
+    [onProjectUpdate, patchDecomposeNode, spawnModelResultNodes]
   );
 
   const submitDecompose = useCallback(
@@ -276,6 +285,7 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
           pollTimers.current.delete(nodeId);
           if (result.status === 'success') {
             patchToModelNode(nodeId, { status: 'success', resultAssetId: result.asset?.asset_id });
+            if (result.asset) spawnModelResultNodes(nodeId, 'model', 'model', [result.asset]);
           } else {
             patchToModelNode(nodeId, { status: 'failed', error: result.error });
           }
@@ -286,7 +296,7 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
       };
       pollTimers.current.set(nodeId, setTimeout(tick, DECOMPOSE_POLL_INTERVAL_MS));
     },
-    [onProjectUpdate, patchToModelNode]
+    [onProjectUpdate, patchToModelNode, spawnModelResultNodes]
   );
 
   const submitToModel = useCallback(

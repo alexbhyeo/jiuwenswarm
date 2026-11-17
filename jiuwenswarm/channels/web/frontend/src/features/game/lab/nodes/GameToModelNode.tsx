@@ -68,6 +68,7 @@ export function GameToModelNode({ id, data }: NodeProps & { data: GameToModelNod
           </div>
         )}
       </div>
+      <Handle type="source" position={Position.Right} id="model" />
     </div>
   );
 }

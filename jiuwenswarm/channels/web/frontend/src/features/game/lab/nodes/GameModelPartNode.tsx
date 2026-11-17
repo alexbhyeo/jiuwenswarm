@@ -19,19 +19,24 @@ const downloadIcon = (
   </svg>
 );
 
-/** 分解产出的一个 3D 部件：缩略图直接用 <model-viewer> 渲染模型本身（见
+/** 单个 3D 模型结果节点：缩略图直接用 <model-viewer> 渲染模型本身（见
  *  modelViewerJsx.d.ts 的类型声明），点击弹出可拖拽旋转查看的大图
- *  （ModelViewerModal）+ 下载/重命名/删除。 */
-export function GameModelPartNode({ id, data }: NodeProps & { data: GameModelPartNodeData }) {
+ *  （ModelViewerModal）+ 下载/重命名/删除。同时服务两种产出——分解卡片
+ *  产出的部件（type="model_part"）和 2D 转 3D 卡片产出的单体模型
+ *  （type="model"）——两者数据形状、交互完全一致，只用 `type` 区分
+ *  testid/类名，不拆成两个组件。 */
+export function GameModelPartNode({ id, type, data }: NodeProps & { data: GameModelPartNodeData }) {
   const { t } = useTranslation();
   const actions = useGameLabActions();
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState(data.name);
   const [viewerOpen, setViewerOpen] = useState(false);
   const modelUrl = rawFileUrl(data.filePath);
+  const variant = type === 'model' ? 'model' : 'model-part';
+  const testid = (suffix: string) => `game-workshop-lab-${variant}-node${suffix}`;
 
   return (
-    <div className="game-lab-node game-lab-node--model-part" data-testid="game-workshop-lab-model-part-node">
+    <div className={`game-lab-node game-lab-node--${variant}`} data-testid={testid('')}>
       <Handle type="target" position={Position.Left} id="in" />
       <div className="game-lab-node-media game-lab-node-media--model">
         <model-viewer
@@ -39,22 +44,17 @@ export function GameModelPartNode({ id, data }: NodeProps & { data: GameModelPar
           alt={data.name}
           className="nodrag game-lab-node-model-thumb"
           onClick={() => setViewerOpen(true)}
-          data-testid="game-workshop-lab-model-part-node-thumb"
+          data-testid={testid('-thumb')}
         />
         <div className="game-lab-node-media-actions">
-          <a
-            href={modelUrl}
-            download
-            title={t('common.download')}
-            data-testid="game-workshop-lab-model-part-node-download"
-          >
+          <a href={modelUrl} download title={t('common.download')} data-testid={testid('-download')}>
             {downloadIcon}
           </a>
           <button
             type="button"
             title={t('common.delete')}
             onClick={() => actions.deleteNode(id)}
-            data-testid="game-workshop-lab-model-part-node-delete"
+            data-testid={testid('-delete')}
           >
             {trashIcon}
           </button>
@@ -73,14 +73,10 @@ export function GameModelPartNode({ id, data }: NodeProps & { data: GameModelPar
           onKeyDown={(e) => {
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
           }}
-          data-testid="game-workshop-lab-model-part-node-name-input"
+          data-testid={testid('-name-input')}
         />
       ) : (
-        <div
-          className="game-lab-node-name"
-          onClick={() => setEditing(true)}
-          data-testid="game-workshop-lab-model-part-node-name"
-        >
+        <div className="game-lab-node-name" onClick={() => setEditing(true)} data-testid={testid('-name')}>
           {data.name}
         </div>
       )}
