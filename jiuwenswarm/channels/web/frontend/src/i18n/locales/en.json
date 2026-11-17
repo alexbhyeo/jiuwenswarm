@@ -7051,9 +7051,12 @@
     },
     "lab": {
       "imageGroup": "Image processing",
+      "modelGroup": "Model processing",
       "process": {
         "decompose": "Decompose",
-        "toModel": "2D to 3D"
+        "toModel": "2D to 3D",
+        "meshComplete": "Mesh complete",
+        "meshDecimate": "Retopology"
       },
       "decompose": {
         "title": "Decompose",
@@ -7076,6 +7079,24 @@
         "statusRunning": "Converting…",
         "statusSuccess": "3D model generated — see \"3D models\" in the Create panel",
         "statusFailedGeneric": "Conversion failed"
+      },
+      "meshComplete": {
+        "title": "Mesh complete",
+        "sourceConnected": "Source: {{name}}",
+        "sourceMissing": "Connect a 3D model from the left",
+        "action": "Complete",
+        "statusRunning": "Completing…",
+        "statusSuccess": "Completed model generated — see \"3D models\" in the Create panel",
+        "statusFailedGeneric": "Mesh completion failed"
+      },
+      "meshDecimate": {
+        "title": "Retopology",
+        "sourceConnected": "Source: {{name}}",
+        "sourceMissing": "Connect a 3D model from the left",
+        "action": "Retopologize",
+        "statusRunning": "Retopologizing…",
+        "statusSuccess": "Retopologized model generated — see \"3D models\" in the Create panel",
+        "statusFailedGeneric": "Retopology failed"
       }
     }
   }

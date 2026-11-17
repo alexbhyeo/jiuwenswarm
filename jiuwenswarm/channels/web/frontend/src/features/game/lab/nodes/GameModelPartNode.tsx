@@ -24,7 +24,8 @@ const downloadIcon = (
  *  （ModelViewerModal）+ 下载/重命名/删除。同时服务两种产出——分解卡片
  *  产出的部件（type="model_part"）和 2D 转 3D 卡片产出的单体模型
  *  （type="model"）——两者数据形状、交互完全一致，只用 `type` 区分
- *  testid/类名，不拆成两个组件。 */
+ *  testid/类名，不拆成两个组件。末尾的 `out` 源端口让网格补全/拓扑重构这类
+ *  "输入也是模型"的处理卡片能接到这个节点身上，见 GameMeshOpNode.tsx。 */
 export function GameModelPartNode({ id, type, data }: NodeProps & { data: GameModelPartNodeData }) {
   const { t } = useTranslation();
   const actions = useGameLabActions();
@@ -81,6 +82,7 @@ export function GameModelPartNode({ id, type, data }: NodeProps & { data: GameMo
         </div>
       )}
       {viewerOpen && <ModelViewerModal src={modelUrl} alt={data.name} onClose={() => setViewerOpen(false)} />}
+      <Handle type="source" position={Position.Right} id="out" />
     </div>
   );
 }

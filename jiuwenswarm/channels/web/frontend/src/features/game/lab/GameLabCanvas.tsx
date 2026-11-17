@@ -26,6 +26,7 @@ import {
   GAME_ASSET_DRAG_MIME,
   type GameAssetDragPayload,
   type GameDecomposeNodeData,
+  type GameMeshOpNodeData,
   type GameModelPartNodeData,
   type GameToModelNodeData,
 } from './labTypes';
@@ -33,16 +34,20 @@ import { GameImageNode } from './nodes/GameImageNode';
 import { GameModelPartNode } from './nodes/GameModelPartNode';
 import { GameDecomposeNode } from './nodes/GameDecomposeNode';
 import { GameToModelNode } from './nodes/GameToModelNode';
+import { GameMeshOpNode } from './nodes/GameMeshOpNode';
 import './gameLab.css';
 
 const nodeTypes: NodeTypes = {
   image: GameImageNode,
   model_part: GameModelPartNode,
-  // "model"（2D 转 3D 的单体产出）复用同一个组件——见
-  // GameModelPartNode.tsx 顶部注释，两种产出数据形状、交互完全一致。
+  // "model"（2D 转 3D/网格补全/拓扑重构的单体产出）复用同一个组件——见
+  // GameModelPartNode.tsx 顶部注释，这几种产出数据形状、交互完全一致。
   model: GameModelPartNode,
   decompose: GameDecomposeNode,
   to_model: GameToModelNode,
+  // 网格补全/拓扑重构也共用同一个组件——见 GameMeshOpNode.tsx 顶部注释。
+  mesh_complete: GameMeshOpNode,
+  mesh_decimate: GameMeshOpNode,
 };
 
 // 与导演模式同一个取舍（LabCanvas.tsx 的 LAB_CANVAS_SAVE_DEBOUNCE_MS）：
@@ -60,9 +65,21 @@ const imageGroupIcon = (
   </svg>
 );
 
-type ToolrailMenu = 'image' | null;
+// 工具栏"模型"分组圆形按钮——网格补全/拓扑重构这两张处理卡片接的是已有
+// 模型（不是图片），所以跟"图片处理"分开单放一个按钮，不是塞进同一个
+// 侧边菜单里；图标画个立方体，跟图片组的图片框区分开。
+const modelGroupIcon = (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3Z" />
+    <path d="M4 7.5 12 12m0 0 8-4.5M12 12v9" />
+  </svg>
+);
+
+type ToolrailMenu = 'image' | 'model' | null;
 type ImageProcessKind = 'decompose' | 'toModel';
 const IMAGE_PROCESS_KINDS: ImageProcessKind[] = ['toModel', 'decompose'];
+type ModelProcessKind = 'meshComplete' | 'meshDecimate';
+const MODEL_PROCESS_KINDS: ModelProcessKind[] = ['meshComplete', 'meshDecimate'];
 
 function nextNodeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -150,6 +167,13 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
 
   const patchToModelNode = useCallback(
     (nodeId: string, patch: Partial<GameToModelNodeData>) => {
+      setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n)));
+    },
+    [setNodes]
+  );
+
+  const patchMeshOpNode = useCallback(
+    (nodeId: string, patch: Partial<GameMeshOpNodeData>) => {
       setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n)));
     },
     [setNodes]
@@ -329,6 +353,124 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
     [nodes, edges, onProjectUpdate, patchToModelNode, pollToModel]
   );
 
+  // 网格补全/拓扑重构的连线源是一个 model/model_part 节点（不是 image），
+  // 对应处理卡片的目标端口 id 是 "model"（见 GameMeshOpNode.tsx），其余跟
+  // submitToModel/pollToModel 完全同构——两段式状态机全在后端，前端只管
+  // 一轮轮 poll 同一个 RPC（见 game_item_mesh_ops.py 模块注释）。
+  const pollMeshComplete = useCallback(
+    (nodeId: string, placeholderAssetId: string, jobId: string) => {
+      const tick = async () => {
+        try {
+          const result = await gameApi.checkMeshCompleteStatus(projectIdRef.current, placeholderAssetId, jobId);
+          onProjectUpdate(result.project);
+          if (result.status === 'pending') {
+            pollTimers.current.set(nodeId, setTimeout(tick, DECOMPOSE_POLL_INTERVAL_MS));
+            return;
+          }
+          pollTimers.current.delete(nodeId);
+          if (result.status === 'success') {
+            patchMeshOpNode(nodeId, { status: 'success', resultAssetId: result.asset?.asset_id });
+            if (result.asset) spawnModelResultNodes(nodeId, 'result', 'model', [result.asset]);
+          } else {
+            patchMeshOpNode(nodeId, { status: 'failed', error: result.error });
+          }
+        } catch (err) {
+          pollTimers.current.delete(nodeId);
+          patchMeshOpNode(nodeId, { status: 'failed', error: err instanceof Error ? err.message : String(err) });
+        }
+      };
+      pollTimers.current.set(nodeId, setTimeout(tick, DECOMPOSE_POLL_INTERVAL_MS));
+    },
+    [onProjectUpdate, patchMeshOpNode, spawnModelResultNodes]
+  );
+
+  const submitMeshComplete = useCallback(
+    (nodeId: string) => {
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      const connection = edges.find((e) => e.target === nodeId && e.targetHandle === 'model');
+      const sourceNode = connection ? nodes.find((n) => n.id === connection.source) : null;
+      const assetId = (sourceNode?.data as { assetId?: string } | undefined)?.assetId;
+      if (!assetId) return;
+      patchMeshOpNode(nodeId, { status: 'submitting', error: undefined });
+      void gameApi
+        .meshComplete(projectIdRef.current, assetId)
+        .then((result) => {
+          onProjectUpdate(result.project);
+          patchMeshOpNode(nodeId, {
+            status: 'pending',
+            placeholderAssetId: result.placeholder_asset_id,
+            jobId: result.job_id,
+          });
+          pollMeshComplete(nodeId, result.placeholder_asset_id, result.job_id);
+        })
+        .catch((err) => {
+          patchMeshOpNode(nodeId, {
+            status: 'failed',
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    },
+    [nodes, edges, onProjectUpdate, patchMeshOpNode, pollMeshComplete]
+  );
+
+  const pollMeshDecimate = useCallback(
+    (nodeId: string, placeholderAssetId: string, jobId: string) => {
+      const tick = async () => {
+        try {
+          const result = await gameApi.checkMeshDecimateStatus(projectIdRef.current, placeholderAssetId, jobId);
+          onProjectUpdate(result.project);
+          if (result.status === 'pending') {
+            pollTimers.current.set(nodeId, setTimeout(tick, DECOMPOSE_POLL_INTERVAL_MS));
+            return;
+          }
+          pollTimers.current.delete(nodeId);
+          if (result.status === 'success') {
+            patchMeshOpNode(nodeId, { status: 'success', resultAssetId: result.asset?.asset_id });
+            if (result.asset) spawnModelResultNodes(nodeId, 'result', 'model', [result.asset]);
+          } else {
+            patchMeshOpNode(nodeId, { status: 'failed', error: result.error });
+          }
+        } catch (err) {
+          pollTimers.current.delete(nodeId);
+          patchMeshOpNode(nodeId, { status: 'failed', error: err instanceof Error ? err.message : String(err) });
+        }
+      };
+      pollTimers.current.set(nodeId, setTimeout(tick, DECOMPOSE_POLL_INTERVAL_MS));
+    },
+    [onProjectUpdate, patchMeshOpNode, spawnModelResultNodes]
+  );
+
+  const submitMeshDecimate = useCallback(
+    (nodeId: string) => {
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      const connection = edges.find((e) => e.target === nodeId && e.targetHandle === 'model');
+      const sourceNode = connection ? nodes.find((n) => n.id === connection.source) : null;
+      const assetId = (sourceNode?.data as { assetId?: string } | undefined)?.assetId;
+      if (!assetId) return;
+      patchMeshOpNode(nodeId, { status: 'submitting', error: undefined });
+      void gameApi
+        .meshDecimate(projectIdRef.current, assetId)
+        .then((result) => {
+          onProjectUpdate(result.project);
+          patchMeshOpNode(nodeId, {
+            status: 'pending',
+            placeholderAssetId: result.placeholder_asset_id,
+            jobId: result.job_id,
+          });
+          pollMeshDecimate(nodeId, result.placeholder_asset_id, result.job_id);
+        })
+        .catch((err) => {
+          patchMeshOpNode(nodeId, {
+            status: 'failed',
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    },
+    [nodes, edges, onProjectUpdate, patchMeshOpNode, pollMeshDecimate]
+  );
+
   const onDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
@@ -360,7 +502,7 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
   );
 
   const addProcessNode = useCallback(
-    (kind: ImageProcessKind) => {
+    (kind: ImageProcessKind | ModelProcessKind) => {
       const { dx, dy } = nextSpawnOffset();
       const center = wrapperRef.current
         ? screenToFlowPosition({
@@ -377,13 +519,25 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
             data: { hint: '', granularity: 'medium', status: 'idle' } satisfies GameDecomposeNodeData,
           })
         );
-      } else {
+      } else if (kind === 'toModel') {
         setNodes((nds) =>
           nds.concat({
             id: nextNodeId('to_model'),
             type: 'to_model',
             position: center,
             data: { status: 'idle' } satisfies GameToModelNodeData,
+          })
+        );
+      } else {
+        // meshComplete / meshDecimate 共用 GameMeshOpNode 组件，只是 node
+        // type 不同（见 nodeTypes 顶部的映射）。
+        const nodeType = kind === 'meshComplete' ? 'mesh_complete' : 'mesh_decimate';
+        setNodes((nds) =>
+          nds.concat({
+            id: nextNodeId(nodeType),
+            type: nodeType,
+            position: center,
+            data: { status: 'idle' } satisfies GameMeshOpNodeData,
           })
         );
       }
@@ -394,7 +548,17 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
 
   return (
     <GameLabActionsProvider
-      value={{ deleteNode, renameNode, patchDecomposeNode, submitDecompose, patchToModelNode, submitToModel }}
+      value={{
+        deleteNode,
+        renameNode,
+        patchDecomposeNode,
+        submitDecompose,
+        patchToModelNode,
+        submitToModel,
+        patchMeshOpNode,
+        submitMeshComplete,
+        submitMeshDecimate,
+      }}
     >
       <div className="game-lab-canvas-wrap" ref={wrapperRef}>
         <ReactFlow
@@ -413,9 +577,11 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
           <Controls />
         </ReactFlow>
 
-        {/* 悬浮圆形工具栏——镜像导演模式 LabCanvas.tsx 的 lab-toolrail，
-            目前只有"图片处理"一组，点开侧边菜单选"2D转3D"或"分解图"，
-            往画布中心加一张对应的处理卡片。 */}
+        {/* 悬浮圆形工具栏——镜像导演模式 LabCanvas.tsx 的 lab-toolrail。
+            "图片处理"接一张 image 节点，点开侧边菜单选"2D转3D"或"分解图"；
+            "模型处理"接一个 model/model_part 节点，点开侧边菜单选"网格
+            补全"或"拓扑重构"——两组各自独立的按钮+菜单，往画布中心加一张
+            对应的处理卡片。 */}
         <div className="game-lab-toolrail">
           <div className="game-lab-toolrail-item">
             <button
@@ -431,6 +597,33 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
             {openMenu === 'image' && (
               <div className="game-lab-add-menu game-lab-add-menu--side" data-testid="game-workshop-lab-add-menu">
                 {IMAGE_PROCESS_KINDS.map((kind) => (
+                  <button
+                    type="button"
+                    key={kind}
+                    onClick={() => addProcessNode(kind)}
+                    data-testid="game-workshop-lab-add-menu-item"
+                    data-variant={kind}
+                  >
+                    {t(`gameWorkshop.lab.process.${kind}`)}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="game-lab-toolrail-item">
+            <button
+              type="button"
+              className={`game-lab-toolrail-btn ${openMenu === 'model' ? 'game-lab-toolrail-btn--active' : ''}`}
+              title={t('gameWorkshop.lab.modelGroup')}
+              onClick={() => setOpenMenu((v) => (v === 'model' ? null : 'model'))}
+              data-testid="game-workshop-lab-toolrail-button"
+              data-variant="model"
+            >
+              {modelGroupIcon}
+            </button>
+            {openMenu === 'model' && (
+              <div className="game-lab-add-menu game-lab-add-menu--side" data-testid="game-workshop-lab-add-menu">
+                {MODEL_PROCESS_KINDS.map((kind) => (
                   <button
                     type="button"
                     key={kind}

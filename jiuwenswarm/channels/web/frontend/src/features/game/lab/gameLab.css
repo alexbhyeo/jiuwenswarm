@@ -221,7 +221,9 @@
 }
 
 .game-lab-node--decompose,
-.game-lab-node--to-model {
+.game-lab-node--to-model,
+.game-lab-node--mesh-complete,
+.game-lab-node--mesh-decimate {
   width: 220px;
 }
 

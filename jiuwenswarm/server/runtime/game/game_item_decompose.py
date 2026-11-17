@@ -13,8 +13,9 @@
   ``generation/image-to-model`` 转成**一个**单体模型——没有"多个部件"这
   一说，产物就是直接下载保存的那一个 ``.glb``，不需要 trimesh 拆分。
 
-两条流水线共用上传/鉴权（``_upload_image``/``_headers``/``_api_base``），
-所以放在同一个 ``GameItemDecompose`` 类里，没有分成两个类。
+两条流水线共用上传/鉴权，这部分（以及网格补全、拓扑重构也要用到的同一套
+上传/鉴权）已经抽到 ``game_tripo_client.py``；分解与 2D 转 3D 本身仍然放在
+同一个 ``GameItemDecompose`` 类里，没有分成两个类。
 
 与导演模式的 ``generate_video``/``check_video_status`` 同构：提交
 （``submit``/``submit_to_model``）只拿一个服务商任务 id，真正的生成仍要
@@ -25,7 +26,6 @@ RPC 里阻塞等到底。
 from __future__ import annotations
 
 import logging
-import os
 import re
 import secrets
 import tempfile
@@ -37,13 +37,31 @@ from typing import Any
 import httpx
 
 from jiuwenswarm.agents.harness.common.tools.ssl_config import get_requests_verify
+from jiuwenswarm.server.runtime.game.game_tripo_client import (
+    PENDING_STATUSES as _PENDING_STATUSES,
+)
+from jiuwenswarm.server.runtime.game.game_tripo_client import (
+    TRANSIENT_HTTP_ERRORS as _TRANSIENT_HTTP_ERRORS,
+)
+from jiuwenswarm.server.runtime.game.game_tripo_client import (
+    api_base as _api_base,
+)
+from jiuwenswarm.server.runtime.game.game_tripo_client import (
+    error_detail as _error_detail,
+)
+from jiuwenswarm.server.runtime.game.game_tripo_client import (
+    headers as _headers,
+)
+from jiuwenswarm.server.runtime.game.game_tripo_client import (
+    tripo_configured,
+)
+from jiuwenswarm.server.runtime.game.game_tripo_client import (
+    upload_file as _upload_file,
+)
 
 logger = logging.getLogger(__name__)
 
-_API_BASE_DEFAULT = "https://openapi.tripo3d.ai/v3"
 _POLL_INTERVAL_SECONDS = 5
-_PENDING_STATUSES = ("queued", "running")
-_TRANSIENT_HTTP_ERRORS = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
 # image-to-model 的 model 参数是必填项；固定用文档推荐的最新版本，不开放
 # 成用户可选参数——多一个下拉就多一种"选了不存在的版本号"的失败模式，
 # 而这个功能目前没有谁会需要切版本。
@@ -79,39 +97,6 @@ class ToModelStatus:
     status: str  # "pending" | "success" | "failed"
     model_file_path: str | None = None
     error: str | None = None
-
-
-def tripo_enabled() -> bool:
-    """设置页「3D 分解」开关是否打开，与 VIDEO_ENABLED 等既有开关同一套取舍。"""
-    return str(os.environ.get("TRIPO_ENABLED", "")).strip().lower() in ("1", "true", "yes", "on")
-
-
-def tripo_configured() -> bool:
-    """3D 分解是否可用：开关打开且 key/base 都齐全。"""
-    return bool(
-        tripo_enabled()
-        and os.environ.get("TRIPO_API_KEY", "").strip()
-        and _api_base()
-    )
-
-
-def _api_base() -> str:
-    return (os.environ.get("TRIPO_API_BASE", "").strip() or _API_BASE_DEFAULT).rstrip("/")
-
-
-def _headers() -> dict[str, str]:
-    api_key = os.environ.get("TRIPO_API_KEY", "").strip()
-    return {"Authorization": f"Bearer {api_key}"}
-
-
-def _error_detail(payload: Any) -> str | None:
-    if not isinstance(payload, dict):
-        return None
-    code = payload.get("code")
-    if code in (None, 0):
-        return None
-    message = (payload.get("message") or payload.get("msg") or "").strip()
-    return f"{code}: {message}" if message else str(code)
 
 
 class GameItemDecompose:
@@ -285,19 +270,10 @@ class GameItemDecompose:
         return task_id
 
     async def _upload_image(self, client: httpx.AsyncClient, path: Path) -> str:
-        data = path.read_bytes()
-        files = {"file": (path.name, data)}
-        resp = await client.post(f"{_api_base()}/files", headers=_headers(), files=files)
-        payload = resp.json() if resp.content else {}
-        if resp.status_code != 200 or _error_detail(payload):
-            detail = _error_detail(payload) or resp.status_code
-            raise GameItemDecomposeError("SUBMIT_FAILED", f"上传源图到 Tripo3D 失败: {detail}")
-        file_token = str(((payload or {}).get("data") or {}).get("file_token") or "")
-        if not file_token:
-            raise GameItemDecomposeError(
-                "SUBMIT_FAILED", f"上传源图到 Tripo3D 没有返回 file_token: {str(payload)[:300]}"
-            )
-        return file_token
+        try:
+            return await _upload_file(client, path)
+        except RuntimeError as exc:
+            raise GameItemDecomposeError("SUBMIT_FAILED", str(exc)) from exc
 
     async def _submit_smartsegment(
         self, client: httpx.AsyncClient, file_token: str, hint: str | None, granularity: str

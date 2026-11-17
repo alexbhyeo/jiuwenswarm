@@ -18,6 +18,13 @@ const GAME_DECOMPOSE_SUBMIT_TIMEOUT_MS = 60_000;
 // 否则真的跑到下载那一步时，前端会比后端先超时、把本可轮询成功的任务判
 // 成失败（实测踩过一次：30s 超时在下载阶段命中，卡片显示"请求超时"）。
 const GAME_DECOMPOSE_STATUS_TIMEOUT_MS = 150_000;
+// 网格补全/拓扑重构的 submit 要上传的是模型文件（.glb）——实测一个完整
+// 角色模型（贴图烘焙后常见 40+MB）就命中过 60s、甚至 120s 超时，体量级别
+// 跟分解/2D转3D 上传的源图完全不同，所以不能照搬 GAME_DECOMPOSE_SUBMIT_
+// TIMEOUT_MS；直接复用生成类调用同一档 300s 预算（GAME_GENERATE_TIMEOUT_MS）
+// 更合适。check_status 仍复用分解/2D转3D 的值（它只在成功那一次做下载，
+// 跟分解/2D转3D 同一套下载体量级别，不需要跟着放宽）。
+const GAME_MESH_OP_SUBMIT_TIMEOUT_MS = GAME_GENERATE_TIMEOUT_MS;
 
 export type GameAsset = {
   asset_id: string;
@@ -73,6 +80,19 @@ export type GameToModelStatusResult = {
   asset?: GameAsset;
 };
 
+export type GameMeshOpSubmitResult = {
+  project: GameProject;
+  placeholder_asset_id: string;
+  job_id: string;
+};
+
+export type GameMeshOpStatusResult = {
+  project: GameProject;
+  status: 'pending' | 'success' | 'failed';
+  error?: string;
+  asset?: GameAsset;
+};
+
 export type GameBridgeStatus = {
   godot: boolean;
   godot_binary: string;
@@ -103,6 +123,10 @@ const METHOD = {
   assetsDecomposeCheckStatus: 'game.assets.decompose_check_status',
   assetsToModel: 'game.assets.to_model',
   assetsToModelCheckStatus: 'game.assets.to_model_check_status',
+  assetsMeshComplete: 'game.assets.mesh_complete',
+  assetsMeshCompleteCheckStatus: 'game.assets.mesh_complete_check_status',
+  assetsMeshDecimate: 'game.assets.mesh_decimate',
+  assetsMeshDecimateCheckStatus: 'game.assets.mesh_decimate_check_status',
   labCanvasSave: 'game.lab_canvas.save',
   filesTree: 'game.files.tree',
   filesRead: 'game.files.read',
@@ -240,6 +264,44 @@ export const gameApi = {
   ): Promise<GameToModelStatusResult> =>
     webRequest<GameToModelStatusResult>(
       METHOD.assetsToModelCheckStatus,
+      { project_id: projectId, placeholder_asset_id: placeholderAssetId, job_id: jobId },
+      { timeoutMs: GAME_DECOMPOSE_STATUS_TIMEOUT_MS }
+    ),
+  /** 提交一次网格补全（源素材须是已就绪的 3D 模型/部件）；两段式流水线
+   *  （先 mesh/segment 再 mesh/complete）完全由后端的 check_status 推进，
+   *  前端只管一轮轮调同一个 RPC，不需要知道现在处于哪一段，见
+   *  game_manager.handle_game_assets_mesh_complete_check_status 的注释。 */
+  meshComplete: async (projectId: string, sourceAssetId: string): Promise<GameMeshOpSubmitResult> =>
+    webRequest<GameMeshOpSubmitResult>(
+      METHOD.assetsMeshComplete,
+      { project_id: projectId, source_asset_id: sourceAssetId },
+      { timeoutMs: GAME_MESH_OP_SUBMIT_TIMEOUT_MS }
+    ),
+  checkMeshCompleteStatus: async (
+    projectId: string,
+    placeholderAssetId: string,
+    jobId: string
+  ): Promise<GameMeshOpStatusResult> =>
+    webRequest<GameMeshOpStatusResult>(
+      METHOD.assetsMeshCompleteCheckStatus,
+      { project_id: projectId, placeholder_asset_id: placeholderAssetId, job_id: jobId },
+      { timeoutMs: GAME_DECOMPOSE_STATUS_TIMEOUT_MS }
+    ),
+  /** 提交一次拓扑重构（源素材须是已就绪的 3D 模型/部件）；单段流水线，
+   *  与 2D 转 3D 同构。 */
+  meshDecimate: async (projectId: string, sourceAssetId: string): Promise<GameMeshOpSubmitResult> =>
+    webRequest<GameMeshOpSubmitResult>(
+      METHOD.assetsMeshDecimate,
+      { project_id: projectId, source_asset_id: sourceAssetId },
+      { timeoutMs: GAME_MESH_OP_SUBMIT_TIMEOUT_MS }
+    ),
+  checkMeshDecimateStatus: async (
+    projectId: string,
+    placeholderAssetId: string,
+    jobId: string
+  ): Promise<GameMeshOpStatusResult> =>
+    webRequest<GameMeshOpStatusResult>(
+      METHOD.assetsMeshDecimateCheckStatus,
       { project_id: projectId, placeholder_asset_id: placeholderAssetId, job_id: jobId },
       { timeoutMs: GAME_DECOMPOSE_STATUS_TIMEOUT_MS }
     ),

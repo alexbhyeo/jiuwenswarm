@@ -20,6 +20,11 @@ from jiuwenswarm.server.runtime.game.game_item_decompose import (
     GameItemDecompose,
     GameItemDecomposeError,
 )
+from jiuwenswarm.server.runtime.game.game_item_mesh_ops import (
+    MESH_COMPLETE_STAGE_SEGMENT,
+    GameItemMeshOps,
+    GameItemMeshOpsError,
+)
 from jiuwenswarm.server.runtime.game.game_store import (
     GAME_ASSET_TYPES,
     GameAsset,
@@ -53,6 +58,7 @@ class GameManager:
         self._store = GameStore()
         self._bridge = GodotBridge()
         self._decompose = GameItemDecompose()
+        self._mesh_ops = GameItemMeshOps()
 
     # ------------------------------------------------------------------
     # 项目
@@ -400,6 +406,158 @@ class GameManager:
             file_path=status.model_file_path,
             status="ready",
             params={"source": "to_model"},
+            source_asset_id=source_asset_id,
+        )
+        project = self._store.append_asset(project.project_id, asset)
+        return {"project": project.to_dict(), "status": "success", "asset": asset.to_dict()}
+
+    # ------------------------------------------------------------------
+    # 网格补全 / 拓扑重构（Tripo3D mesh/complete、mesh/decimate；输入都是
+    # 一个已存在的 3D 模型素材，不是图片——与分解/2D 转 3D 的来源类目相反）
+    # ------------------------------------------------------------------
+    def _require_model_source(self, project: GameProject, source_asset_id: str, *, action: str) -> GameAsset:
+        if not source_asset_id:
+            raise GameRpcError("INVALID_PARAMS", "缺少 source_asset_id")
+        source = next((a for a in project.assets if a.asset_id == source_asset_id), None)
+        if source is None or source.type not in ("model", "model_part") or source.status != "ready" or not source.file_path:
+            raise GameRpcError("INVALID_PARAMS", f"{action}需要先选中一个已就绪的 3D 模型素材")
+        return source
+
+    async def handle_game_assets_mesh_complete(self, params: dict) -> dict:
+        """提交一次网格补全：源素材必须是已就绪的模型/部件素材。补全是两段式
+        流水线（先 mesh/segment 再 mesh/complete，见
+        ``game_item_mesh_ops.py`` 模块注释），占位素材的 params 里记着当前
+        处于哪一段（``stage``）与该段对应的 Tripo3D task_id，供 check_status
+        轮询时推进。
+        """
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        source_asset_id = str(params.get("source_asset_id") or "").strip()
+        source = self._require_model_source(project, source_asset_id, action="网格补全")
+
+        try:
+            task_id = await self._mesh_ops.submit_mesh_complete(source.file_path)
+        except GameItemMeshOpsError as exc:
+            raise GameRpcError(exc.code, str(exc)) from exc
+
+        placeholder = GameAsset(
+            asset_id=f"gasset_{secrets.token_hex(4)}",
+            type="model",
+            name=f"网格补全中…（来自 {source.name}）",
+            status="pending",
+            params={"source": "mesh_complete", "stage": MESH_COMPLETE_STAGE_SEGMENT, "job_id": task_id},
+            source_asset_id=source_asset_id,
+        )
+        project = self._store.append_asset(project.project_id, placeholder)
+        return {
+            "project": project.to_dict(),
+            "placeholder_asset_id": placeholder.asset_id,
+            "job_id": task_id,
+        }
+
+    async def handle_game_assets_mesh_complete_check_status(self, params: dict) -> dict:
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        placeholder_asset_id = str(params.get("placeholder_asset_id") or "").strip()
+        if not placeholder_asset_id:
+            raise GameRpcError("INVALID_PARAMS", "缺少 placeholder_asset_id")
+        placeholder = next((a for a in project.assets if a.asset_id == placeholder_asset_id), None)
+        if placeholder is None:
+            raise GameRpcError("ASSET_NOT_FOUND", f"未找到占位素材: {placeholder_asset_id}")
+        # 当前阶段/task_id 永远以占位素材自己持久化的 params 为准——不信
+        # 前端传回来的 job_id，这样即使服务在两段之间重启，也能从正确的
+        # 阶段继续轮询（见 game_item_mesh_ops.py 模块注释）。
+        stage = str(placeholder.params.get("stage") or MESH_COMPLETE_STAGE_SEGMENT)
+        task_id = str(placeholder.params.get("job_id") or "")
+        if not task_id:
+            raise GameRpcError("INVALID_PARAMS", "占位素材缺少 job_id")
+
+        save_dir = str(get_project_assets_dir(project.project_id))
+        status = await self._mesh_ops.poll_mesh_complete(task_id, stage, save_dir=save_dir)
+
+        if status.status == "pending":
+            if status.stage and status.task_id and (status.stage != stage or status.task_id != task_id):
+                project = self._store.update_asset(
+                    project.project_id,
+                    placeholder_asset_id,
+                    params={**placeholder.params, "stage": status.stage, "job_id": status.task_id},
+                )
+            return {"project": project.to_dict(), "status": "pending"}
+
+        source_asset_id = placeholder.source_asset_id
+        source_name = placeholder.name.removeprefix("网格补全中…（来自 ").removesuffix("）")
+        project = self._store.delete_asset(project.project_id, placeholder_asset_id)
+
+        if status.status == "failed":
+            return {"project": project.to_dict(), "status": "failed", "error": status.error}
+
+        asset = GameAsset(
+            asset_id=f"gasset_{secrets.token_hex(4)}",
+            type="model",
+            name=f"{source_name} · 网格补全" if source_name else "网格补全模型",
+            file_path=status.model_file_path,
+            status="ready",
+            params={"source": "mesh_complete"},
+            source_asset_id=source_asset_id,
+        )
+        project = self._store.append_asset(project.project_id, asset)
+        return {"project": project.to_dict(), "status": "success", "asset": asset.to_dict()}
+
+    async def handle_game_assets_mesh_decimate(self, params: dict) -> dict:
+        """提交一次拓扑重构：单段流水线，与 2D 转 3D 同构（见
+        ``game_item_mesh_ops.submit_mesh_decimate``）。"""
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        source_asset_id = str(params.get("source_asset_id") or "").strip()
+        source = self._require_model_source(project, source_asset_id, action="拓扑重构")
+
+        try:
+            task_id = await self._mesh_ops.submit_mesh_decimate(source.file_path)
+        except GameItemMeshOpsError as exc:
+            raise GameRpcError(exc.code, str(exc)) from exc
+
+        placeholder = GameAsset(
+            asset_id=f"gasset_{secrets.token_hex(4)}",
+            type="model",
+            name=f"拓扑重构中…（来自 {source.name}）",
+            status="pending",
+            params={"source": "mesh_decimate", "job_id": task_id},
+            source_asset_id=source_asset_id,
+        )
+        project = self._store.append_asset(project.project_id, placeholder)
+        return {
+            "project": project.to_dict(),
+            "placeholder_asset_id": placeholder.asset_id,
+            "job_id": task_id,
+        }
+
+    async def handle_game_assets_mesh_decimate_check_status(self, params: dict) -> dict:
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        placeholder_asset_id = str(params.get("placeholder_asset_id") or "").strip()
+        job_id = str(params.get("job_id") or "").strip()
+        if not (placeholder_asset_id and job_id):
+            raise GameRpcError("INVALID_PARAMS", "缺少 placeholder_asset_id / job_id")
+
+        save_dir = str(get_project_assets_dir(project.project_id))
+        status = await self._mesh_ops.poll_mesh_decimate(job_id, save_dir=save_dir)
+
+        if status.status == "pending":
+            return {"project": project.to_dict(), "status": "pending"}
+
+        source = next((a for a in project.assets if a.asset_id == placeholder_asset_id), None)
+        source_asset_id = source.source_asset_id if source else None
+        source_name = (
+            source.name.removeprefix("拓扑重构中…（来自 ").removesuffix("）") if source else ""
+        )
+        project = self._store.delete_asset(project.project_id, placeholder_asset_id)
+
+        if status.status == "failed":
+            return {"project": project.to_dict(), "status": "failed", "error": status.error}
+
+        asset = GameAsset(
+            asset_id=f"gasset_{secrets.token_hex(4)}",
+            type="model",
+            name=f"{source_name} · 拓扑重构" if source_name else "拓扑重构模型",
+            file_path=status.model_file_path,
+            status="ready",
+            params={"source": "mesh_decimate"},
             source_asset_id=source_asset_id,
         )
         project = self._store.append_asset(project.project_id, asset)

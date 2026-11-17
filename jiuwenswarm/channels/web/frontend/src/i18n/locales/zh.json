@@ -7048,9 +7048,12 @@
     },
     "lab": {
       "imageGroup": "图片处理",
+      "modelGroup": "模型处理",
       "process": {
         "decompose": "分解图",
-        "toModel": "2D转3D"
+        "toModel": "2D转3D",
+        "meshComplete": "网格补全",
+        "meshDecimate": "拓扑重构"
       },
       "decompose": {
         "title": "素材分解",
@@ -7073,6 +7076,24 @@
         "statusRunning": "转换中…",
         "statusSuccess": "已生成 3D 模型，可在创作面板「3D 模型」里查看",
         "statusFailedGeneric": "转换失败"
+      },
+      "meshComplete": {
+        "title": "网格补全",
+        "sourceConnected": "源模型：{{name}}",
+        "sourceMissing": "请从左侧连一个 3D 模型",
+        "action": "补全",
+        "statusRunning": "补全中…",
+        "statusSuccess": "已生成补全模型，可在创作面板「3D 模型」里查看",
+        "statusFailedGeneric": "补全失败"
+      },
+      "meshDecimate": {
+        "title": "拓扑重构",
+        "sourceConnected": "源模型：{{name}}",
+        "sourceMissing": "请从左侧连一个 3D 模型",
+        "action": "重构",
+        "statusRunning": "重构中…",
+        "statusSuccess": "已生成重构模型，可在创作面板「3D 模型」里查看",
+        "statusFailedGeneric": "重构失败"
       }
     }
   }
