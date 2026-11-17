@@ -1,9 +1,11 @@
+import '@google/model-viewer';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useGameLabActions } from '../GameLabActionsContext';
 import type { GameModelPartNodeData } from '../labTypes';
 import { rawFileUrl } from './gameRawFileUrl';
+import { ModelViewerModal } from './ModelViewerModal';
 
 const trashIcon = (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -17,24 +19,31 @@ const downloadIcon = (
   </svg>
 );
 
-/** 分解产出的一个 3D 部件——本次没有交互式 3D 预览（见设计 9.2 已知
- *  限制），只给一个通用模型图标占位 + 下载/重命名/删除。 */
+/** 分解产出的一个 3D 部件：缩略图直接用 <model-viewer> 渲染模型本身（见
+ *  modelViewerJsx.d.ts 的类型声明），点击弹出可拖拽旋转查看的大图
+ *  （ModelViewerModal）+ 下载/重命名/删除。 */
 export function GameModelPartNode({ id, data }: NodeProps & { data: GameModelPartNodeData }) {
   const { t } = useTranslation();
   const actions = useGameLabActions();
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState(data.name);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const modelUrl = rawFileUrl(data.filePath);
 
   return (
     <div className="game-lab-node game-lab-node--model-part" data-testid="game-workshop-lab-model-part-node">
       <Handle type="target" position={Position.Left} id="in" />
       <div className="game-lab-node-media game-lab-node-media--model">
-        <span className="game-lab-node-model-icon" aria-hidden>
-          3D
-        </span>
+        <model-viewer
+          src={modelUrl}
+          alt={data.name}
+          className="nodrag game-lab-node-model-thumb"
+          onClick={() => setViewerOpen(true)}
+          data-testid="game-workshop-lab-model-part-node-thumb"
+        />
         <div className="game-lab-node-media-actions">
           <a
-            href={rawFileUrl(data.filePath)}
+            href={modelUrl}
             download
             title={t('common.download')}
             data-testid="game-workshop-lab-model-part-node-download"
@@ -75,6 +84,7 @@ export function GameModelPartNode({ id, data }: NodeProps & { data: GameModelPar
           {data.name}
         </div>
       )}
+      {viewerOpen && <ModelViewerModal src={modelUrl} alt={data.name} onClose={() => setViewerOpen(false)} />}
     </div>
   );
 }
