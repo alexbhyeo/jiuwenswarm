@@ -8,7 +8,7 @@
  * 只展示分解流水线按批次产出的 model_part，按批删除。
  */
 import '@google/model-viewer';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { gameApi, type GameAsset, type GameBridgeStatus, type GameProject } from './gameApi';
 import { GameNewProjectDialog } from './GameNewProjectDialog';
@@ -109,6 +109,62 @@ const downloadIcon = (
     <path d="M12 3v12m0 0-4-4m4 4 4-4M4 19h16" />
   </svg>
 );
+
+const enlargeIcon = (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3" />
+  </svg>
+);
+
+/** 下载时的建议文件名——跟导演模式 downloadFileName 同一个取舍：用素材名
+ *  当主文件名，后缀照抄磁盘上那份文件自己的后缀。 */
+function downloadFileName(asset: GameAsset, fallback: string): string {
+  const base = (asset.name || fallback).trim() || fallback;
+  const match = /\.[a-zA-Z0-9]+$/.exec(asset.file_path ?? '');
+  return match ? `${base}${match[0]}` : base;
+}
+
+interface EnlargeableImageProps {
+  src: string;
+  alt: string;
+  downloadFileName: string;
+}
+
+/** 图片缩略图右下角"放大"+左下角"下载"——与导演模式 DirectorRail 的
+ *  EnlargeableImage 同一个取舍：放大调浏览器原生 Fullscreen API，不是
+ *  自建 lightbox；下载按钮补一个原生 <img> 没有的显式入口。 */
+function GameEnlargeableImage({ src, alt, downloadFileName }: EnlargeableImageProps) {
+  const { t } = useTranslation();
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  return (
+    <>
+      <img ref={imgRef} src={src} alt={alt} />
+      <a
+        href={src}
+        download={downloadFileName}
+        className="game-rail-asset-download-btn"
+        title={t('common.download')}
+        onClick={(e) => e.stopPropagation()}
+        data-testid="game-workshop-rail-asset-image-download"
+      >
+        {downloadIcon}
+      </a>
+      <button
+        type="button"
+        className="game-rail-asset-enlarge-btn"
+        title={t('gameWorkshop.rail.enlargeAction')}
+        onClick={(e) => {
+          e.stopPropagation();
+          imgRef.current?.requestFullscreen?.();
+        }}
+        data-testid="game-workshop-rail-asset-image-enlarge"
+      >
+        {enlargeIcon}
+      </button>
+    </>
+  );
+}
 
 const ASSET_CATEGORIES: { key: AssetCategory; labelKey: string; icon: JSX.Element }[] = [
   { key: 'character', labelKey: 'gameWorkshop.rail.categoryCharacter', icon: characterIcon },
@@ -393,7 +449,13 @@ export function GameRail({
                               <div className="game-rail-asset-pending">{asset.status}</div>
                             )
                           ) : asset.file_path ? (
-                            <img src={rawFileUrl(asset.file_path)} alt={asset.name} />
+                            <div className="game-rail-asset-thumb">
+                              <GameEnlargeableImage
+                                src={rawFileUrl(asset.file_path)}
+                                alt={asset.name}
+                                downloadFileName={downloadFileName(asset, t(c.labelKey))}
+                              />
+                            </div>
                           ) : (
                             <div className="game-rail-asset-pending">{asset.status}</div>
                           )}

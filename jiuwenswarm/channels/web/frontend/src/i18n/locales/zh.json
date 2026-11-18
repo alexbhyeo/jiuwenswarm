@@ -7026,6 +7026,7 @@
       "renamePlaceholder": "名称（不含空格）",
       "deleteAction": "删除",
       "deleteConfirm": "确定要删除「{{name}}」吗？此操作无法撤销。",
+      "enlargeAction": "放大",
       "scaffoldButton": "生成/修复工程脚手架",
       "scaffoldSuccess": "已补充文件：{{files}}",
       "scaffoldComplete": "工程结构已完整",

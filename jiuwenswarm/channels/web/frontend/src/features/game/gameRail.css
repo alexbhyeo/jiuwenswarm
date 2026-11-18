@@ -316,6 +316,47 @@
   background: var(--color-surface-muted, #f3f4f6);
 }
 
+/* 角色/世界图片素材缩略图的定位锚点——只包住图片本身（不含下面的名称
+   文字），放大/下载按钮才能稳定地贴在图片的右下/左下角，不会因为名称
+   文字换行长短不一而跟着挪位置。 */
+.game-rail-asset-thumb {
+  position: relative;
+}
+
+/* 跟导演模式 DirectorRail 的 .director-asset-enlarge-btn/
+   .director-asset-download-btn 同一个取舍（放大用浏览器原生 Fullscreen
+   API，下载补一个 <img> 没有的显式入口），样式照抄（右下角放大、左下角
+   下载，常驻可见，不是 hover 才出现）。 */
+.game-rail-asset-enlarge-btn,
+.game-rail-asset-download-btn {
+  position: absolute;
+  bottom: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.game-rail-asset-enlarge-btn {
+  right: 6px;
+}
+
+.game-rail-asset-download-btn {
+  left: 6px;
+}
+
+.game-rail-asset-enlarge-btn:hover,
+.game-rail-asset-download-btn:hover {
+  background: rgba(0, 0, 0, 0.75);
+}
+
 .game-rail-asset-pending {
   width: 100%;
   aspect-ratio: 1 / 1;

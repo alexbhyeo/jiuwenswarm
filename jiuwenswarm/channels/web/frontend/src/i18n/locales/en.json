@@ -7029,6 +7029,7 @@
       "renamePlaceholder": "Name (no spaces)",
       "deleteAction": "Delete",
       "deleteConfirm": "Delete \"{{name}}\"? This can't be undone.",
+      "enlargeAction": "Enlarge",
       "scaffoldButton": "Generate/repair project scaffold",
       "scaffoldSuccess": "Files added: {{files}}",
       "scaffoldComplete": "Project structure is already complete",
