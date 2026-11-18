@@ -7049,6 +7049,7 @@
     "lab": {
       "imageGroup": "图片处理",
       "modelGroup": "模型处理",
+      "resumeLostError": "页面刷新或重新打开后丢失了提交进度，请重新提交",
       "process": {
         "decompose": "分解图",
         "toModel": "2D转3D",

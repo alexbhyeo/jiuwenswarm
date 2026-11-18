@@ -7052,6 +7052,7 @@
     "lab": {
       "imageGroup": "Image processing",
       "modelGroup": "Model processing",
+      "resumeLostError": "Lost track of this submission after a reload — please submit again",
       "process": {
         "decompose": "Decompose",
         "toModel": "2D to 3D",

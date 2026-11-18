@@ -336,17 +336,39 @@
   white-space: nowrap;
 }
 
-.game-rail-model-icon {
+/* <model-viewer> 不认 CSS class 上的 width/height（实测它按自己的默认
+   300x150 内在尺寸渲染，完全无视 .game-rail-model-thumb 这个 class 上的
+   width:100%/aspect-ratio，把相邻网格项的点击区域都盖住了）——跟
+   GameModelPartNode.tsx/ModelViewerModal.tsx 同一个取舍：套一层有明确
+   像素宽高的容器，<model-viewer> 本身只认内联 style 的 100%/100%。 */
+.game-rail-model-thumb-wrap {
   width: 100%;
   aspect-ratio: 1 / 1;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--color-surface-muted, #f3f4f6);
+  --poster-color: transparent;
+}
+
+.game-rail-model-download-btn {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 20px;
+  height: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
-  background: var(--color-surface-muted, #f3f4f6);
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--color-text-secondary, #6b7280);
+  border-radius: 6px;
+  border: none;
+  background: var(--color-overlay, rgba(0, 0, 0, 0.5));
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.game-rail-asset-item:hover .game-rail-model-download-btn {
+  opacity: 1;
 }
 
 /* ---------- 分解产物（按批次分组，归在"分解产物"分类展开区内） ---------- */

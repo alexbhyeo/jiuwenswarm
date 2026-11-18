@@ -471,6 +471,56 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
     [nodes, edges, onProjectUpdate, patchMeshOpNode, pollMeshDecimate]
   );
 
+  // 画布从持久化快照挂载时，任何还停在 "pending" 的处理卡片轮询循环早就
+  // 随上一次页面会话一起没了——setTimeout 链是纯内存状态，刷新/重新打开
+  // 项目不会恢复它，卡片就会永远显示"提交中…/xx中…"，即使后端那边任务
+  // 其实已经跑完（成功或失败）。这里在挂载时扫一遍初始快照，把还带着
+  // placeholderAssetId/jobId 的 "pending" 卡片重新接上轮询——check_status
+  // 这几个 RPC 都是用 job_id 直接查 Tripo3D，占位素材在后端是否还在都无
+  // 所谓（mesh_decimate_check_status 甚至不要求占位素材还存在），所以能
+  // 安全地在任意时刻重新开始轮询。"submitting" 状态的卡片没法恢复——
+  // submit 请求本身是否真的到达后端、后端是否已经建好占位素材，前端全都
+  // 无从得知，与其让它永远卡在"提交中…"，不如直接判失败，用户可以重新
+  // 点一次提交。
+  useEffect(() => {
+    initial.nodes.forEach((node) => {
+      const data = node.data as
+        | (GameDecomposeNodeData & { status?: string })
+        | (GameToModelNodeData & { status?: string })
+        | (GameMeshOpNodeData & { status?: string })
+        | undefined;
+      if (!data || typeof data.status !== 'string') return;
+
+      if (data.status === 'pending') {
+        if (node.type === 'decompose') {
+          const d = data as GameDecomposeNodeData;
+          if (d.placeholderAssetId && d.jobId && d.decomposeBatchId) {
+            pollDecompose(node.id, d.placeholderAssetId, d.jobId, d.decomposeBatchId);
+          }
+        } else if (node.type === 'to_model') {
+          const d = data as GameToModelNodeData;
+          if (d.placeholderAssetId && d.jobId) pollToModel(node.id, d.placeholderAssetId, d.jobId);
+        } else if (node.type === 'mesh_complete') {
+          const d = data as GameMeshOpNodeData;
+          if (d.placeholderAssetId && d.jobId) pollMeshComplete(node.id, d.placeholderAssetId, d.jobId);
+        } else if (node.type === 'mesh_decimate') {
+          const d = data as GameMeshOpNodeData;
+          if (d.placeholderAssetId && d.jobId) pollMeshDecimate(node.id, d.placeholderAssetId, d.jobId);
+        }
+      } else if (data.status === 'submitting') {
+        const error = t('gameWorkshop.lab.resumeLostError');
+        if (node.type === 'decompose') patchDecomposeNode(node.id, { status: 'failed', error });
+        else if (node.type === 'to_model') patchToModelNode(node.id, { status: 'failed', error });
+        else if (node.type === 'mesh_complete' || node.type === 'mesh_decimate') {
+          patchMeshOpNode(node.id, { status: 'failed', error });
+        }
+      }
+    });
+    // 只在挂载时跑一次：initial.nodes 是挂载时的快照（见顶部 useRef），
+    // 不应该随 nodes 状态变化反复"恢复"。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const onDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';

@@ -7,12 +7,14 @@
  * 组件，直接把生成表单放进对应分类的展开区）。分解产物没有生成表单，
  * 只展示分解流水线按批次产出的 model_part，按批删除。
  */
+import '@google/model-viewer';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { gameApi, type GameAsset, type GameBridgeStatus, type GameProject } from './gameApi';
 import { GameNewProjectDialog } from './GameNewProjectDialog';
 import { GAME_ASSET_DRAG_MIME, type GameAssetDragPayload } from './lab/labTypes';
 import { rawFileUrl } from './lab/nodes/gameRawFileUrl';
+import { ModelViewerModal } from './lab/nodes/ModelViewerModal';
 import './gameRail.css';
 
 type AssetCategory = 'character' | 'world' | 'video';
@@ -99,6 +101,12 @@ const trashIcon = (
   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
     <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0-.9 14a2 2 0 0 1-2 1.9H6.9a2 2 0 0 1-2-1.9L4 6" />
     <path d="M10 11v6M14 11v6" />
+  </svg>
+);
+
+const downloadIcon = (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3v12m0 0-4-4m4 4 4-4M4 19h16" />
   </svg>
 );
 
@@ -208,6 +216,10 @@ export function GameRail({
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState<ExpandedSection>('character');
   const [newProjectDialogOpen, setNewProjectDialogOpen] = useState(false);
+  // 分解产物/3D 模型两个分类网格共用同一个弹窗——同一时间只会有一个在看，
+  // 不需要给每个卡片各开一份状态（镜像 GameModelPartNode.tsx 的用法，只是
+  // 那边一个节点一份、这里一整个 rail 共用一份）。
+  const [viewerAsset, setViewerAsset] = useState<{ src: string; alt: string } | null>(null);
 
   const assetsByCategory = useMemo(() => {
     const assets = selectedProject?.assets ?? [];
@@ -434,11 +446,28 @@ export function GameRail({
                             data-testid="game-workshop-rail-model-part-item"
                             data-variant={part.asset_id}
                           >
-                            <a href={part.file_path ? rawFileUrl(part.file_path) : undefined} download>
-                              <div className="game-rail-model-icon" aria-hidden>
-                                3D
-                              </div>
-                            </a>
+                            <div className="game-rail-model-thumb-wrap">
+                              <model-viewer
+                                src={part.file_path ? rawFileUrl(part.file_path) : undefined}
+                                alt={part.name}
+                                style={{ width: '100%', height: '100%', cursor: 'pointer' }}
+                                onClick={() =>
+                                  part.file_path &&
+                                  setViewerAsset({ src: rawFileUrl(part.file_path), alt: part.name })
+                                }
+                                data-testid="game-workshop-rail-model-part-thumb"
+                              />
+                            </div>
+                            {part.file_path && (
+                              <a
+                                className="game-rail-model-download-btn"
+                                href={rawFileUrl(part.file_path)}
+                                download
+                                title={t('common.download')}
+                              >
+                                {downloadIcon}
+                              </a>
+                            )}
                             <div className="game-rail-asset-name">{part.name}</div>
                           </div>
                         ))}
@@ -490,12 +519,29 @@ export function GameRail({
                         data-testid="game-workshop-rail-model-item"
                         data-variant={asset.asset_id}
                       >
-                        <a href={asset.file_path ? rawFileUrl(asset.file_path) : undefined} download>
-                          <div className="game-rail-model-icon" aria-hidden>
-                            3D
-                          </div>
-                        </a>
+                        <div className="game-rail-model-thumb-wrap">
+                          <model-viewer
+                            src={asset.file_path ? rawFileUrl(asset.file_path) : undefined}
+                            alt={asset.name}
+                            style={{ width: '100%', height: '100%', cursor: 'pointer' }}
+                            onClick={() =>
+                              asset.file_path &&
+                              setViewerAsset({ src: rawFileUrl(asset.file_path), alt: asset.name })
+                            }
+                            data-testid="game-workshop-rail-model-thumb"
+                          />
+                        </div>
                         <div className="game-rail-asset-name">{asset.name}</div>
+                        {asset.file_path && (
+                          <a
+                            className="game-rail-model-download-btn"
+                            href={rawFileUrl(asset.file_path)}
+                            download
+                            title={t('common.download')}
+                          >
+                            {downloadIcon}
+                          </a>
+                        )}
                         <button
                           type="button"
                           className="game-rail-model-delete-btn"
@@ -513,6 +559,9 @@ export function GameRail({
             </div>
           </div>
         </>
+      )}
+      {viewerAsset && (
+        <ModelViewerModal src={viewerAsset.src} alt={viewerAsset.alt} onClose={() => setViewerAsset(null)} />
       )}
     </div>
   );
