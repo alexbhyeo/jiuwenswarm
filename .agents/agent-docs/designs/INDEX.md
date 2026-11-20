@@ -17,6 +17,9 @@ generated: true
 | [agent_teams](#module-agent_teams) |
 | [agent_teams/workflow](#module-agent_teams-workflow) |
 | [docs](#module-docs) |
+| [jiuwenbox/src/jiuwenbox/models](#module-jiuwenbox-src-jiuwenbox-models) |
+| [jiuwenbox/src/jiuwenbox/server/runtime](#module-jiuwenbox-src-jiuwenbox-server-runtime) |
+| [jiuwenbox/src/jiuwenbox/supervisor](#module-jiuwenbox-src-jiuwenbox-supervisor) |
 | [jiuwenswarm](#module-jiuwenswarm) |
 | [jiuwenswarm/agents/harness/common](#module-jiuwenswarm-agents-harness-common) |
 | [jiuwenswarm/channels/web/frontend](#module-jiuwenswarm-channels-web-frontend) |
@@ -64,6 +67,37 @@ generated: true
 | ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
 |---|---|---|---|---|---|
 | [D-20261104-1141-npc-team-member-sessions](active/D-20261104-1141-npc-team-member-sessions/design.md) | NPC 主从会话与按需搜索工具 | in-development | kdgmpw | harness | 2026-11-04 |
+
+<a id="module-jiuwenbox-src-jiuwenbox-models"></a>
+
+## jiuwenbox/src/jiuwenbox/models
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261119-1518-microvm-guest-agent-protocol](proposals/D-20261119-1518-microvm-guest-agent-protocol/design.md) | 跨平台 per-session microVM：守护进程协议与运行时适配 | draft | alexbhyeo | jiuwenbox | 2026-11-19 |
+
+<a id="module-jiuwenbox-src-jiuwenbox-server-runtime"></a>
+
+## jiuwenbox/src/jiuwenbox/server/runtime
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261119-1518-microvm-guest-agent-protocol](proposals/D-20261119-1518-microvm-guest-agent-protocol/design.md) | 跨平台 per-session microVM：守护进程协议与运行时适配 | draft | alexbhyeo | jiuwenbox | 2026-11-19 |
+| [D-20261120-1025-mxc-process-isolation](proposals/D-20261120-1025-mxc-process-isolation/design.md) | 用 MXC 做跨平台 per-session 进程级隔离 | draft | alexbhyeo | jiuwenbox | 2026-11-20 |
+
+<a id="module-jiuwenbox-src-jiuwenbox-supervisor"></a>
+
+## jiuwenbox/src/jiuwenbox/supervisor
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261119-1518-microvm-guest-agent-protocol](proposals/D-20261119-1518-microvm-guest-agent-protocol/design.md) | 跨平台 per-session microVM：守护进程协议与运行时适配 | draft | alexbhyeo | jiuwenbox | 2026-11-19 |
 
 <a id="module-jiuwenswarm"></a>
 

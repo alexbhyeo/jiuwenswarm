@@ -14,6 +14,7 @@ generated: true
 
 | 模块 |
 |---|
+| [.agents/agent-docs/designs/proposals/D-20261120-1025-mxc-process-isolation/spike](#module-agents-agent-docs-designs-proposals-D-20261120-1025-mxc-process-isolation-spike) |
 | [agent_gateway/channel_manager/im_platforms/xiaoyi](#module-agent_gateway-channel_manager-im_platforms-xiaoyi) |
 | [agent_gateway/message_handler](#module-agent_gateway-message_handler) |
 | [agent_teams](#module-agent_teams) |
@@ -21,6 +22,10 @@ generated: true
 | [deploy/yuanrong](#module-deploy-yuanrong) |
 | [docs](#module-docs) |
 | [gateway/channel_manager/web](#module-gateway-channel_manager-web) |
+| [jiuwenbox/src/jiuwenbox/models](#module-jiuwenbox-src-jiuwenbox-models) |
+| [jiuwenbox/src/jiuwenbox/server](#module-jiuwenbox-src-jiuwenbox-server) |
+| [jiuwenbox/src/jiuwenbox/server/runtime](#module-jiuwenbox-src-jiuwenbox-server-runtime) |
+| [jiuwenbox/src/jiuwenbox/supervisor](#module-jiuwenbox-src-jiuwenbox-supervisor) |
 | [jiuwenswarm](#module-jiuwenswarm) |
 | [jiuwenswarm/agents/harness](#module-jiuwenswarm-agents-harness) |
 | [jiuwenswarm/agents/harness/code/rails/heartbeat](#module-jiuwenswarm-agents-harness-code-rails-heartbeat) |
@@ -74,6 +79,14 @@ generated: true
 | [tests/unit_tests/server](#module-tests-unit_tests-server) |
 | [tests/unit_tests/server/extensions](#module-tests-unit_tests-server-extensions) |
 | [未分类](#module-unclassified) |
+
+<a id="module-agents-agent-docs-designs-proposals-D-20261120-1025-mxc-process-isolation-spike"></a>
+
+## .agents/agent-docs/designs/proposals/D-20261120-1025-mxc-process-isolation/spike
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [F_20261120_1107_mxc-process-isolation-spike](features/F_20261120_1107_mxc-process-isolation-spike.md) | F | MXC per-session 隔离验证 spike——实施记录 | alexbhyeo | [D-20261120-1025-mxc-process-isolation](designs/proposals/D-20261120-1025-mxc-process-isolation/design.md) |
 
 <a id="module-agent_gateway-channel_manager-im_platforms-xiaoyi"></a>
 
@@ -135,6 +148,41 @@ generated: true
 | [F_20261031_1139_gateway-session-e2a](features/F_20261031_1139_gateway-session-e2a.md) | F | Web 会话管理统一经 E2A 交由 Server 执行 | ruiqiang2 | 无独立 D：用户确认的 Gateway 解耦任务 4.1，沿用 develop 个人版现有链路，无独立设计编号。 |
 | [B_20261102_1644_cron-web-default-project-id](bugfix/gateway/channel_manager/B_20261102_1644_cron-web-default-project-id.md) | B | 前端未选项目创建定时任务落库 project_id 回退为空串 | kdgmpw | 无独立 D：恢复 4b00671f6（#5713）已实现的行为，属于对该修复在企业版合入后被回退的局部回归修复，无独立设计。 |
 | [S_02_app-role-npc-team](specs/jiuwenswarm/server/runtime/agent_adapter/S_02_app-role-npc-team.md) | S | app_role 的团队 NPC 与轻量咨询契约 | kdgmpw | — |
+
+<a id="module-jiuwenbox-src-jiuwenbox-models"></a>
+
+## jiuwenbox/src/jiuwenbox/models
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [D-20261119-1518-microvm-guest-agent-protocol](designs/proposals/D-20261119-1518-microvm-guest-agent-protocol/design.md) | D | 跨平台 per-session microVM：守护进程协议与运行时适配 | alexbhyeo | — |
+
+<a id="module-jiuwenbox-src-jiuwenbox-server"></a>
+
+## jiuwenbox/src/jiuwenbox/server
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [F_20261120_1453_mxc-jiuwenswarm-frontend-e2e](features/F_20261120_1453_mxc-jiuwenswarm-frontend-e2e.md) | F | MXC 接入 jiuwenbox 并从 jiuwenswarm 真实前端驱动——实施与验证记录 | alexbhyeo | [D-20261120-1025-mxc-process-isolation](designs/proposals/D-20261120-1025-mxc-process-isolation/design.md) |
+
+<a id="module-jiuwenbox-src-jiuwenbox-server-runtime"></a>
+
+## jiuwenbox/src/jiuwenbox/server/runtime
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [D-20261119-1518-microvm-guest-agent-protocol](designs/proposals/D-20261119-1518-microvm-guest-agent-protocol/design.md) | D | 跨平台 per-session microVM：守护进程协议与运行时适配 | alexbhyeo | — |
+| [D-20261120-1025-mxc-process-isolation](designs/proposals/D-20261120-1025-mxc-process-isolation/design.md) | D | 用 MXC 做跨平台 per-session 进程级隔离 | alexbhyeo | — |
+| [F_20261120_1453_mxc-jiuwenswarm-frontend-e2e](features/F_20261120_1453_mxc-jiuwenswarm-frontend-e2e.md) | F | MXC 接入 jiuwenbox 并从 jiuwenswarm 真实前端驱动——实施与验证记录 | alexbhyeo | [D-20261120-1025-mxc-process-isolation](designs/proposals/D-20261120-1025-mxc-process-isolation/design.md) |
+
+<a id="module-jiuwenbox-src-jiuwenbox-supervisor"></a>
+
+## jiuwenbox/src/jiuwenbox/supervisor
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [D-20261119-1518-microvm-guest-agent-protocol](designs/proposals/D-20261119-1518-microvm-guest-agent-protocol/design.md) | D | 跨平台 per-session microVM：守护进程协议与运行时适配 | alexbhyeo | — |
+| [F_20261120_1453_mxc-jiuwenswarm-frontend-e2e](features/F_20261120_1453_mxc-jiuwenswarm-frontend-e2e.md) | F | MXC 接入 jiuwenbox 并从 jiuwenswarm 真实前端驱动——实施与验证记录 | alexbhyeo | [D-20261120-1025-mxc-process-isolation](designs/proposals/D-20261120-1025-mxc-process-isolation/design.md) |
 
 <a id="module-jiuwenswarm"></a>
 
@@ -224,6 +272,7 @@ generated: true
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
 | [B_20261114_1302_terminal-metrics-and-model-errors](bugfix/jiuwenswarm/agents/harness/common/rsi/B_20261114_1302_terminal-metrics-and-model-errors.md) | B | RSI 终态统计、侧栏运行态和论文模型错误修复 | l_x_d | 无独立 D：按用户确认修复现有行为及 Issue 6558、6539、6532，无独立设计。 |
+| [B_20261119_1104_paper-snapshot-restart](bugfix/jiuwenswarm/agents/harness/common/rsi/B_20261119_1104_paper-snapshot-restart.md) | B | 论文优化历史快照的重启恢复 | l_x_d | 无独立 D：按确认的重启恢复用例修复既有行为，无独立设计。 |
 | [S_01_observation-projection](specs/jiuwenswarm/agents/harness/common/rsi/S_01_observation-projection.md) | S | RSI 进度、报告与前端终态投影 | l_x_d | — |
 
 <a id="module-jiuwenswarm-agents-harness-common-tools"></a>
@@ -390,6 +439,7 @@ generated: true
 | [F_20261110_1438_opencode-go-provider](features/F_20261110_1438_opencode-go-provider.md) | F | 新增 opencode-go 模型供应商 | wang_njust_608 | 无独立 D：需求与方案由本地 Spec Kit 资产 specs/001-opencode-go-provider/ 承载（spec/plan/tasks，仅本地保留、不入库），未另建 .agents/agent-docs 下的 D 编号；上游供应商预设归 agent-gateway 仓。 |
 | [F_20261110_2026_affinity-settings](features/F_20261110_2026_affinity-settings.md) | F | 实验功能算力亲和开关与自定义模型能力接入 | MengHan18 | 无独立 D：外部初始方案为 docs_HM_kvc/E前端开关打开/01 和 02；全局准入和交互按用户确认的 04 小白版文档替代，无仓库内 D 标识。 |
 | [F_20261111_1528_unified-observability-config](features/F_20261111_1528_unified-observability-config.md) | F | Team 与单 Agent 可观测性配置统一为 observability 段 | alan_cheng | 无独立 D：用户在会话中确认的配置收敛改动，无独立设计编号。 |
+| [F_20261120_1453_mxc-jiuwenswarm-frontend-e2e](features/F_20261120_1453_mxc-jiuwenswarm-frontend-e2e.md) | F | MXC 接入 jiuwenbox 并从 jiuwenswarm 真实前端驱动——实施与验证记录 | alexbhyeo | [D-20261120-1025-mxc-process-isolation](designs/proposals/D-20261120-1025-mxc-process-isolation/design.md) |
 | [B_20261103_1636_builtin-catalog-upgrade](bugfix/jiuwenswarm/server/runtime/skill/builtin-catalog-upgrade.md) | B | 旧内置技能未归一与应用市场入口不明显 | kdgmpw | [D-20261103-1123-builtin-skill-catalog](designs/active/D-20261103-1123-builtin-skill-catalog/design.md) |
 | [B_20261112_1716_affinity-status-read](bugfix/jiuwenswarm/server/control/B_20261112_1716_affinity-status-read.md) | B | 控制面遗漏亲和状态导致开关与说明不一致 | MengHan18 | 无独立 D：修复 F_20261110_2026_affinity-settings 的读入口遗漏及用户反馈的开启交互。 |
 | [B_20261112_2025_permission-profile-refresh](bugfix/jiuwenswarm/server/B_20261112_2025_permission-profile-refresh.md) | B | 刷新后智能审批档位错误回显为默认权限 | nypdmax | 无独立 D：补齐既有 config.get/config.set 权限档位回显契约，无独立设计；审批决策与持久化格式不变。 |
@@ -571,6 +621,7 @@ generated: true
 | [F_20261103_1501_app-role-session](features/app-role-session.md) | F | 保留基础系统提示的轻量 NPC 会话 | kdgmpw | [D-20261103-1444-app-role-session](designs/active/D-20261103-1444-app-role-session/design.md) |
 | [F_20261104_1225_npc-team-member-sessions](features/F_20261104_1225_npc-team-member-sessions.md) | F | NPC 主从会话与成员咨询 | kdgmpw | [D-20261104-1141-npc-team-member-sessions](designs/active/D-20261104-1141-npc-team-member-sessions/design.md) |
 | [F_20261110_1438_opencode-go-provider](features/F_20261110_1438_opencode-go-provider.md) | F | 新增 opencode-go 模型供应商 | wang_njust_608 | 无独立 D：需求与方案由本地 Spec Kit 资产 specs/001-opencode-go-provider/ 承载（spec/plan/tasks，仅本地保留、不入库），未另建 .agents/agent-docs 下的 D 编号；上游供应商预设归 agent-gateway 仓。 |
+| [F_20261120_1453_mxc-jiuwenswarm-frontend-e2e](features/F_20261120_1453_mxc-jiuwenswarm-frontend-e2e.md) | F | MXC 接入 jiuwenbox 并从 jiuwenswarm 真实前端驱动——实施与验证记录 | alexbhyeo | [D-20261120-1025-mxc-process-isolation](designs/proposals/D-20261120-1025-mxc-process-isolation/design.md) |
 | [B_20261031_0946_ttse-codecheck-boundaries](bugfix/jiuwenswarm/B_20261031_0946_ttse-codecheck-boundaries.md) | B | TTSE 相关 CodeCheck 受保护访问与关闭条件复杂度修复 | xinyang_bali | 无独立 D：按用户提供的 20 项 CodeCheck 清单修复实现边界，沿用当前 TTSE 通用运行契约，无独立 D。 |
 | [B_20261031_1042_pr9317-review](bugfix/jiuwenswarm/server/B_20261031_1042_pr9317-review.md) | B | PR 9317 插件模式校验与 Front 遗留启动链清理 | xinyang_bali | 无独立 D：根据 openJiuwen-bot 检视意见清理现有实现，不引入新接口或架构方案，无独立 D。 |
 | [B_20261031_1053_atomgit-review](bugfix/jiuwenswarm/server/B_20261031_1053_atomgit-review.md) | B | PR 9317 AtomGit 取消、补丁兼容与注销恢复修复 | xinyang_bali | 无独立 D：根据机器人检视修复现有资源生命周期和可选补丁边界，不引入独立方案。 |
@@ -702,6 +753,7 @@ generated: true
 |---|---|---|---|---|
 | [README](designs/README.md) | D | 设计资产 | 待确认 | — |
 | [REGISTRY](designs/REGISTRY.md) | D | SDD 编号台账 (REGISTRY) | 待确认 | — |
+| [architecture](designs/proposals/D-20261120-1025-mxc-process-isolation/architecture.md) | D | MXC per-session 隔离——架构图与流程图 | alexbhyeo | — |
 | [legacy-documents](designs/legacy-documents.md) | D | 旧格式设计资料 | 待确认 | — |
 | [migration-20261026](designs/migration-20261026.md) | D | 设计文档迁移与跨仓引用 | 待确认 | — |
 | [team_expert_group_manifest_design](designs/archive/team_expert_group_manifest_design.md) | D | Team 模式接入专家团 Manifest 加载设计 | 待确认 | — |

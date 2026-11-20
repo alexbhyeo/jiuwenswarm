@@ -14,9 +14,13 @@ generated: true
 
 | 模块 |
 |---|
+| [.agents/agent-docs/designs/proposals/D-20261120-1025-mxc-process-isolation/spike](#module-agents-agent-docs-designs-proposals-D-20261120-1025-mxc-process-isolation-spike) |
 | [deploy/yuanrong](#module-deploy-yuanrong) |
 | [docs](#module-docs) |
 | [gateway/channel_manager/web](#module-gateway-channel_manager-web) |
+| [jiuwenbox/src/jiuwenbox/server](#module-jiuwenbox-src-jiuwenbox-server) |
+| [jiuwenbox/src/jiuwenbox/server/runtime](#module-jiuwenbox-src-jiuwenbox-server-runtime) |
+| [jiuwenbox/src/jiuwenbox/supervisor](#module-jiuwenbox-src-jiuwenbox-supervisor) |
 | [jiuwenswarm](#module-jiuwenswarm) |
 | [jiuwenswarm/agents/harness](#module-jiuwenswarm-agents-harness) |
 | [jiuwenswarm/agents/harness/common](#module-jiuwenswarm-agents-harness-common) |
@@ -49,6 +53,14 @@ generated: true
 | [scripts](#module-scripts) |
 | [tests](#module-tests) |
 
+<a id="module-agents-agent-docs-designs-proposals-D-20261120-1025-mxc-process-isolation-spike"></a>
+
+## .agents/agent-docs/designs/proposals/D-20261120-1025-mxc-process-isolation/spike
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [F_20261120_1107_mxc-process-isolation-spike](F_20261120_1107_mxc-process-isolation-spike.md) | F | MXC per-session 隔离验证 spike——实施记录 | alexbhyeo | [D-20261120-1025-mxc-process-isolation](../designs/proposals/D-20261120-1025-mxc-process-isolation/design.md) |
+
 <a id="module-deploy-yuanrong"></a>
 
 ## deploy/yuanrong
@@ -72,6 +84,30 @@ generated: true
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
 | [F_20261031_1139_gateway-session-e2a](F_20261031_1139_gateway-session-e2a.md) | F | Web 会话管理统一经 E2A 交由 Server 执行 | ruiqiang2 | 无独立 D：用户确认的 Gateway 解耦任务 4.1，沿用 develop 个人版现有链路，无独立设计编号。 |
+
+<a id="module-jiuwenbox-src-jiuwenbox-server"></a>
+
+## jiuwenbox/src/jiuwenbox/server
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [F_20261120_1453_mxc-jiuwenswarm-frontend-e2e](F_20261120_1453_mxc-jiuwenswarm-frontend-e2e.md) | F | MXC 接入 jiuwenbox 并从 jiuwenswarm 真实前端驱动——实施与验证记录 | alexbhyeo | [D-20261120-1025-mxc-process-isolation](../designs/proposals/D-20261120-1025-mxc-process-isolation/design.md) |
+
+<a id="module-jiuwenbox-src-jiuwenbox-server-runtime"></a>
+
+## jiuwenbox/src/jiuwenbox/server/runtime
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [F_20261120_1453_mxc-jiuwenswarm-frontend-e2e](F_20261120_1453_mxc-jiuwenswarm-frontend-e2e.md) | F | MXC 接入 jiuwenbox 并从 jiuwenswarm 真实前端驱动——实施与验证记录 | alexbhyeo | [D-20261120-1025-mxc-process-isolation](../designs/proposals/D-20261120-1025-mxc-process-isolation/design.md) |
+
+<a id="module-jiuwenbox-src-jiuwenbox-supervisor"></a>
+
+## jiuwenbox/src/jiuwenbox/supervisor
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [F_20261120_1453_mxc-jiuwenswarm-frontend-e2e](F_20261120_1453_mxc-jiuwenswarm-frontend-e2e.md) | F | MXC 接入 jiuwenbox 并从 jiuwenswarm 真实前端驱动——实施与验证记录 | alexbhyeo | [D-20261120-1025-mxc-process-isolation](../designs/proposals/D-20261120-1025-mxc-process-isolation/design.md) |
 
 <a id="module-jiuwenswarm"></a>
 
@@ -207,6 +243,7 @@ generated: true
 | [F_20261110_1438_opencode-go-provider](F_20261110_1438_opencode-go-provider.md) | F | 新增 opencode-go 模型供应商 | wang_njust_608 | 无独立 D：需求与方案由本地 Spec Kit 资产 specs/001-opencode-go-provider/ 承载（spec/plan/tasks，仅本地保留、不入库），未另建 .agents/agent-docs 下的 D 编号；上游供应商预设归 agent-gateway 仓。 |
 | [F_20261110_2026_affinity-settings](F_20261110_2026_affinity-settings.md) | F | 实验功能算力亲和开关与自定义模型能力接入 | MengHan18 | 无独立 D：外部初始方案为 docs_HM_kvc/E前端开关打开/01 和 02；全局准入和交互按用户确认的 04 小白版文档替代，无仓库内 D 标识。 |
 | [F_20261111_1528_unified-observability-config](F_20261111_1528_unified-observability-config.md) | F | Team 与单 Agent 可观测性配置统一为 observability 段 | alan_cheng | 无独立 D：用户在会话中确认的配置收敛改动，无独立设计编号。 |
+| [F_20261120_1453_mxc-jiuwenswarm-frontend-e2e](F_20261120_1453_mxc-jiuwenswarm-frontend-e2e.md) | F | MXC 接入 jiuwenbox 并从 jiuwenswarm 真实前端驱动——实施与验证记录 | alexbhyeo | [D-20261120-1025-mxc-process-isolation](../designs/proposals/D-20261120-1025-mxc-process-isolation/design.md) |
 
 <a id="module-jiuwenswarm-common-config_panel"></a>
 
@@ -317,6 +354,7 @@ generated: true
 | [F_20261103_1501_app-role-session](app-role-session.md) | F | 保留基础系统提示的轻量 NPC 会话 | kdgmpw | [D-20261103-1444-app-role-session](../designs/active/D-20261103-1444-app-role-session/design.md) |
 | [F_20261104_1225_npc-team-member-sessions](F_20261104_1225_npc-team-member-sessions.md) | F | NPC 主从会话与成员咨询 | kdgmpw | [D-20261104-1141-npc-team-member-sessions](../designs/active/D-20261104-1141-npc-team-member-sessions/design.md) |
 | [F_20261110_1438_opencode-go-provider](F_20261110_1438_opencode-go-provider.md) | F | 新增 opencode-go 模型供应商 | wang_njust_608 | 无独立 D：需求与方案由本地 Spec Kit 资产 specs/001-opencode-go-provider/ 承载（spec/plan/tasks，仅本地保留、不入库），未另建 .agents/agent-docs 下的 D 编号；上游供应商预设归 agent-gateway 仓。 |
+| [F_20261120_1453_mxc-jiuwenswarm-frontend-e2e](F_20261120_1453_mxc-jiuwenswarm-frontend-e2e.md) | F | MXC 接入 jiuwenbox 并从 jiuwenswarm 真实前端驱动——实施与验证记录 | alexbhyeo | [D-20261120-1025-mxc-process-isolation](../designs/proposals/D-20261120-1025-mxc-process-isolation/design.md) |
 
 <a id="module-jiuwenswarm-server-runtime-session"></a>
 
