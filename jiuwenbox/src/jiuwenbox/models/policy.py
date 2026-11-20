@@ -16,8 +16,14 @@ from jiuwenbox.supervisor.daemon_ipc import SANDBOX_IP_ENV
 
 
 def _expand_path(value: str) -> str:
-    """Expand shell-style path markers without requiring the path to exist."""
-    return str(Path(os.path.expandvars(value)).expanduser())
+    """Expand shell-style path markers without requiring the path to exist.
+
+    Uses ``as_posix()`` rather than ``str()`` so a POSIX-style sandbox path
+    (e.g. ``/home``) keeps forward slashes when the jiuwenbox control plane
+    itself runs on Windows (``str(WindowsPath("/home"))`` renders as
+    ``\\home``, silently corrupting every sandbox-visible path).
+    """
+    return Path(os.path.expandvars(value)).expanduser().as_posix()
 
 
 def _contains_crlf_or_null(value: str) -> bool:

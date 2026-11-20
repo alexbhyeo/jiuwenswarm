@@ -173,9 +173,18 @@ PERF_CHILD_ENV = "JIUWENBOX_PERF_CHILD"
 WARM_COMMIT_FD_ENV = "JIUWENBOX_WARM_COMMIT_FD"
 WARM_PARKED_MARKER = "JIUWENBOX_WARM_PARKED"
 CLONE_NEWNET = 0x40000000
-_LIBC = ctypes.CDLL("libc.so.6", use_errno=True)
-_LIBC.setns.argtypes = [ctypes.c_int, ctypes.c_int]
-_LIBC.setns.restype = ctypes.c_int
+_libc_handle: ctypes.CDLL | None = None
+
+
+def _libc() -> ctypes.CDLL:
+    """Lazily load and configure libc so this module stays importable on
+    Windows (where only non-bubblewrap runtimes are used)."""
+    global _libc_handle
+    if _libc_handle is None:
+        _libc_handle = ctypes.CDLL("libc.so.6", use_errno=True)
+        _libc_handle.setns.argtypes = [ctypes.c_int, ctypes.c_int]
+        _libc_handle.setns.restype = ctypes.c_int
+    return _libc_handle
 _daemon_code_lock = threading.Lock()
 _cached_daemon_code: bytes | None = None
 _CHILD_PERF_RE = re.compile(
@@ -793,7 +802,7 @@ def _enter_netns(namespace: str) -> None:
     path = _netns_file(namespace)
     fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC, 0o644)
     try:
-        if _LIBC.setns(fd, CLONE_NEWNET) != 0:
+        if _libc().setns(fd, CLONE_NEWNET) != 0:
             err = ctypes.get_errno()
             raise OSError(err, os.strerror(err), path)
     finally:
