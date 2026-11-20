@@ -34,14 +34,17 @@ from __future__ import annotations
 
 import json
 import os
+import queue
+import re
 import subprocess
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-POLL_INTERVAL_SECONDS = 0.05
+POLL_INTERVAL_SECONDS = 0.005
 IDLE_TIMEOUT_SECONDS = 1800.0
 
 _jobs_lock = threading.Lock()
@@ -58,13 +61,140 @@ def _write_json(path: Path, data: dict) -> None:
     tmp.replace(path)
 
 
+_CMD_WRAPPER_RE = re.compile(r'^cmd /c "(.*)"$')
+_shell_lock = threading.Lock()
+_shell_proc: subprocess.Popen | None = None
+_shell_queue: "queue.Queue[str]" = queue.Queue()
+_SHELL_SENTINEL_PREFIX = "MXC_PERSISTENT_SHELL_DONE_"
+
+
+def _shell_reader(proc: subprocess.Popen) -> None:
+    for line in proc.stdout:
+        _shell_queue.put(line)
+    _shell_queue.put("__MXC_SHELL_READER_EOF__\n")
+
+
+def _get_persistent_shell(workdir: Path) -> subprocess.Popen | None:
+    """Lazily spawn (or respawn, if dead) the one persistent cmd.exe this
+    daemon reuses for simple foreground commands. Returns None if it could
+    not be started; callers fall back to a fresh per-command spawn."""
+    global _shell_proc
+    with _shell_lock:
+        if _shell_proc is not None and _shell_proc.poll() is None:
+            return _shell_proc
+        try:
+            proc = subprocess.Popen(
+                ["cmd.exe", "/Q"], cwd=str(workdir), env=dict(os.environ),
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, bufsize=1,
+            )
+        except Exception:  # noqa: BLE001
+            _shell_proc = None
+            return None
+        threading.Thread(target=_shell_reader, args=(proc,), daemon=True).start()
+        # /Q disables echoing the *command text*, but the prompt itself
+        # (PROMPT env var set to "" does not blank it -- cmd falls back to
+        # its $P$G default) still prints before each command's output, and
+        # the version banner is printed once at startup. Setting the prompt
+        # to a single newline (`$_`) via the `prompt` *command* (not the env
+        # var) makes every prompt occurrence exactly one blank line, which
+        # _run_in_persistent_shell strips as a fixed, known prefix. Drain
+        # everything up to and including the warm-up sentinel, discarding
+        # the banner and the prompt-change command's own leftover prompt.
+        token = uuid.uuid4().hex
+        try:
+            proc.stdin.write("prompt $_\r\n")
+            proc.stdin.write(f"echo {_SHELL_SENTINEL_PREFIX}{token}_0\r\n")
+            proc.stdin.flush()
+            deadline = time.monotonic() + 5.0
+            marker = f"{_SHELL_SENTINEL_PREFIX}{token}_0"
+            while time.monotonic() < deadline:
+                line = _shell_queue.get(timeout=max(0.0, deadline - time.monotonic()))
+                if marker in line:
+                    break
+        except Exception:  # noqa: BLE001
+            proc.kill()
+            _shell_proc = None
+            return None
+        _shell_proc = proc
+        return _shell_proc
+
+
+def _run_in_persistent_shell(command: str, timeout: float, workdir: Path) -> dict | None:
+    """Best-effort fast path: pipe ``command`` into the one long-lived
+    cmd.exe this daemon keeps alive instead of spawning a fresh process.
+    Only used when the caller did not ask for a specific workdir/env (those
+    would require 'cd'/'set' commands that persist across later, unrelated
+    exec calls on the same shell -- not worth the state-leak risk for the
+    latency win). stdout and stderr are merged (stderr=STDOUT at spawn
+    time), so the returned "stderr" is always empty; this is a deliberate
+    trade documented at the call site, not a bug.
+    Returns None (never a dict with an error) on any setup failure, so the
+    caller always has a clean fallback to the normal per-command spawn.
+    """
+    proc = _get_persistent_shell(workdir)
+    if proc is None:
+        return None
+
+    # mxc.py always hands this daemon a command already wrapped as
+    # cmd /c "<script>" (its own bash/PowerShell-to-cmd translation, or an
+    # explicit ["cmd", "/c", script] in the request). The persistent shell
+    # IS a cmd.exe already, so write <script> straight into it instead of
+    # spawning a nested cmd.exe to re-interpret the wrapper -- that nested
+    # spawn is exactly the per-command cost this fast path exists to avoid.
+    unwrap = _CMD_WRAPPER_RE.match(command)
+    inner = unwrap.group(1) if unwrap else command
+
+    token = uuid.uuid4().hex
+    try:
+        proc.stdin.write(f"{inner}\r\n")
+        proc.stdin.write(f"echo {_SHELL_SENTINEL_PREFIX}{token}_%errorlevel%\r\n")
+        proc.stdin.flush()
+    except Exception:  # noqa: BLE001
+        return None
+
+    lines: list[str] = []
+    deadline = time.monotonic() + timeout
+    sentinel_re = re.compile(re.escape(_SHELL_SENTINEL_PREFIX) + token + r"_(-?\d+)")
+    while time.monotonic() < deadline:
+        try:
+            line = _shell_queue.get(timeout=max(0.0, deadline - time.monotonic()))
+        except queue.Empty:
+            break
+        if line == "__MXC_SHELL_READER_EOF__\n":
+            return None  # shell died mid-command; caller falls back
+        match = sentinel_re.search(line)
+        if match:
+            # `prompt $_` makes every prompt occurrence one or more blank
+            # lines (cmd.exe's own end-of-prompt newline plus $_'s own),
+            # printed right before the real command's output and again
+            # right before the sentinel echo that just matched. Strip
+            # leading/trailing blank lines only -- a genuine blank line in
+            # the middle of real multi-line output is left alone.
+            while lines and lines[0] == "\n":
+                lines = lines[1:]
+            while lines and lines[-1] == "\n":
+                lines = lines[:-1]
+            return {"exit_code": int(match.group(1)), "stdout": "".join(lines), "stderr": ""}
+        lines.append(line)
+    return None  # timed out waiting for the sentinel; caller falls back
+
+
 def _run_foreground(request: dict, workdir: Path) -> dict:
     command = request["command"]
     requested_cwd = request.get("workdir")
+    requested_env = request.get("env")
+    timeout = request.get("timeout", 30)
+
+    if not requested_cwd and not requested_env:
+        fast_result = _run_in_persistent_shell(command, timeout, workdir)
+        if fast_result is not None:
+            return fast_result
+        # Fall through to the normal per-command spawn below.
+
     cwd = requested_cwd or str(workdir)
     env = dict(os.environ)
-    env.update(request.get("env") or {})
-    timeout = request.get("timeout", 30)
+    env.update(requested_env or {})
     try:
         proc = subprocess.run(
             command, shell=True, cwd=cwd, env=env,
@@ -187,6 +317,8 @@ def main() -> None:
 
     stop_file.unlink(missing_ok=True)
     ready_file.unlink(missing_ok=True)
+    if _shell_proc is not None and _shell_proc.poll() is None:
+        _shell_proc.kill()
 
 
 if __name__ == "__main__":

@@ -63,7 +63,9 @@ MXC_EXEC_PATH_ENV = "JIUWENBOX_MXC_EXEC_PATH"
 _DAEMON_SCRIPT = Path(__file__).resolve().parent / "mxc_daemon.py"
 _DAEMON_READY_TIMEOUT_SECONDS = 15.0
 _DEFAULT_EXEC_TIMEOUT_SECONDS = 30.0
-_RESULT_POLL_INTERVAL_SECONDS = 0.05
+_RESULT_POLL_INTERVAL_SECONDS = 0.005
+_READY_POLL_INTERVAL_SECONDS = 0.01
+_WARM_POOL_TARGET_SIZE = int(os.environ.get("JIUWENBOX_MXC_WARM_POOL", "2"))
 
 
 def _resolve_wxc_exec() -> Path:
@@ -140,36 +142,33 @@ class MxcRuntime(RuntimeAdapter):
 
     def __init__(self) -> None:
         self._sessions: dict[str, _Session] = {}
+        self._warm_pool: list[_Session] = []
+        self._pool_lock = asyncio.Lock()
+        self._pool_refill_task: asyncio.Task | None = None
+        self._schedule_pool_refill()
 
     # -- lifecycle -----------------------------------------------------
 
-    async def create(
-        self,
-        sandbox_id: str,
-        policy_path: Path,
-        env: dict[str, str] | None = None,
-    ) -> int | None:
-        wxc_exec = _resolve_wxc_exec()
-        workdir = SANDBOX_WORKSPACE / sandbox_id
-        workdir.mkdir(parents=True, exist_ok=True)
-
-        extra_readonly, extra_readwrite = _read_mxc_filesystem_policy(policy_path)
-        readwrite = [str(workdir), *extra_readwrite]
-        # sys.prefix alone is not enough when running from a venv: the venv's
-        # python.exe launcher reads pyvenv.cfg and needs to see the base
-        # interpreter install (sys.base_prefix) too, or it fails to start
-        # with "No Python at '<base_prefix>\python.exe'" before any of our
-        # own code runs.
-        python_paths = {str(Path(sys.prefix)), str(Path(sys.base_prefix))}
-        # Tool calls from jiuwenswarm's harness are POSIX-shaped (argv[0] is
-        # typically "bash"), so the sandbox needs a real bash on its granted
-        # path set. Git for Windows' bash is the common case on a dev box;
-        # when it is not installed, bash-shaped commands will still fail
-        # (same as any other missing tool) but Python-shaped commands are
-        # unaffected.
+    @staticmethod
+    def _generic_grants() -> tuple[list[str], list[str]]:
+        """The baseline grants every sandbox needs, independent of any
+        per-call policy extras. A warm-pool session is pre-booted with only
+        these; it is handed out as-is when a real create() asks for nothing
+        beyond them (see _WARM_POOL_TARGET_SIZE), and cold-booted normally
+        otherwise so a custom policy is never silently under-granted."""
+        python_paths = [str(Path(sys.prefix)), str(Path(sys.base_prefix))]
         git_bash_root = Path(r"C:\Program Files\Git")
         extra_tool_paths = [str(git_bash_root)] if git_bash_root.exists() else []
-        readonly = [*python_paths, str(_DAEMON_SCRIPT.parent), *extra_tool_paths, *extra_readonly]
+        return python_paths + [str(_DAEMON_SCRIPT.parent)] + extra_tool_paths, []
+
+    async def _boot_session(self, workdir: Path, extra_readonly: list[str], extra_readwrite: list[str]) -> _Session:
+        """Cold-boot one daemon-in-sandbox session rooted at ``workdir``."""
+        wxc_exec = _resolve_wxc_exec()
+        workdir.mkdir(parents=True, exist_ok=True)
+
+        base_readonly, _ = self._generic_grants()
+        readwrite = [str(workdir), *extra_readwrite]
+        readonly = [*base_readonly, *extra_readonly]
 
         cmd_line = f'"{sys.executable}" "{_DAEMON_SCRIPT}" "{workdir}"'
         config = {
@@ -191,18 +190,64 @@ class MxcRuntime(RuntimeAdapter):
         deadline = time.monotonic() + _DAEMON_READY_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
             if ready_file.exists():
-                self._sessions[sandbox_id] = _Session(proc, workdir, config_path)
-                return proc.pid
+                return _Session(proc, workdir, config_path)
             if proc.returncode is not None:
                 _, stderr = await proc.communicate()
                 raise RuntimeError(
-                    f"mxc: wxc-exec exited early ({proc.returncode}) for sandbox "
-                    f"{sandbox_id}: {stderr.decode(errors='replace')[:2000]}"
+                    f"mxc: wxc-exec exited early ({proc.returncode}) for workdir "
+                    f"{workdir}: {stderr.decode(errors='replace')[:2000]}"
                 )
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(_READY_POLL_INTERVAL_SECONDS)
 
         proc.kill()
-        raise TimeoutError(f"mxc: daemon for sandbox {sandbox_id} not ready within {_DAEMON_READY_TIMEOUT_SECONDS}s")
+        raise TimeoutError(f"mxc: daemon for {workdir} not ready within {_DAEMON_READY_TIMEOUT_SECONDS}s")
+
+    def _schedule_pool_refill(self) -> None:
+        if _WARM_POOL_TARGET_SIZE <= 0:
+            return
+        if self._pool_refill_task is not None and not self._pool_refill_task.done():
+            return
+        try:
+            self._pool_refill_task = asyncio.ensure_future(self._refill_pool())
+        except RuntimeError:
+            # No running event loop yet (e.g. constructed outside an async
+            # context); the pool just stays empty until the next create()
+            # call successfully schedules a refill from inside one.
+            pass
+
+    async def _refill_pool(self) -> None:
+        async with self._pool_lock:
+            while len(self._warm_pool) < _WARM_POOL_TARGET_SIZE:
+                workdir = SANDBOX_WORKSPACE / f"_warm_{uuid.uuid4().hex}"
+                try:
+                    session = await self._boot_session(workdir, [], [])
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("mxc: warm pool refill failed: %s", exc)
+                    break
+                self._warm_pool.append(session)
+
+    async def create(
+        self,
+        sandbox_id: str,
+        policy_path: Path,
+        env: dict[str, str] | None = None,
+    ) -> int | None:
+        extra_readonly, extra_readwrite = _read_mxc_filesystem_policy(policy_path)
+
+        session: _Session | None = None
+        if not extra_readonly and not extra_readwrite and self._warm_pool:
+            async with self._pool_lock:
+                if self._warm_pool:
+                    session = self._warm_pool.pop()
+        if session is not None:
+            logger.info("mxc: sandbox %s claimed a warm-pool session (%s)", sandbox_id, session.workdir)
+        else:
+            workdir = SANDBOX_WORKSPACE / sandbox_id
+            session = await self._boot_session(workdir, extra_readonly, extra_readwrite)
+
+        self._sessions[sandbox_id] = session
+        self._schedule_pool_refill()
+        return session.proc.pid
 
     async def stop(self, sandbox_id: str, timeout: float = 10.0) -> None:
         session = self._sessions.get(sandbox_id)
