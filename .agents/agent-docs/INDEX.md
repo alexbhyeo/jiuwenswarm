@@ -174,6 +174,7 @@ generated: true
 | [D-20261119-1518-microvm-guest-agent-protocol](designs/proposals/D-20261119-1518-microvm-guest-agent-protocol/design.md) | D | 跨平台 per-session microVM：守护进程协议与运行时适配 | alexbhyeo | — |
 | [D-20261120-1025-mxc-process-isolation](designs/proposals/D-20261120-1025-mxc-process-isolation/design.md) | D | 用 MXC 做跨平台 per-session 进程级隔离 | alexbhyeo | — |
 | [F_20261120_1453_mxc-jiuwenswarm-frontend-e2e](features/F_20261120_1453_mxc-jiuwenswarm-frontend-e2e.md) | F | MXC 接入 jiuwenbox 并从 jiuwenswarm 真实前端驱动——实施与验证记录 | alexbhyeo | [D-20261120-1025-mxc-process-isolation](designs/proposals/D-20261120-1025-mxc-process-isolation/design.md) |
+| [F_20261120_1728_mxc-latency-optimization](features/F_20261120_1728_mxc-latency-optimization.md) | F | MxcRuntime 延迟优化——保持隔离的前提下降低冷启动与单次 exec 开销 | alexbhyeo | [D-20261120-1025-mxc-process-isolation](designs/proposals/D-20261120-1025-mxc-process-isolation/design.md) |
 
 <a id="module-jiuwenbox-src-jiuwenbox-supervisor"></a>
 
