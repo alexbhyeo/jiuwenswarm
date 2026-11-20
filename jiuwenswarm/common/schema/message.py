@@ -214,6 +214,7 @@ _ensure_req_method("GAME_ASSETS_MESH_COMPLETE_CHECK_STATUS", "game.assets.mesh_c
 _ensure_req_method("GAME_ASSETS_MESH_DECIMATE", "game.assets.mesh_decimate")
 _ensure_req_method("GAME_ASSETS_MESH_DECIMATE_CHECK_STATUS", "game.assets.mesh_decimate_check_status")
 _ensure_req_method("GAME_LAB_CANVAS_SAVE", "game.lab_canvas.save")
+_ensure_req_method("GAME_LAB_CHAT_SEND", "game.lab_chat.send")
 _ensure_req_method("GAME_FILES_TREE", "game.files.tree")
 _ensure_req_method("GAME_FILES_READ", "game.files.read")
 _ensure_req_method("GAME_FILES_WRITE", "game.files.write")

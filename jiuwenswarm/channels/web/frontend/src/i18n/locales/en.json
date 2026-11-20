@@ -7002,6 +7002,17 @@
     }
   },
   "gameWorkshop": {
+    "labChat": {
+      "title": "Lab assistant",
+      "empty": "Tell me which asset to process: decompose, 2D to 3D, mesh completion or retopology. I can only run the lab process cards — I cannot generate new assets.",
+      "placeholder": "e.g. decompose the hero into parts",
+      "send": "Send",
+      "thinking": "Running the process card…",
+      "collapse": "Collapse assistant",
+      "expand": "Expand lab assistant",
+      "scopeChip": "Process cards only",
+      "scopeHint": "The lab assistant can only run the four process cards: decompose, 2D to 3D, mesh completion and retopology"
+    },
     "tabs": {
       "create": "Create",
       "lab": "Lab"

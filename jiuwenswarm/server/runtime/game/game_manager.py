@@ -33,7 +33,13 @@ from jiuwenswarm.server.runtime.game.game_store import (
     get_project_assets_dir,
     get_project_dir,
 )
+from jiuwenswarm.agents.harness.common.tools.edit_chat_tools import (
+    edit_chat_configured,
+    edit_chat_enabled,
+)
+
 from jiuwenswarm.server.runtime.game.godot_bridge import GodotBridge
+from jiuwenswarm.server.runtime.game.game_lab_chat import GameLabChat
 from jiuwenswarm.server.runtime.game.game_scaffold import scaffold_home_town
 
 logger = logging.getLogger(__name__)
@@ -59,6 +65,7 @@ class GameManager:
         self._bridge = GodotBridge()
         self._decompose = GameItemDecompose()
         self._mesh_ops = GameItemMeshOps()
+        self._lab_chat = GameLabChat()
 
     # ------------------------------------------------------------------
     # 项目
@@ -577,6 +584,22 @@ class GameManager:
             edges if isinstance(edges, list) else [],
         )
         return {"project": project.to_dict()}
+
+    async def handle_game_lab_chat_send(self, params: dict) -> dict:
+        """实验室助手：一条用户消息 + 处理卡片工具循环。
+
+        与导演模式 ``director.edit_chat.send`` 同构（无状态直连模型 + tools/
+        tool_calls 循环），区别只在工具集：这里只暴露游戏模式的四张处理卡片，
+        生成类能力（角色/世界/视频）不在实验室助手的权限内。
+        """
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        text = str(params.get("text") or "").strip()
+        if not text:
+            raise GameRpcError("INVALID_PARAMS", "消息不能为空")
+        if not (edit_chat_enabled() and edit_chat_configured()):
+            raise GameRpcError("NOT_CONFIGURED", "实验室助手未配置，请先在设置中配置「剪辑对话」")
+
+        return await self._lab_chat.run_turn(self, project, text)
 
     # ------------------------------------------------------------------
     # 代码工作区

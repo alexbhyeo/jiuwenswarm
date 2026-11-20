@@ -25,6 +25,10 @@ const GAME_DECOMPOSE_STATUS_TIMEOUT_MS = 150_000;
 // 更合适。check_status 仍复用分解/2D转3D 的值（它只在成功那一次做下载，
 // 跟分解/2D转3D 同一套下载体量级别，不需要跟着放宽）。
 const GAME_MESH_OP_SUBMIT_TIMEOUT_MS = GAME_GENERATE_TIMEOUT_MS;
+// 实验室助手一轮里可能连跑多张处理卡片（每张卡片后端最多等 600s），整轮
+// 远超前端默认 15s。这里给到后端单卡片预算的两倍，避免前端先把还在正常
+// 排队的轮次判成超时；真正的上限由后端 MAX_TOOL_ITERATIONS 与单卡片超时约束。
+const GAME_LAB_CHAT_TIMEOUT_MS = 1_200_000;
 
 export type GameAsset = {
   asset_id: string;
@@ -51,6 +55,15 @@ export type GameProject = {
   params: Record<string, unknown>;
   lab_nodes: Record<string, unknown>[];
   lab_edges: Record<string, unknown>[];
+  lab_chat_messages: GameLabChatMessage[];
+};
+
+/** 实验室助手的一条消息：与导演模式 EditChatMessage 同构，`applied` 记录
+ * 这一轮真正跑过的处理卡片（用于在气泡里显示"调用了哪张卡"）。*/
+export type GameLabChatMessage = {
+  role: 'user' | 'assistant';
+  content: string;
+  applied?: string[];
 };
 
 export type GameDecomposeSubmitResult = {
@@ -128,6 +141,7 @@ const METHOD = {
   assetsMeshDecimate: 'game.assets.mesh_decimate',
   assetsMeshDecimateCheckStatus: 'game.assets.mesh_decimate_check_status',
   labCanvasSave: 'game.lab_canvas.save',
+  labChatSend: 'game.lab_chat.send',
   filesTree: 'game.files.tree',
   filesRead: 'game.files.read',
   filesWrite: 'game.files.write',
@@ -317,6 +331,16 @@ export const gameApi = {
       nodes,
       edges,
     });
+    return resp.project;
+  },
+  /** 实验室助手：发一条消息，服务端跑完处理卡片工具循环后返回整个项目
+   * （项目里带 lab_chat_messages，打开项目即可恢复历史，不单开取历史接口）。*/
+  labChatSend: async (projectId: string, text: string): Promise<GameProject> => {
+    const resp = await webRequest<{ project: GameProject }>(
+      METHOD.labChatSend,
+      { project_id: projectId, text },
+      { timeoutMs: GAME_LAB_CHAT_TIMEOUT_MS }
+    );
     return resp.project;
   },
   filesTree: async (projectId: string): Promise<GameFileEntry[]> => {

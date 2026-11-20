@@ -13,6 +13,7 @@ import { gameApi, type GameBridgeStatus, type GameProject } from './gameApi';
 import { GameCreationHome } from './GameCreationHome';
 import { GameRail } from './GameRail';
 import { GameLabCanvas } from './lab/GameLabCanvas';
+import { GameLabChatPanel } from './lab/GameLabChatPanel';
 import './gamePage.css';
 
 type TabKey = 'create' | 'lab';
@@ -97,7 +98,13 @@ export function GamePage() {
         <div className="game-page-tab-content">
           {tab === 'lab' ? (
             selected ? (
-              <GameLabCanvas project={selected} onProjectUpdate={onProjectUpdate} />
+              <div className="game-page-lab">
+                <div className="game-page-lab-canvas">
+                  <GameLabCanvas project={selected} onProjectUpdate={onProjectUpdate} />
+                  {/* 悬浮在画布右上的卡片，与导演模式实验室里的剪辑助手同一形态。 */}
+                  <GameLabChatPanel project={selected} onProjectUpdate={onProjectUpdate} />
+                </div>
+              </div>
             ) : (
               <div className="game-rail-empty">{t('gameWorkshop.rail.noProjects')}</div>
             )

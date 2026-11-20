@@ -118,6 +118,9 @@ class GameProject:
     # director_store.py:115-116）：前端整体覆盖式保存当前节点/连线快照。
     lab_nodes: list[dict[str, Any]] = field(default_factory=list)
     lab_edges: list[dict[str, Any]] = field(default_factory=list)
+    # 实验室助手对话：与导演模式 edit_chat_messages 同构，随项目持久化，
+    # 打开项目即可恢复历史（不单开"取历史"RPC）。
+    lab_chat_messages: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def root_dir(self) -> Path:
@@ -137,6 +140,7 @@ class GameProject:
             "params": dict(self.params),
             "lab_nodes": self.lab_nodes,
             "lab_edges": self.lab_edges,
+            "lab_chat_messages": [dict(item) for item in self.lab_chat_messages],
         }
 
     @classmethod
@@ -144,6 +148,7 @@ class GameProject:
         raw_assets = data.get("assets")
         raw_lab_nodes = data.get("lab_nodes")
         raw_lab_edges = data.get("lab_edges")
+        raw_lab_chat = data.get("lab_chat_messages")
         return cls(
             project_id=str(data.get("project_id") or ""),
             name=str(data.get("name") or ""),
@@ -163,6 +168,9 @@ class GameProject:
             else [],
             lab_edges=[item for item in raw_lab_edges if isinstance(item, dict)]
             if isinstance(raw_lab_edges, list)
+            else [],
+            lab_chat_messages=[item for item in raw_lab_chat if isinstance(item, dict)]
+            if isinstance(raw_lab_chat, list)
             else [],
         )
 

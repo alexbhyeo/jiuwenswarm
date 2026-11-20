@@ -1446,6 +1446,7 @@ _GAME_ROUTES: dict[ReqMethod, str] = {
     ReqMethod.GAME_ASSETS_MESH_DECIMATE: "handle_game_assets_mesh_decimate",
     ReqMethod.GAME_ASSETS_MESH_DECIMATE_CHECK_STATUS: "handle_game_assets_mesh_decimate_check_status",
     ReqMethod.GAME_LAB_CANVAS_SAVE: "handle_game_lab_canvas_save",
+    ReqMethod.GAME_LAB_CHAT_SEND: "handle_game_lab_chat_send",
     ReqMethod.GAME_FILES_TREE: "handle_game_files_tree",
     ReqMethod.GAME_FILES_READ: "handle_game_files_read",
     ReqMethod.GAME_FILES_WRITE: "handle_game_files_write",

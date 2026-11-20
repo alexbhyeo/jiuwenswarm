@@ -4,6 +4,28 @@
    "rail + detail" 两栏结构。 */
 
 .game-page {
+  /* 与导演模式 .director-page 同一套设计 token（实验室助手要和剪辑助手
+     视觉一致，见 gameLabChat.css）。只在本 feature 作用域内生效。 */
+  --g-text-primary: #191919;
+  --g-text-secondary: #777777;
+  --g-text-placeholder: #808080;
+  --g-bg-page: #f5f7f9;
+  --g-bg-card: #ffffff;
+  --g-bg-shell: #f3f3f3;
+  --g-bg-hover: #f0f0f0;
+  --g-border-default: #e4e4e7;
+  --g-border-strong: #d4d4d8;
+  --g-accent: #2563eb;
+  --g-accent-soft: rgba(37, 99, 235, 0.1);
+  --g-send-active: rgb(0, 102, 255);
+  --g-danger: #c0392b;
+  --g-danger-soft: rgba(192, 57, 43, 0.08);
+  --g-radius-sm: 6px;
+  --g-radius-md: 8px;
+  --g-radius-lg: 12px;
+  --g-radius-full: 9999px;
+  --g-shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04);
+
   display: flex;
   width: 100%;
   height: 100%;
@@ -45,6 +67,21 @@
   min-height: 0;
   display: flex;
   overflow: hidden;
+}
+
+/* 实验室：画布铺满，助手是浮在右上角的悬浮卡片（与导演模式
+   .lab-edit-chat-overlay 一致），不占用画布布局空间。 */
+.game-page-lab {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  height: 100%;
+}
+
+.game-page-lab-canvas {
+  position: absolute;
+  inset: 0;
 }
 
 .game-page-create-hint {

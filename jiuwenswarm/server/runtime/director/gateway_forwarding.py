@@ -66,6 +66,7 @@ GAME_FORWARD_METHODS: frozenset[str] = frozenset({
     "game.assets.mesh_decimate",
     "game.assets.mesh_decimate_check_status",
     "game.lab_canvas.save",
+    "game.lab_chat.send",
     "game.files.tree",
     "game.files.read",
     "game.files.write",
