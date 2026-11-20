@@ -4214,7 +4214,7 @@ def resolve_sandbox_enabled(sandbox: Any) -> bool:
     if "enabled" in sandbox:
         return bool(sandbox["enabled"])
     return (
-        str(sandbox.get("type") or "").strip().lower() in {"jiuwenbox", "jiuwenbox-conch"}
+        str(sandbox.get("type") or "").strip().lower() in {"jiuwenbox", "jiuwenbox-conch", "jiuwenbox-mxc"}
         and bool(str(sandbox.get("url") or "").strip())
         and bool(str(sandbox.get("control_token_path") or "").strip())
     )

@@ -944,7 +944,7 @@ def create_sandbox_sysop_card(
 
     normalized_type = str(sandbox_type or "").strip().lower()
     try:
-        if normalized_type in {"jiuwenbox", "jiuwenbox-conch"}:
+        if normalized_type in {"jiuwenbox", "jiuwenbox-conch", "jiuwenbox-mxc"}:
             from jiuwenswarm.server.runtime.no_host_fallback_jiuwenbox import (
                 install_no_host_fallback_jiuwenbox_providers,
             )
@@ -1031,6 +1031,24 @@ def create_sandbox_sysop_card(
             "preserve_file_sharing_mode": _PRESERVE_FILE_SHARING_MODE,
             "preserve_files_upload": upload_list,
         }
+
+        if normalized_type == "jiuwenbox-mxc":
+            # build_filesystem_policy() emits bind_mounts/read_write entries as
+            # real Windows host paths (jiuwenswarm itself runs on Windows when
+            # this type is used); jiuwenbox's PolicyEngine validates every
+            # filesystem_policy path (including bind_mounts.host_path) as a
+            # POSIX-absolute sandbox path, which rejects "C:\\..." outright
+            # before the request ever reaches MxcRuntime. MxcRuntime doesn't
+            # consume bind_mounts anyway (each MXC sandbox gets its own
+            # private workspace directory instead), so drop it from the
+            # append-merge fragment rather than sending a shape the generic
+            # policy validator can never accept.
+            extra_params["policy"] = {
+                k: v for k, v in extra_params["policy"].items() if k != "filesystem_policy"
+            }
+            extra_params["api_sandbox_runtime"] = "mxc"
+            extra_params["fallback_on_failure"] = False
+            sandbox_type = "jiuwenbox"
 
         if normalized_type == "jiuwenbox-conch":
             endpoint = get_sandbox_endpoint()

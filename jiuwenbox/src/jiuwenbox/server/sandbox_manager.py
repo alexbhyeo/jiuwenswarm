@@ -102,6 +102,7 @@ from jiuwenbox.server.runtime.errors import SandboxNotFoundError, SandboxConflic
 
 RUNTIME_PROCESS = "process"
 RUNTIME_CONCH = "conch"
+RUNTIME_MXC = "mxc"
 
 
 def normalize_sandbox_runtime(sandbox_runtime: str | None) -> str:
@@ -113,9 +114,11 @@ def normalize_sandbox_runtime(sandbox_runtime: str | None) -> str:
         return RUNTIME_PROCESS
     if value == "conch":
         return RUNTIME_CONCH
+    if value == "mxc":
+        return RUNTIME_MXC
     raise PolicyValidationError(
         f"Unsupported sandbox_runtime {sandbox_runtime!r}; "
-        "expected 'bwrap' or 'conch'"
+        "expected 'bwrap', 'conch', or 'mxc'"
     )
 
 
@@ -165,6 +168,7 @@ class SandboxManager:
     ) -> None:
         self.runtime = runtime or ProcessRuntime()
         self._conch_runtime = None
+        self._mxc_runtime = None
         self._policy_updates_enabled = (
             os.getenv("JIUWENBOX_RUNTIME_PROFILE", "").lower() == "agentos"
             or update_policy_path is not None
@@ -1655,9 +1659,13 @@ class SandboxManager:
         ref = self._get_sandbox(sandbox_id)
         if ref.runtime != RUNTIME_PROCESS:
             if reject_host:
-                raise PolicyValidationError(
-                    f"Sandbox '{sandbox_id}' uses runtime '{ref.runtime}'; "
+                detail = (
                     "update policy.conch.network instead of policy.network"
+                    if ref.runtime == RUNTIME_CONCH
+                    else "dynamic network policy updates are not supported for this runtime"
+                )
+                raise PolicyValidationError(
+                    f"Sandbox '{sandbox_id}' uses runtime '{ref.runtime}'; {detail}"
                 )
             return None
 
@@ -1977,6 +1985,11 @@ class SandboxManager:
                 from jiuwenbox.server.runtime.conch import ConchRuntime
                 self._conch_runtime = ConchRuntime()
             return self._conch_runtime
+        if ref.runtime == RUNTIME_MXC:
+            if self._mxc_runtime is None:
+                from jiuwenbox.server.runtime.mxc import MxcRuntime
+                self._mxc_runtime = MxcRuntime()
+            return self._mxc_runtime
         return self.runtime
 
 
