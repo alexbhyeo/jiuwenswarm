@@ -100,9 +100,12 @@ export function GamePage() {
             selected ? (
               <div className="game-page-lab">
                 <div className="game-page-lab-canvas">
-                  <GameLabCanvas project={selected} onProjectUpdate={onProjectUpdate} />
-                  {/* 悬浮在画布右上的卡片，与导演模式实验室里的剪辑助手同一形态。 */}
-                  <GameLabChatPanel project={selected} onProjectUpdate={onProjectUpdate} />
+                  {/* 助手卡片作为画布的 children 传入，才能站在 GameLabActionsProvider
+                      里面拿到 buildFlow（「生成实验室流程图」）。形态与导演模式实验室里的
+                      剪辑助手一致：悬浮在画布右上。 */}
+                  <GameLabCanvas project={selected} onProjectUpdate={onProjectUpdate}>
+                    <GameLabChatPanel project={selected} onProjectUpdate={onProjectUpdate} />
+                  </GameLabCanvas>
                 </div>
               </div>
             ) : (

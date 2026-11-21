@@ -1,7 +1,8 @@
 /**
  * 游戏工坊 · 实验室画布——与导演模式 LabCanvas 同一种形态（React Flow
- * 节点图），范围小得多：只有"角色/世界图片 -> 素材分解处理卡片 -> 3D
- * 部件"这一条链路（见 D-20261116-1047-game-workshop-lab §5.5）。
+ * 节点图）：图片处理链路（文生图/图生图 -> 分解/2D 转 3D -> 3D 部件与
+ * 模型）、模型处理（网格补全/拓扑重构/贴图）与动画处理（骨骼检查/自动
+ * 绑定/动画重定向），见 D-20261116-1047-game-workshop-lab §5.5。
  */
 import {
   ReactFlow,
@@ -18,16 +19,22 @@ import {
   type NodeTypes,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { gameApi, type GameAsset, type GameProject } from '../gameApi';
 import { GameLabActionsProvider } from './GameLabActionsContext';
+import { buildLabFlow } from './labFlow';
 import {
   GAME_ASSET_DRAG_MIME,
   type GameAssetDragPayload,
+  type GameAutoRigNodeData,
   type GameDecomposeNodeData,
+  type GameImageGenNodeData,
   type GameMeshOpNodeData,
   type GameModelPartNodeData,
+  type GameRetargetNodeData,
+  type GameRigCheckNodeData,
+  type GameTextureNodeData,
   type GameToModelNodeData,
 } from './labTypes';
 import { GameImageNode } from './nodes/GameImageNode';
@@ -35,6 +42,9 @@ import { GameModelPartNode } from './nodes/GameModelPartNode';
 import { GameDecomposeNode } from './nodes/GameDecomposeNode';
 import { GameToModelNode } from './nodes/GameToModelNode';
 import { GameMeshOpNode } from './nodes/GameMeshOpNode';
+import { GameTextureNode } from './nodes/GameTextureNode';
+import { GameText2ImageNode, GameImageRefNode } from './nodes/GameImageGenNode';
+import { GameAutoRigNode, GameRetargetNode, GameRigCheckNode } from './nodes/GameAnimationNodes';
 import './gameLab.css';
 
 const nodeTypes: NodeTypes = {
@@ -48,6 +58,16 @@ const nodeTypes: NodeTypes = {
   // 网格补全/拓扑重构也共用同一个组件——见 GameMeshOpNode.tsx 顶部注释。
   mesh_complete: GameMeshOpNode,
   mesh_decimate: GameMeshOpNode,
+  // 纹理贴图独立成一张卡片（多了提示词/质量两个选项），见 GameTextureNode.tsx。
+  texture: GameTextureNode,
+  // 动画三件套共用 GameAnimationNodes.tsx 里的三个组件。
+  rig_check: GameRigCheckNode,
+  auto_rig: GameAutoRigNode,
+  retarget: GameRetargetNode,
+  // 文生图/图生图共用同一个组件（GameImageGenNode.tsx），两者只差一个参考
+  // 图端口和几句文案。
+  text2image: GameText2ImageNode,
+  image_ref: GameImageRefNode,
 };
 
 // 与导演模式同一个取舍（LabCanvas.tsx 的 LAB_CANVAS_SAVE_DEBOUNCE_MS）：
@@ -75,11 +95,25 @@ const modelGroupIcon = (
   </svg>
 );
 
-type ToolrailMenu = 'image' | 'model' | null;
-type ImageProcessKind = 'decompose' | 'toModel';
-const IMAGE_PROCESS_KINDS: ImageProcessKind[] = ['toModel', 'decompose'];
-type ModelProcessKind = 'meshComplete' | 'meshDecimate';
-const MODEL_PROCESS_KINDS: ModelProcessKind[] = ['meshComplete', 'meshDecimate'];
+// 工具栏"动画"分组圆形按钮——骨骼检查/自动绑定/动画重定向都接模型，但
+// 属于"让模型动起来"的另一类操作，单独一颗按钮、单独一个菜单；图标画一个
+// 带关节的小人，跟模型的立方体区分开。
+const animationGroupIcon = (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="5" r="2.2" />
+    <path d="M12 7.2v6.3M12 9.5 8 12m4-2.5 4 2.5M12 13.5 9 19m3-5.5 3 5.5" />
+  </svg>
+);
+
+type ToolrailMenu = 'image' | 'model' | 'animation' | null;
+type ImageProcessKind = 'text2image' | 'imageRef' | 'decompose' | 'toModel';
+// 顺序即侧边菜单顺序：先放两个"生成图片"的卡片（与导演模式同一分组、同一
+// 先后），再接原来的 2D 转 3D / 分解图。
+const IMAGE_PROCESS_KINDS: ImageProcessKind[] = ['text2image', 'imageRef', 'toModel', 'decompose'];
+type ModelProcessKind = 'meshComplete' | 'meshDecimate' | 'texture';
+const MODEL_PROCESS_KINDS: ModelProcessKind[] = ['meshComplete', 'meshDecimate', 'texture'];
+type AnimationProcessKind = 'rigCheck' | 'autoRig' | 'retarget';
+const ANIMATION_PROCESS_KINDS: AnimationProcessKind[] = ['rigCheck', 'autoRig', 'retarget'];
 
 function nextNodeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -88,16 +122,19 @@ function nextNodeId(prefix: string): string {
 interface GameLabCanvasProps {
   project: GameProject;
   onProjectUpdate: (next: GameProject) => void;
+  /** 悬浮在画布上的助手面板。必须渲染在 GameLabActionsProvider 内部，
+   *  面板才能调用 buildFlow 这类画布动作。 */
+  children?: ReactNode;
 }
 
-function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
+function GameLabCanvasInner({ project, onProjectUpdate, children }: GameLabCanvasProps) {
   const { t } = useTranslation();
   const initial = useRef({ nodes: (project.lab_nodes as Node[]) ?? [], edges: (project.lab_edges as Edge[]) ?? [] })
     .current;
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initial.edges);
   const [openMenu, setOpenMenu] = useState<ToolrailMenu>(null);
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, fitView } = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const projectIdRef = useRef(project.project_id);
   projectIdRef.current = project.project_id;
@@ -134,13 +171,20 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
   const onConnect = useCallback(
     (connection: Connection) => {
       setEdges((eds) => {
+        // 图生图的参考图端口允许多条连线（generate_visual 的
+        // reference_image_paths 是列表）；其余卡片同一个目标端口只保留
+        // 最新一条，与导演模式 onConnect 里的例外一致。
+        const targetNode = nodes.find((n) => n.id === connection.target);
+        if (targetNode?.type === 'image_ref') {
+          return addEdge({ ...connection, animated: false }, eds);
+        }
         const filtered = eds.filter(
           (e) => !(e.target === connection.target && e.targetHandle === connection.targetHandle)
         );
         return addEdge({ ...connection, animated: false }, filtered);
       });
     },
-    [setEdges]
+    [nodes, setEdges]
   );
 
   const deleteNode = useCallback(
@@ -174,6 +218,41 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
 
   const patchMeshOpNode = useCallback(
     (nodeId: string, patch: Partial<GameMeshOpNodeData>) => {
+      setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n)));
+    },
+    [setNodes]
+  );
+
+  const patchImageGenNode = useCallback(
+    (nodeId: string, patch: Partial<GameImageGenNodeData>) => {
+      setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n)));
+    },
+    [setNodes]
+  );
+
+  const patchTextureNode = useCallback(
+    (nodeId: string, patch: Partial<GameTextureNodeData>) => {
+      setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n)));
+    },
+    [setNodes]
+  );
+
+  const patchRigCheckNode = useCallback(
+    (nodeId: string, patch: Partial<GameRigCheckNodeData>) => {
+      setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n)));
+    },
+    [setNodes]
+  );
+
+  const patchAutoRigNode = useCallback(
+    (nodeId: string, patch: Partial<GameAutoRigNodeData>) => {
+      setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n)));
+    },
+    [setNodes]
+  );
+
+  const patchRetargetNode = useCallback(
+    (nodeId: string, patch: Partial<GameRetargetNodeData>) => {
       setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n)));
     },
     [setNodes]
@@ -229,6 +308,91 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
       });
     },
     [setNodes, setEdges]
+  );
+
+  // 文生图/图生图成功后的产出是一张图片素材：摆在卡片正下方（与分解/2D
+  // 转 3D 的产出同一套摆设方式），并用边把图片连回卡片的 `image` 输出口。
+  // 图片节点本身还能当分解/2D 转 3D/图生图的输入，整条链路因此可以一路
+  // 从"生成一张图"接到"转成 3D"。
+  const spawnImageResultNode = useCallback(
+    (sourceNodeId: string, asset: GameAsset) => {
+      const sourceNode = nodes.find((n) => n.id === sourceNodeId);
+      const newNode: Node = {
+        id: nextNodeId('image'),
+        type: 'image',
+        position: {
+          x: sourceNode?.position.x ?? 0,
+          y: (sourceNode?.position.y ?? 0) + 320,
+        },
+        data: {
+          assetId: asset.asset_id,
+          filePath: asset.file_path ?? '',
+          name: asset.name,
+        },
+      };
+      setNodes((nds) => nds.concat(newNode));
+      setEdges((eds) =>
+        eds.concat({
+          id: `e_${sourceNodeId}_${newNode.id}`,
+          source: sourceNodeId,
+          sourceHandle: 'image',
+          target: newNode.id,
+          targetHandle: 'in',
+        })
+      );
+    },
+    [nodes, setNodes, setEdges]
+  );
+
+  // 文生图/图生图提交：后端一次同步调用（generate_visual 自己等到出图），
+  // 没有分解/2D 转 3D 那套 pending 轮询。图生图把连进来的图片素材 id 一起
+  // 带上，由后端解析成 reference_image_paths。
+  const submitImageGen = useCallback(
+    (nodeId: string) => {
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      const data = node.data as GameImageGenNodeData;
+      const prompt = data.prompt.trim();
+      if (!prompt) return;
+      const isImageRef = node.type === 'image_ref';
+      const referenceAssetIds = isImageRef
+        ? edges
+            .filter((e) => e.target === nodeId && e.targetHandle === 'image')
+            .map((e) => nodes.find((n) => n.id === e.source))
+            .map((source) => (source?.data as { assetId?: string } | undefined)?.assetId)
+            .filter((v): v is string => Boolean(v))
+        : [];
+      if (isImageRef && referenceAssetIds.length === 0) return;
+
+      patchImageGenNode(nodeId, { status: 'submitting', error: undefined });
+      void gameApi
+        .generateLabImage(projectIdRef.current, {
+          prompt,
+          assetType: data.assetType,
+          source: isImageRef ? 'image_ref' : 'text2image',
+          referenceAssetIds: isImageRef ? referenceAssetIds : undefined,
+          name: prompt.slice(0, 24),
+        })
+        .then((result) => {
+          onProjectUpdate(result.project);
+          if (result.asset.status === 'ready') {
+            patchImageGenNode(nodeId, { status: 'success', resultAssetId: result.asset.asset_id });
+            spawnImageResultNode(nodeId, result.asset);
+          } else {
+            patchImageGenNode(nodeId, {
+              status: 'failed',
+              error: result.error || result.asset.status,
+            });
+          }
+        })
+        .catch((err) => {
+          patchImageGenNode(nodeId, {
+            status: 'failed',
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    },
+    [nodes, edges, onProjectUpdate, patchImageGenNode, spawnImageResultNode]
   );
 
   const pollDecompose = useCallback(
@@ -471,6 +635,240 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
     [nodes, edges, onProjectUpdate, patchMeshOpNode, pollMeshDecimate]
   );
 
+  // 纹理贴图与拓扑重构同构：接一个 model/model_part 节点，提交一次
+  // Tripo3D models/texture 任务，轮询到成功产出一个新模型。
+  const pollTexture = useCallback(
+    (nodeId: string, placeholderAssetId: string, jobId: string) => {
+      const tick = async () => {
+        try {
+          const result = await gameApi.checkTextureStatus(projectIdRef.current, placeholderAssetId, jobId);
+          onProjectUpdate(result.project);
+          if (result.status === 'pending') {
+            pollTimers.current.set(nodeId, setTimeout(tick, DECOMPOSE_POLL_INTERVAL_MS));
+            return;
+          }
+          pollTimers.current.delete(nodeId);
+          if (result.status === 'success') {
+            patchTextureNode(nodeId, { status: 'success', resultAssetId: result.asset?.asset_id });
+            if (result.asset) spawnModelResultNodes(nodeId, 'result', 'model', [result.asset]);
+          } else {
+            patchTextureNode(nodeId, { status: 'failed', error: result.error });
+          }
+        } catch (err) {
+          pollTimers.current.delete(nodeId);
+          patchTextureNode(nodeId, { status: 'failed', error: err instanceof Error ? err.message : String(err) });
+        }
+      };
+      pollTimers.current.set(nodeId, setTimeout(tick, DECOMPOSE_POLL_INTERVAL_MS));
+    },
+    [onProjectUpdate, patchTextureNode, spawnModelResultNodes]
+  );
+
+  const submitTexture = useCallback(
+    (nodeId: string) => {
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      const connection = edges.find((e) => e.target === nodeId && e.targetHandle === 'model');
+      const sourceNode = connection ? nodes.find((n) => n.id === connection.source) : null;
+      const assetId = (sourceNode?.data as { assetId?: string } | undefined)?.assetId;
+      if (!assetId) return;
+      const data = node.data as GameTextureNodeData;
+      patchTextureNode(nodeId, { status: 'submitting', error: undefined });
+      void gameApi
+        .texture(projectIdRef.current, assetId, data.prompt.trim() || undefined, data.quality)
+        .then((result) => {
+          onProjectUpdate(result.project);
+          patchTextureNode(nodeId, {
+            status: 'pending',
+            placeholderAssetId: result.placeholder_asset_id,
+            jobId: result.job_id,
+          });
+          pollTexture(nodeId, result.placeholder_asset_id, result.job_id);
+        })
+        .catch((err) => {
+          patchTextureNode(nodeId, {
+            status: 'failed',
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    },
+    [nodes, edges, onProjectUpdate, patchTextureNode, pollTexture]
+  );
+
+  // 骨骼检查：无产出素材，只有 job_id + 结果，所以状态机比其它卡片少一段。
+  const pollRigCheck = useCallback(
+    (nodeId: string, jobId: string) => {
+      const tick = async () => {
+        try {
+          const result = await gameApi.checkRigCheckStatus(projectIdRef.current, jobId);
+          if (result.status === 'pending') {
+            pollTimers.current.set(nodeId, setTimeout(tick, DECOMPOSE_POLL_INTERVAL_MS));
+            return;
+          }
+          pollTimers.current.delete(nodeId);
+          if (result.status === 'success') {
+            patchRigCheckNode(nodeId, {
+              status: 'success',
+              riggable: result.riggable,
+              rigType: result.rig_type,
+            });
+          } else {
+            patchRigCheckNode(nodeId, { status: 'failed', error: result.error });
+          }
+        } catch (err) {
+          pollTimers.current.delete(nodeId);
+          patchRigCheckNode(nodeId, { status: 'failed', error: err instanceof Error ? err.message : String(err) });
+        }
+      };
+      pollTimers.current.set(nodeId, setTimeout(tick, DECOMPOSE_POLL_INTERVAL_MS));
+    },
+    [patchRigCheckNode]
+  );
+
+  const submitRigCheck = useCallback(
+    (nodeId: string) => {
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      const connection = edges.find((e) => e.target === nodeId && e.targetHandle === 'model');
+      const sourceNode = connection ? nodes.find((n) => n.id === connection.source) : null;
+      const assetId = (sourceNode?.data as { assetId?: string } | undefined)?.assetId;
+      if (!assetId) return;
+      patchRigCheckNode(nodeId, { status: 'submitting', error: undefined, riggable: undefined, rigType: undefined });
+      void gameApi
+        .rigCheck(projectIdRef.current, assetId)
+        .then((result) => {
+          patchRigCheckNode(nodeId, { status: 'pending', jobId: result.job_id });
+          pollRigCheck(nodeId, result.job_id);
+        })
+        .catch((err) => {
+          patchRigCheckNode(nodeId, {
+            status: 'failed',
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    },
+    [nodes, edges, patchRigCheckNode, pollRigCheck]
+  );
+
+  // 自动绑定：与网格处理同构（placeholder + 轮询 + 产出模型节点）。
+  const pollAutoRig = useCallback(
+    (nodeId: string, placeholderAssetId: string, jobId: string) => {
+      const tick = async () => {
+        try {
+          const result = await gameApi.checkRigStatus(projectIdRef.current, placeholderAssetId, jobId);
+          onProjectUpdate(result.project);
+          if (result.status === 'pending') {
+            pollTimers.current.set(nodeId, setTimeout(tick, DECOMPOSE_POLL_INTERVAL_MS));
+            return;
+          }
+          pollTimers.current.delete(nodeId);
+          if (result.status === 'success') {
+            patchAutoRigNode(nodeId, { status: 'success', resultAssetId: result.asset?.asset_id });
+            if (result.asset) spawnModelResultNodes(nodeId, 'result', 'model', [result.asset]);
+          } else {
+            patchAutoRigNode(nodeId, { status: 'failed', error: result.error });
+          }
+        } catch (err) {
+          pollTimers.current.delete(nodeId);
+          patchAutoRigNode(nodeId, { status: 'failed', error: err instanceof Error ? err.message : String(err) });
+        }
+      };
+      pollTimers.current.set(nodeId, setTimeout(tick, DECOMPOSE_POLL_INTERVAL_MS));
+    },
+    [onProjectUpdate, patchAutoRigNode, spawnModelResultNodes]
+  );
+
+  const submitAutoRig = useCallback(
+    (nodeId: string) => {
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      const connection = edges.find((e) => e.target === nodeId && e.targetHandle === 'model');
+      const sourceNode = connection ? nodes.find((n) => n.id === connection.source) : null;
+      const assetId = (sourceNode?.data as { assetId?: string } | undefined)?.assetId;
+      if (!assetId) return;
+      const data = node.data as GameAutoRigNodeData;
+      patchAutoRigNode(nodeId, { status: 'submitting', error: undefined });
+      void gameApi
+        .rig(projectIdRef.current, assetId, data.rigType, data.spec)
+        .then((result) => {
+          onProjectUpdate(result.project);
+          patchAutoRigNode(nodeId, {
+            status: 'pending',
+            placeholderAssetId: result.placeholder_asset_id,
+            jobId: result.job_id,
+          });
+          pollAutoRig(nodeId, result.placeholder_asset_id, result.job_id);
+        })
+        .catch((err) => {
+          patchAutoRigNode(nodeId, {
+            status: 'failed',
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    },
+    [nodes, edges, onProjectUpdate, patchAutoRigNode, pollAutoRig]
+  );
+
+  // 动画重定向：同样"接模型 -> 提交 -> 轮询 -> 产出模型"，只是后端要求输入
+  // 素材带绑定任务 id（没有时后端直接给出可读错误，卡片按失败显示）。
+  const pollRetarget = useCallback(
+    (nodeId: string, placeholderAssetId: string, jobId: string) => {
+      const tick = async () => {
+        try {
+          const result = await gameApi.checkRetargetStatus(projectIdRef.current, placeholderAssetId, jobId);
+          onProjectUpdate(result.project);
+          if (result.status === 'pending') {
+            pollTimers.current.set(nodeId, setTimeout(tick, DECOMPOSE_POLL_INTERVAL_MS));
+            return;
+          }
+          pollTimers.current.delete(nodeId);
+          if (result.status === 'success') {
+            patchRetargetNode(nodeId, { status: 'success', resultAssetId: result.asset?.asset_id });
+            if (result.asset) spawnModelResultNodes(nodeId, 'result', 'model', [result.asset]);
+          } else {
+            patchRetargetNode(nodeId, { status: 'failed', error: result.error });
+          }
+        } catch (err) {
+          pollTimers.current.delete(nodeId);
+          patchRetargetNode(nodeId, { status: 'failed', error: err instanceof Error ? err.message : String(err) });
+        }
+      };
+      pollTimers.current.set(nodeId, setTimeout(tick, DECOMPOSE_POLL_INTERVAL_MS));
+    },
+    [onProjectUpdate, patchRetargetNode, spawnModelResultNodes]
+  );
+
+  const submitRetarget = useCallback(
+    (nodeId: string) => {
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      const connection = edges.find((e) => e.target === nodeId && e.targetHandle === 'model');
+      const sourceNode = connection ? nodes.find((n) => n.id === connection.source) : null;
+      const assetId = (sourceNode?.data as { assetId?: string } | undefined)?.assetId;
+      if (!assetId) return;
+      const data = node.data as GameRetargetNodeData;
+      patchRetargetNode(nodeId, { status: 'submitting', error: undefined });
+      void gameApi
+        .retarget(projectIdRef.current, assetId, data.animation, data.animateInPlace)
+        .then((result) => {
+          onProjectUpdate(result.project);
+          patchRetargetNode(nodeId, {
+            status: 'pending',
+            placeholderAssetId: result.placeholder_asset_id,
+            jobId: result.job_id,
+          });
+          pollRetarget(nodeId, result.placeholder_asset_id, result.job_id);
+        })
+        .catch((err) => {
+          patchRetargetNode(nodeId, {
+            status: 'failed',
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    },
+    [nodes, edges, onProjectUpdate, patchRetargetNode, pollRetarget]
+  );
+
   // 画布从持久化快照挂载时，任何还停在 "pending" 的处理卡片轮询循环早就
   // 随上一次页面会话一起没了——setTimeout 链是纯内存状态，刷新/重新打开
   // 项目不会恢复它，卡片就会永远显示"提交中…/xx中…"，即使后端那边任务
@@ -488,6 +886,11 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
         | (GameDecomposeNodeData & { status?: string })
         | (GameToModelNodeData & { status?: string })
         | (GameMeshOpNodeData & { status?: string })
+        | (GameImageGenNodeData & { status?: string })
+        | (GameTextureNodeData & { status?: string })
+        | (GameRigCheckNodeData & { status?: string })
+        | (GameAutoRigNodeData & { status?: string })
+        | (GameRetargetNodeData & { status?: string })
         | undefined;
       if (!data || typeof data.status !== 'string') return;
 
@@ -506,6 +909,18 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
         } else if (node.type === 'mesh_decimate') {
           const d = data as GameMeshOpNodeData;
           if (d.placeholderAssetId && d.jobId) pollMeshDecimate(node.id, d.placeholderAssetId, d.jobId);
+        } else if (node.type === 'texture') {
+          const d = data as GameTextureNodeData;
+          if (d.placeholderAssetId && d.jobId) pollTexture(node.id, d.placeholderAssetId, d.jobId);
+        } else if (node.type === 'rig_check') {
+          const d = data as GameRigCheckNodeData;
+          if (d.jobId) pollRigCheck(node.id, d.jobId);
+        } else if (node.type === 'auto_rig') {
+          const d = data as GameAutoRigNodeData;
+          if (d.placeholderAssetId && d.jobId) pollAutoRig(node.id, d.placeholderAssetId, d.jobId);
+        } else if (node.type === 'retarget') {
+          const d = data as GameRetargetNodeData;
+          if (d.placeholderAssetId && d.jobId) pollRetarget(node.id, d.placeholderAssetId, d.jobId);
         }
       } else if (data.status === 'submitting') {
         const error = t('gameWorkshop.lab.resumeLostError');
@@ -513,6 +928,19 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
         else if (node.type === 'to_model') patchToModelNode(node.id, { status: 'failed', error });
         else if (node.type === 'mesh_complete' || node.type === 'mesh_decimate') {
           patchMeshOpNode(node.id, { status: 'failed', error });
+        } else if (node.type === 'texture') {
+          patchTextureNode(node.id, { status: 'failed', error });
+        } else if (node.type === 'rig_check') {
+          patchRigCheckNode(node.id, { status: 'failed', error });
+        } else if (node.type === 'auto_rig') {
+          patchAutoRigNode(node.id, { status: 'failed', error });
+        } else if (node.type === 'retarget') {
+          patchRetargetNode(node.id, { status: 'failed', error });
+        } else if (node.type === 'text2image' || node.type === 'image_ref') {
+          // 文生图/图生图是同步调用，刷新后同样不知道后端是否已经出图
+          // （素材可能已经登记进项目，见上方 pending 的注释），按同一取舍
+          // 判失败，用户重提一次即可。
+          patchImageGenNode(node.id, { status: 'failed', error });
         }
       }
     });
@@ -552,7 +980,7 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
   );
 
   const addProcessNode = useCallback(
-    (kind: ImageProcessKind | ModelProcessKind) => {
+    (kind: ImageProcessKind | ModelProcessKind | AnimationProcessKind) => {
       const { dx, dy } = nextSpawnOffset();
       const center = wrapperRef.current
         ? screenToFlowPosition({
@@ -578,6 +1006,52 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
             data: { status: 'idle' } satisfies GameToModelNodeData,
           })
         );
+      } else if (kind === 'text2image' || kind === 'imageRef') {
+        const nodeType = kind === 'text2image' ? 'text2image' : 'image_ref';
+        setNodes((nds) =>
+          nds.concat({
+            id: nextNodeId(nodeType),
+            type: nodeType,
+            position: center,
+            data: { prompt: '', assetType: 'character', status: 'idle' } satisfies GameImageGenNodeData,
+          })
+        );
+      } else if (kind === 'texture') {
+        setNodes((nds) =>
+          nds.concat({
+            id: nextNodeId('texture'),
+            type: 'texture',
+            position: center,
+            data: { status: 'idle', prompt: '', quality: 'standard' } satisfies GameTextureNodeData,
+          })
+        );
+      } else if (kind === 'rigCheck') {
+        setNodes((nds) =>
+          nds.concat({
+            id: nextNodeId('rig_check'),
+            type: 'rig_check',
+            position: center,
+            data: { status: 'idle' } satisfies GameRigCheckNodeData,
+          })
+        );
+      } else if (kind === 'autoRig') {
+        setNodes((nds) =>
+          nds.concat({
+            id: nextNodeId('auto_rig'),
+            type: 'auto_rig',
+            position: center,
+            data: { status: 'idle', rigType: 'biped', spec: 'tripo' } satisfies GameAutoRigNodeData,
+          })
+        );
+      } else if (kind === 'retarget') {
+        setNodes((nds) =>
+          nds.concat({
+            id: nextNodeId('retarget'),
+            type: 'retarget',
+            position: center,
+            data: { status: 'idle', animation: 'preset:idle', animateInPlace: false } satisfies GameRetargetNodeData,
+          })
+        );
       } else {
         // meshComplete / meshDecimate 共用 GameMeshOpNode 组件，只是 node
         // type 不同（见 nodeTypes 顶部的映射）。
@@ -596,6 +1070,28 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
     [screenToFlowPosition, setNodes, nextSpawnOffset]
   );
 
+  // 「生成实验室流程图」：从工程已有的产出素材反推整条链路，整张画布清空重画
+  // （与导演模式 buildFlowFromChat 同一个取舍：不叠加、不做增量合并，重复点
+  // 结果一致）。没有可画的东西时按 false 返回并把画布留原样，避免用户辛苦连的
+  // 线被一次空操作抹掉。落盘交给下面那个 debounce 的自动保存。
+  const buildFlow = useCallback(() => {
+    const flow = buildLabFlow(project);
+    if (flow.cardCount === 0) return false;
+    setNodes(flow.nodes as Node[]);
+    setEdges(flow.edges as Edge[]);
+    // 重建出来的图比画布大得多（一列一层，横向铺开 7 列），不重新取景的话
+    // 用户点完只看到左边一小块。等节点上屏后 fit 一次；助手卡片是浮在画布
+    // 右侧的，展开时留出它的宽度，免得最右一列被盖住。
+    requestAnimationFrame(() => {
+      const panelOpen = Boolean(wrapperRef.current?.querySelector('.game-lab-chat'));
+      void fitView({
+        padding: { top: '32px', right: panelOpen ? '392px' : '32px', bottom: '32px', left: '32px' },
+        duration: 260,
+      });
+    });
+    return true;
+  }, [fitView, project, setEdges, setNodes]);
+
   return (
     <GameLabActionsProvider
       value={{
@@ -608,6 +1104,17 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
         patchMeshOpNode,
         submitMeshComplete,
         submitMeshDecimate,
+        patchImageGenNode,
+        submitImageGen,
+        patchTextureNode,
+        submitTexture,
+        patchRigCheckNode,
+        submitRigCheck,
+        patchAutoRigNode,
+        submitAutoRig,
+        patchRetargetNode,
+        submitRetarget,
+        buildFlow,
       }}
     >
       <div className="game-lab-canvas-wrap" ref={wrapperRef}>
@@ -622,16 +1129,20 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
           onDragOver={onDragOver}
           fitView={false}
           defaultViewport={{ x: 80, y: 40, zoom: 0.85 }}
+          /* 默认下限 0.5 会把「生成实验室流程图」重建出来的整条链路卡在
+             只能看到一半（fitView 被下限截断）；这条链本身有 7 列，允许缩到
+             0.3 才能一眼看全，再自己滚轮放大。 */
+          minZoom={0.3}
         >
           <Background />
           <Controls />
         </ReactFlow>
 
         {/* 悬浮圆形工具栏——镜像导演模式 LabCanvas.tsx 的 lab-toolrail。
-            "图片处理"接一张 image 节点，点开侧边菜单选"2D转3D"或"分解图"；
+            "图片处理"点开侧边菜单选"文生图/图生图/2D转3D/分解图"；
             "模型处理"接一个 model/model_part 节点，点开侧边菜单选"网格
-            补全"或"拓扑重构"——两组各自独立的按钮+菜单，往画布中心加一张
-            对应的处理卡片。 */}
+            补全"、"拓扑重构"或"贴图"——两组各自独立的按钮+菜单，往画布
+            中心加一张对应的处理卡片。 */}
         <div className="game-lab-toolrail">
           <div className="game-lab-toolrail-item">
             <button
@@ -687,7 +1198,36 @@ function GameLabCanvasInner({ project, onProjectUpdate }: GameLabCanvasProps) {
               </div>
             )}
           </div>
+          <div className="game-lab-toolrail-item">
+            <button
+              type="button"
+              className={`game-lab-toolrail-btn ${openMenu === 'animation' ? 'game-lab-toolrail-btn--active' : ''}`}
+              title={t('gameWorkshop.lab.animationGroup')}
+              onClick={() => setOpenMenu((v) => (v === 'animation' ? null : 'animation'))}
+              data-testid="game-workshop-lab-toolrail-button"
+              data-variant="animation"
+            >
+              {animationGroupIcon}
+            </button>
+            {openMenu === 'animation' && (
+              <div className="game-lab-add-menu game-lab-add-menu--side" data-testid="game-workshop-lab-add-menu">
+                {ANIMATION_PROCESS_KINDS.map((kind) => (
+                  <button
+                    type="button"
+                    key={kind}
+                    onClick={() => addProcessNode(kind)}
+                    data-testid="game-workshop-lab-add-menu-item"
+                    data-variant={kind}
+                  >
+                    {t(`gameWorkshop.lab.process.${kind}`)}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
+
+        {children}
       </div>
     </GameLabActionsProvider>
   );

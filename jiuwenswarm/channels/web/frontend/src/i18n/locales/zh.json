@@ -7008,7 +7008,8 @@
       "collapse": "收起助手",
       "expand": "展开实验室助手",
       "scopeChip": "仅处理卡片",
-      "scopeHint": "实验室助手只能调用素材分解、2D 转 3D、网格补全、拓扑重构四张处理卡片"
+      "scopeHint": "实验室助手只能调用素材分解、2D 转 3D、网格补全、拓扑重构四张处理卡片",
+      "buildFlow": "生成实验室流程图"
     },
     "tabs": {
       "create": "创作",
@@ -7061,12 +7062,117 @@
     "lab": {
       "imageGroup": "图片处理",
       "modelGroup": "模型处理",
+      "animationGroup": "动画处理",
       "resumeLostError": "页面刷新或重新打开后丢失了提交进度，请重新提交",
       "process": {
+        "text2image": "文生图",
+        "imageRef": "图生图",
         "decompose": "分解图",
         "toModel": "2D转3D",
         "meshComplete": "网格补全",
-        "meshDecimate": "拓扑重构"
+        "meshDecimate": "拓扑重构",
+        "texture": "贴图",
+        "rigCheck": "骨骼检查",
+        "autoRig": "自动绑定",
+        "retarget": "动画重定向"
+      },
+      "rigTypes": {
+        "biped": "双足人形",
+        "quadruped": "四足动物",
+        "hexapod": "六足生物",
+        "octopod": "八足生物",
+        "avian": "鸟类/带翼",
+        "serpentine": "蛇形",
+        "aquatic": "水生",
+        "others": "其它骨架"
+      },
+      "rigSpecs": {
+        "tripo": "Tripo 原生骨骼",
+        "mixamo": "Mixamo 兼容",
+        "actorcore": "ActorCore",
+        "unity": "Unity Humanoid",
+        "unreal": "Unreal Mannequin",
+        "vrm": "VRM 1.0"
+      },
+      "animations": {
+        "idle": "待机",
+        "walk": "行走",
+        "run": "奔跑",
+        "jump": "跳跃",
+        "dive": "扑倒",
+        "climb": "攀爬",
+        "slash": "挥砍",
+        "shoot": "射击",
+        "hurt": "受伤",
+        "fall": "倒地",
+        "turn": "转身",
+        "quadruped_walk": "四足行走",
+        "hexapod_walk": "六足行走",
+        "octopod_walk": "八足行走",
+        "serpentine_march": "蛇形行进",
+        "aquatic_march": "水生行进"
+      },
+      "rigCheck": {
+        "title": "骨骼检查",
+        "sourceConnected": "源模型：{{name}}",
+        "sourceMissing": "请从左侧连一个 3D 模型",
+        "action": "检查",
+        "statusRunning": "检查中…",
+        "statusRiggable": "可以绑定，推荐骨架：{{rigType}}",
+        "statusNotRiggable": "这个模型暂时无法绑定骨骼",
+        "rigTypeUnknown": "未知",
+        "statusFailedGeneric": "骨骼检查失败"
+      },
+      "autoRig": {
+        "title": "自动绑定",
+        "sourceConnected": "源模型：{{name}}",
+        "sourceMissing": "请从左侧连一个 3D 模型",
+        "action": "绑定",
+        "statusRunning": "绑定中…",
+        "statusSuccess": "已生成带骨骼的模型，可在创作面板「3D 模型」里查看",
+        "statusFailedGeneric": "自动绑定失败"
+      },
+      "retarget": {
+        "title": "动画重定向",
+        "sourceConnected": "源模型：{{name}}",
+        "sourceMissing": "请从左侧连一个已绑定的模型",
+        "animateInPlace": "原地播放（不位移）",
+        "action": "套用动画",
+        "statusRunning": "重定向中…",
+        "statusSuccess": "已生成带动画的模型，可在创作面板「3D 模型」里查看",
+        "statusFailedGeneric": "动画重定向失败"
+      },
+      "texture": {
+        "title": "纹理贴图",
+        "sourceConnected": "源模型：{{name}}",
+        "sourceMissing": "请从左侧连一个 3D 模型",
+        "promptPlaceholder": "贴图风格（可选），例如：做旧的皮革，带划痕",
+        "qualityFast": "快速",
+        "qualityStandard": "标准",
+        "qualityDetailed": "精细",
+        "qualityExtreme": "极致（8K）",
+        "action": "生成贴图",
+        "statusRunning": "贴图中…",
+        "statusSuccess": "已生成带贴图的模型，可在创作面板「3D 模型」里查看",
+        "statusFailedGeneric": "贴图失败"
+      },
+      "text2image": {
+        "title": "文生图",
+        "promptPlaceholder": "描述想要的画面，例如：Q 版森林精灵法师，三视图",
+        "action": "生成",
+        "statusRunning": "生成中…",
+        "statusSuccess": "已生成图片，可在创作面板「角色 / 世界」里查看",
+        "statusFailedGeneric": "生成失败"
+      },
+      "imageRef": {
+        "title": "图生图",
+        "sourceConnected": "参考图：{{count}} 张",
+        "sourceMissing": "请从左侧连一张或多张图片做参考",
+        "promptPlaceholder": "描述想怎么改，例如：保持角色外观，改成侧身战斗姿势",
+        "action": "生成",
+        "statusRunning": "生成中…",
+        "statusSuccess": "已生成图片，可在创作面板「角色 / 世界」里查看",
+        "statusFailedGeneric": "生成失败"
       },
       "decompose": {
         "title": "素材分解",

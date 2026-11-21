@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { gameApi, type GameLabChatMessage, type GameProject } from '../gameApi';
+import { useGameLabActions } from './GameLabActionsContext';
 import './gameLabChat.css';
 
 export type GameLabChatPanelProps = {
@@ -34,6 +35,14 @@ const minimizeIcon = (
   </svg>
 );
 
+const flowIcon = (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="7" height="6" rx="1.5" />
+    <rect x="14" y="15" width="7" height="6" rx="1.5" />
+    <path d="M6.5 9v4a2 2 0 0 0 2 2h5.5" />
+  </svg>
+);
+
 const lockIcon = (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
     <rect x="4" y="10" width="16" height="10" rx="2" />
@@ -43,6 +52,7 @@ const lockIcon = (
 
 export function GameLabChatPanel({ project, onProjectUpdate }: GameLabChatPanelProps) {
   const { t } = useTranslation();
+  const { buildFlow } = useGameLabActions();
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -103,6 +113,18 @@ export function GameLabChatPanel({ project, onProjectUpdate }: GameLabChatPanelP
         <header className="game-lab-chat-header">
           <span className="game-lab-chat-title">{t('gameWorkshop.labChat.title')}</span>
           <div className="game-lab-chat-header-actions">
+            {/* 对应导演模式剪辑助手标题行那颗「生成实验室流程图」：把项目里跑过的
+                处理卡片还原成一整张流程图（幂等，重复点结果一致）。 */}
+            <button
+              type="button"
+              className="game-lab-chat-icon-btn"
+              onClick={() => buildFlow()}
+              title={t('gameWorkshop.labChat.buildFlow')}
+              aria-label={t('gameWorkshop.labChat.buildFlow')}
+              data-testid="game-lab-chat-build-flow"
+            >
+              {flowIcon}
+            </button>
             <button
               type="button"
               className="game-lab-chat-icon-btn"

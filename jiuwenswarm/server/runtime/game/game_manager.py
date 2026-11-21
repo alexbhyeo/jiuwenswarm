@@ -25,6 +25,18 @@ from jiuwenswarm.server.runtime.game.game_item_mesh_ops import (
     GameItemMeshOps,
     GameItemMeshOpsError,
 )
+from jiuwenswarm.server.runtime.game.game_item_texture import (
+    DEFAULT_TEXTURE_QUALITY,
+    GameItemTexture,
+    GameItemTextureError,
+)
+from jiuwenswarm.server.runtime.game.game_item_animation import (
+    DEFAULT_RIG_SPEC,
+    DEFAULT_RIG_TYPE,
+    RIG_MODEL_VERSION,
+    GameItemAnimation,
+    GameItemAnimationError,
+)
 from jiuwenswarm.server.runtime.game.game_store import (
     GAME_ASSET_TYPES,
     GameAsset,
@@ -65,6 +77,8 @@ class GameManager:
         self._bridge = GodotBridge()
         self._decompose = GameItemDecompose()
         self._mesh_ops = GameItemMeshOps()
+        self._texture = GameItemTexture()
+        self._animation = GameItemAnimation()
         self._lab_chat = GameLabChat()
 
     # ------------------------------------------------------------------
@@ -180,10 +194,17 @@ class GameManager:
         与导演模式的生成卡同理：参数已由前端完全确定，再走一次 LLM 回合只会
         增加延迟与不确定性，所以这里直接调工具函数。``video`` 类目复用
         导演模式已验证的 ``generate_video``（D-03），不等 Godot-MCP 落地。
+
+        实验室的「文生图 / 图生图」卡片也走这一个 RPC：``source`` 只标记
+        素材由哪张卡片产出（``text2image`` / ``image_ref``），供「生成实验室
+        流程图」还原卡片；不传时保持创作页原来的 ``generate``。``image_ref``
+        的参考图用 ``reference_asset_ids`` 传素材 id，在这里解析成文件路径，
+        与导演模式同一套取舍（显式连线优先于直接传路径）。
         """
         project = self._require_project(str(params.get("project_id") or "").strip())
         prompt = str(params.get("prompt") or "").strip()
         asset_type = str(params.get("type") or "").strip() or "character"
+        source = str(params.get("source") or "").strip()
         if not prompt:
             raise GameRpcError("INVALID_PARAMS", "缺少 prompt")
         if asset_type not in GAME_ASSET_TYPES:
@@ -192,9 +213,29 @@ class GameManager:
                 f"不支持的素材类型 {asset_type}；可选：{', '.join(GAME_ASSET_TYPES)}",
             )
 
+        reference_asset_ids = [
+            str(aid).strip() for aid in (params.get("reference_asset_ids") or []) if str(aid).strip()
+        ]
+        reference_image_paths = [str(p) for p in (params.get("reference_image_paths") or []) if p]
+
         from jiuwenswarm.server.runtime.director.director_manager import (
             _parse_generation_result,
         )
+
+        if reference_asset_ids:
+            if asset_type == "video":
+                raise GameRpcError("INVALID_PARAMS", "视频生成不接受参考图素材")
+            by_id = {a.asset_id: a for a in project.assets}
+            missing = [
+                aid
+                for aid in reference_asset_ids
+                if aid not in by_id or by_id[aid].status != "ready" or not by_id[aid].file_path
+            ]
+            if missing:
+                raise GameRpcError(
+                    "INVALID_PARAMS", f"参考图素材不存在或未就绪: {', '.join(missing)}"
+                )
+            reference_image_paths = [str(by_id[aid].file_path) for aid in reference_asset_ids]
 
         save_dir = str(get_project_assets_dir(project.project_id))
         if asset_type == "video":
@@ -222,18 +263,26 @@ class GameManager:
                 prompt=prompt,
                 aspect_ratio=str(params.get("aspect_ratio") or "1:1"),
                 resolution=str(params.get("resolution") or "1k"),
-                reference_image_paths=params.get("reference_image_paths") or None,
+                reference_image_paths=reference_image_paths or None,
                 save_dir=save_dir,
             )
         parsed = _parse_generation_result(result_str)
         name = str(params.get("name") or "").strip() or prompt[:24]
+        gen_params: dict[str, Any] = {"source": source or "generate", "prompt": prompt}
+        if reference_image_paths:
+            gen_params["reference_image_paths"] = reference_image_paths
+        if reference_asset_ids:
+            gen_params["reference_asset_ids"] = reference_asset_ids
         asset = GameAsset(
             asset_id=f"gasset_{secrets.token_hex(4)}",
             type=asset_type,
             name=name,
             file_path=parsed.get("file_path"),
             status=parsed["status"],
-            params={"source": "generate", "prompt": prompt},
+            params=gen_params,
+            # 图生图的产出指回第一张参考图（与 2D 转 3D 的 source_asset_id
+            # 同一含义）；文生图没有来源素材，保持 None。
+            source_asset_id=reference_asset_ids[0] if reference_asset_ids else None,
         )
         project = self._store.append_asset(project.project_id, asset)
         payload = {"project": project.to_dict(), "asset": asset.to_dict()}
@@ -565,6 +614,294 @@ class GameManager:
             file_path=status.model_file_path,
             status="ready",
             params={"source": "mesh_decimate"},
+            source_asset_id=source_asset_id,
+        )
+        project = self._store.append_asset(project.project_id, asset)
+        return {"project": project.to_dict(), "status": "success", "asset": asset.to_dict()}
+
+    # ------------------------------------------------------------------
+    # 纹理贴图（Tripo3D models/texture；输入是已就绪的模型，产出新模型）
+    # ------------------------------------------------------------------
+    async def handle_game_assets_texture(self, params: dict) -> dict:
+        """提交一次纹理贴图：源素材必须是已就绪的 3D 模型/部件。
+
+        与拓扑重构同构（单段流水线，见 ``game_item_texture.py``）：只有提交
+        与轮询两个 RPC，可选项是风格提示词与贴图质量。
+        """
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        source_asset_id = str(params.get("source_asset_id") or "").strip()
+        source = self._require_model_source(project, source_asset_id, action="纹理贴图")
+        prompt = str(params.get("prompt") or "").strip() or None
+        quality = str(params.get("quality") or DEFAULT_TEXTURE_QUALITY).strip()
+
+        try:
+            task_id = await self._texture.submit(source.file_path, prompt=prompt, quality=quality)
+        except GameItemTextureError as exc:
+            raise GameRpcError(exc.code, str(exc)) from exc
+
+        placeholder = GameAsset(
+            asset_id=f"gasset_{secrets.token_hex(4)}",
+            type="model",
+            name=f"贴图中…（来自 {source.name}）",
+            status="pending",
+            params={
+                "source": "texture",
+                "job_id": task_id,
+                "prompt": prompt or "",
+                "quality": quality,
+                # 上游如果已经绑定过（自动绑定 -> 贴图），把绑定 task_id
+                # 一路带下去，后面的动画重定向仍然拿得到它（见
+                # game_item_animation.py 对 retarget input 的要求）。
+                "rig_task_id": str(source.params.get("rig_task_id") or ""),
+            },
+            source_asset_id=source_asset_id,
+        )
+        project = self._store.append_asset(project.project_id, placeholder)
+        return {
+            "project": project.to_dict(),
+            "placeholder_asset_id": placeholder.asset_id,
+            "job_id": task_id,
+        }
+
+    async def handle_game_assets_texture_check_status(self, params: dict) -> dict:
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        placeholder_asset_id = str(params.get("placeholder_asset_id") or "").strip()
+        job_id = str(params.get("job_id") or "").strip()
+        if not (placeholder_asset_id and job_id):
+            raise GameRpcError("INVALID_PARAMS", "缺少 placeholder_asset_id / job_id")
+
+        save_dir = str(get_project_assets_dir(project.project_id))
+        status = await self._texture.poll(job_id, save_dir=save_dir)
+
+        if status.status == "pending":
+            return {"project": project.to_dict(), "status": "pending"}
+
+        source = next((a for a in project.assets if a.asset_id == placeholder_asset_id), None)
+        source_asset_id = source.source_asset_id if source else None
+        prompt = str((source.params if source else {}).get("prompt") or "")
+        quality = str((source.params if source else {}).get("quality") or DEFAULT_TEXTURE_QUALITY)
+        rig_task_id = str((source.params if source else {}).get("rig_task_id") or "")
+        source_name = source.name.removeprefix("贴图中…（来自 ").removesuffix("）") if source else ""
+        project = self._store.delete_asset(project.project_id, placeholder_asset_id)
+
+        if status.status == "failed":
+            return {"project": project.to_dict(), "status": "failed", "error": status.error}
+
+        asset = GameAsset(
+            asset_id=f"gasset_{secrets.token_hex(4)}",
+            type="model",
+            name=f"{source_name} · 贴图" if source_name else "贴图模型",
+            file_path=status.model_file_path,
+            status="ready",
+            params={
+                "source": "texture",
+                "prompt": prompt,
+                "quality": quality,
+                # 贴图任务本身是"跑在已绑定模型上的后续任务"，但保留上游的
+                # 绑定 task_id 更稳定，动画重定向直接拿它即可。
+                "tripo_task_id": job_id,
+                "rig_task_id": rig_task_id,
+                "rendered_image_path": status.rendered_image_path,
+            },
+            source_asset_id=source_asset_id,
+        )
+        project = self._store.append_asset(project.project_id, asset)
+        return {"project": project.to_dict(), "status": "success", "asset": asset.to_dict()}
+
+    # ------------------------------------------------------------------
+    # 动画（Tripo3D /animations/*：骨骼检查、自动绑定、动画重定向）
+    # ------------------------------------------------------------------
+    async def handle_game_assets_rig_check(self, params: dict) -> dict:
+        """提交一次骨骼检查：只回答"能否绑定/推荐骨架"，不产出素材。"""
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        source_asset_id = str(params.get("source_asset_id") or "").strip()
+        source = self._require_model_source(project, source_asset_id, action="骨骼检查")
+
+        try:
+            task_id = await self._animation.submit_rig_check(source.file_path)
+        except GameItemAnimationError as exc:
+            raise GameRpcError(exc.code, str(exc)) from exc
+
+        return {"project": project.to_dict(), "job_id": task_id}
+
+    async def handle_game_assets_rig_check_status(self, params: dict) -> dict:
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        job_id = str(params.get("job_id") or "").strip()
+        if not job_id:
+            raise GameRpcError("INVALID_PARAMS", "缺少 job_id")
+
+        status = await self._animation.poll_rig_check(job_id)
+        if status.status == "pending":
+            return {"status": "pending"}
+        if status.status == "failed":
+            return {"status": "failed", "error": status.error}
+        return {
+            "status": "success",
+            "riggable": status.riggable,
+            "rig_type": status.rig_type,
+            # 工程没有变化，仍把 project 带上，前端统一按"刷新项目"处理。
+            "project": project.to_dict(),
+        }
+
+    async def handle_game_assets_rig(self, params: dict) -> dict:
+        """提交一次自动绑定：源素材必须是已就绪的 3D 模型/部件。"""
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        source_asset_id = str(params.get("source_asset_id") or "").strip()
+        source = self._require_model_source(project, source_asset_id, action="自动绑定")
+        rig_type = str(params.get("rig_type") or DEFAULT_RIG_TYPE).strip()
+        spec = str(params.get("spec") or DEFAULT_RIG_SPEC).strip()
+        out_format = str(params.get("out_format") or "glb").strip()
+
+        try:
+            task_id = await self._animation.submit_rig(
+                source.file_path, rig_type=rig_type, spec=spec, out_format=out_format
+            )
+        except GameItemAnimationError as exc:
+            raise GameRpcError(exc.code, str(exc)) from exc
+
+        placeholder = GameAsset(
+            asset_id=f"gasset_{secrets.token_hex(4)}",
+            type="model",
+            name=f"自动绑定中…（来自 {source.name}）",
+            status="pending",
+            params={
+                "source": "auto_rig",
+                "job_id": task_id,
+                "rig_type": rig_type,
+                "spec": spec,
+                "model_version": RIG_MODEL_VERSION,
+            },
+            source_asset_id=source_asset_id,
+        )
+        project = self._store.append_asset(project.project_id, placeholder)
+        return {
+            "project": project.to_dict(),
+            "placeholder_asset_id": placeholder.asset_id,
+            "job_id": task_id,
+        }
+
+    async def handle_game_assets_rig_status(self, params: dict) -> dict:
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        placeholder_asset_id = str(params.get("placeholder_asset_id") or "").strip()
+        job_id = str(params.get("job_id") or "").strip()
+        if not (placeholder_asset_id and job_id):
+            raise GameRpcError("INVALID_PARAMS", "缺少 placeholder_asset_id / job_id")
+
+        save_dir = str(get_project_assets_dir(project.project_id))
+        status = await self._animation.poll_rig(job_id, save_dir=save_dir)
+        if status.status == "pending":
+            return {"project": project.to_dict(), "status": "pending"}
+
+        source = next((a for a in project.assets if a.asset_id == placeholder_asset_id), None)
+        source_asset_id = source.source_asset_id if source else None
+        source_params = source.params if source else {}
+        rig_type = str(source_params.get("rig_type") or DEFAULT_RIG_TYPE)
+        spec = str(source_params.get("spec") or DEFAULT_RIG_SPEC)
+        source_name = source.name.removeprefix("自动绑定中…（来自 ").removesuffix("）") if source else ""
+        project = self._store.delete_asset(project.project_id, placeholder_asset_id)
+
+        if status.status == "failed":
+            return {"project": project.to_dict(), "status": "failed", "error": status.error}
+
+        asset = GameAsset(
+            asset_id=f"gasset_{secrets.token_hex(4)}",
+            type="model",
+            name=f"{source_name} · 自动绑定" if source_name else "绑定模型",
+            file_path=status.model_file_path,
+            status="ready",
+            params={
+                "source": "auto_rig",
+                "rig_type": rig_type,
+                "spec": spec,
+                "model_version": RIG_MODEL_VERSION,
+                # 动画重定向要用绑定任务的 task_id（文档只接受 task_id，不
+                # 接受 file_token），见 game_item_animation.py 模块注释。
+                "tripo_task_id": job_id,
+                "rig_task_id": job_id,
+            },
+            source_asset_id=source_asset_id,
+        )
+        project = self._store.append_asset(project.project_id, asset)
+        return {"project": project.to_dict(), "status": "success", "asset": asset.to_dict()}
+
+    async def handle_game_assets_retarget(self, params: dict) -> dict:
+        """提交一次动画重定向：源素材必须是带 Tripo3D 绑定任务 id 的模型。"""
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        source_asset_id = str(params.get("source_asset_id") or "").strip()
+        source = self._require_model_source(project, source_asset_id, action="动画重定向")
+        rig_task_id = str(source.params.get("rig_task_id") or source.params.get("tripo_task_id") or "")
+        if not rig_task_id:
+            raise GameRpcError(
+                "INVALID_PARAMS",
+                "动画重定向需要先对模型做「自动绑定」，或使用绑定/贴图后的模型",
+            )
+        animation = str(params.get("animation") or "").strip()
+        animate_in_place = bool(params.get("animate_in_place"))
+        out_format = str(params.get("out_format") or "glb").strip()
+
+        try:
+            task_id = await self._animation.submit_retarget(
+                rig_task_id, animation=animation, animate_in_place=animate_in_place, out_format=out_format
+            )
+        except GameItemAnimationError as exc:
+            raise GameRpcError(exc.code, str(exc)) from exc
+
+        placeholder = GameAsset(
+            asset_id=f"gasset_{secrets.token_hex(4)}",
+            type="model",
+            name=f"动画重定向中…（来自 {source.name}）",
+            status="pending",
+            params={
+                "source": "animation_retarget",
+                "job_id": task_id,
+                "animation": animation,
+                "animate_in_place": animate_in_place,
+                "input_task_id": rig_task_id,
+            },
+            source_asset_id=source_asset_id,
+        )
+        project = self._store.append_asset(project.project_id, placeholder)
+        return {
+            "project": project.to_dict(),
+            "placeholder_asset_id": placeholder.asset_id,
+            "job_id": task_id,
+        }
+
+    async def handle_game_assets_retarget_status(self, params: dict) -> dict:
+        project = self._require_project(str(params.get("project_id") or "").strip())
+        placeholder_asset_id = str(params.get("placeholder_asset_id") or "").strip()
+        job_id = str(params.get("job_id") or "").strip()
+        if not (placeholder_asset_id and job_id):
+            raise GameRpcError("INVALID_PARAMS", "缺少 placeholder_asset_id / job_id")
+
+        save_dir = str(get_project_assets_dir(project.project_id))
+        status = await self._animation.poll_retarget(job_id, save_dir=save_dir)
+        if status.status == "pending":
+            return {"project": project.to_dict(), "status": "pending"}
+
+        source = next((a for a in project.assets if a.asset_id == placeholder_asset_id), None)
+        source_asset_id = source.source_asset_id if source else None
+        source_params = source.params if source else {}
+        animation = str(source_params.get("animation") or "")
+        animate_in_place = bool(source_params.get("animate_in_place"))
+        source_name = source.name.removeprefix("动画重定向中…（来自 ").removesuffix("）") if source else ""
+        project = self._store.delete_asset(project.project_id, placeholder_asset_id)
+
+        if status.status == "failed":
+            return {"project": project.to_dict(), "status": "failed", "error": status.error}
+
+        asset = GameAsset(
+            asset_id=f"gasset_{secrets.token_hex(4)}",
+            type="model",
+            name=f"{source_name} · 动画" if source_name else "动画模型",
+            file_path=status.model_file_path,
+            status="ready",
+            params={
+                "source": "animation_retarget",
+                "animation": animation,
+                "animate_in_place": animate_in_place,
+                "tripo_task_id": job_id,
+            },
             source_asset_id=source_asset_id,
         )
         project = self._store.append_asset(project.project_id, asset)

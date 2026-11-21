@@ -5,7 +5,7 @@ type: F
 author: alexbhyeo
 author_email: alexbhyeo@users.noreply.github.com
 created: 2026-11-20 16:01
-updated: 2026-11-20 16:01
+updated: 2026-11-20 22:40
 designs:
   - D-20261116-1047-game-workshop-lab
 modules:
@@ -24,7 +24,12 @@ files:
   - jiuwenswarm/channels/web/frontend/src/features/game/GamePage.tsx
   - jiuwenswarm/channels/web/frontend/src/features/game/gamePage.css
   - jiuwenswarm/channels/web/frontend/src/features/game/lab/GameLabChatPanel.tsx
+  - jiuwenswarm/channels/web/frontend/src/features/game/lab/GameLabCanvas.tsx
+  - jiuwenswarm/channels/web/frontend/src/features/game/lab/GameLabActionsContext.tsx
+  - jiuwenswarm/channels/web/frontend/src/features/game/lab/labFlow.ts
   - jiuwenswarm/channels/web/frontend/src/features/game/lab/gameLabChat.css
+  - jiuwenswarm/channels/web/frontend/package.json
+  - jiuwenswarm/channels/web/frontend/tests/gameLabFlow.test.mjs
   - jiuwenswarm/channels/web/frontend/src/i18n/locales/zh.json
   - jiuwenswarm/channels/web/frontend/src/i18n/locales/en.json
   - tests/unit_tests/server/runtime/test_game_lab_chat.py
@@ -132,6 +137,97 @@ INVALID_PARAMS：缺少 placeholder_asset_id / job_id
 | 收起 / 展开 | 收起只剩右下角胶囊，展开恢复 |
 | 刷新页面 | 历史消息仍在；项目里持久化 user + assistant 两条 |
 
+## 追加：生成实验室流程图（21:24）
+
+把导演模式剪辑助手的「生成实验室流程图」搬到游戏模式实验室助手：标题行最左
+一颗按钮，一键把项目里跑过的处理卡片还原成整张流程图。
+
+### 数据源：工程素材，不是聊天记录（与导演模式的有意偏差）
+
+导演模式从**聊天记录**还原（`LabCanvas.buildFlowFromChat` 扫
+`edit_chat_messages` 里助手生成过的 `image_asset_ids`）。游戏模式没有走这条，
+改成从**项目素材**还原：
+
+- 卡片是异步任务，产出素材自己带着 `params.source`（decompose / to_model /
+  mesh_complete / mesh_decimate）与 `source_asset_id`，链路信息已经在数据里；
+- 因此助手调过的、用户手点跑的、刷新前跑的，都能画出来——导演模式那套只能
+  画出"助手记录里出现过"的素材；
+- 一套事实只维护一处（素材），不必让聊天记录和画布各存一份链路。
+
+代价：**画不出来"意图"**。导演模式能还原提示词、宽高比这些生成参数；游戏模式
+的卡片没有自由提示词，能还原的就是"谁产出谁"这张图——这正好是流程图要表达的。
+
+### 实现
+
+- 新纯函数 `lab/labFlow.ts`：`buildLabFlow(project) -> {nodes, edges, cardCount}`。
+  - 一次分解（同 `source_asset_id` + `decompose_batch_id`）合并成**一张卡片**，
+    卡片到 N 个部件各一条边；
+  - 深度用 `resolveDepths` 算：不依赖别人的排第 0 列，其余排在上游右一列，
+    连线因此总是横向的（同列会被竖线穿刺、卡片互相压住——第一版就是这个
+    缺陷，见下）；
+  - 层内摆位两条规则（按用户实际使用反馈定的）：**同一张卡产出的素材成组
+    铺开**（每行最多 4 个、多的换行，与素材库 4 个一行的分组摆法一致）；
+    **互不依赖的节点竖着排成一列**。只做前一条会变成"每层都铺满 4 列"，22 个
+    节点铺到 16 列、整图 4510px 宽，缩到能看全时字已经没了；只做后一条就是
+    一列排到底的老问题。两条合起来实测 3010x1070，`fitView` 缩到 0.44 即可
+    看全；
+  - 端口名照抄节点组件（`image` / `in` / `out` / `parts` / `model` / `result`），
+    写错不报错、只会让连线悬空；分解产出用 `model_part` 节点类型、其余 3D 产出
+    用 `model`，与手动摆卡片时 `spawnModelResultNodes` 传的 type 一致（两者渲染
+    同一个组件，但 class / testid 不同——写成一类会让回归断言认不出部件）；
+  - 不碰 React、不碰画布状态，单测直接跑。
+- `GameLabCanvas`：接 `children`（助手卡片要渲染在 `GameLabActionsProvider`
+  内部才能拿到画布动作）并新增 `buildFlow` 到 `GameLabActionsContext`。
+  整张画布**清空重画**（与导演模式同一取舍：重复点结果一致，不做增量合并）；
+  `cardCount === 0` 时返回 `false` 且**不动画布**，避免一次空操作抹掉用户手连的线。
+- 落盘交给画布原有的 800ms debounce 自动保存，不额外发 RPC。
+- 重建后 `fitView` 一次：图有 7 列、比视口大得多，不取景用户只看到左边一块；
+  取景时按助手卡片是否展开留出右侧空间（展开留 392px），否则最右一列被面板
+  盖住。为此画布 `minZoom` 从默认 0.5 降到 0.3——0.5 会把 fit 截断在半途。
+- `GamePage.tsx` 把 `<GameLabChatPanel>` 改成 `<GameLabCanvas>` 的 children。
+- i18n `gameWorkshop.labChat.buildFlow`（「生成实验室流程图」/ "Build flow in Lab"）。
+
+### 实施中发现的真实缺陷：部件与卡片挤在同一列
+
+`resolveDepths` 第一版把依赖表混用了两个命名空间：素材节点的依赖写的是卡片
+key，而查生产者的表 `producerByKey` 用素材 id 做 key——查不到，于是所有依赖
+卡片的素材都被判成第 1 层，和卡片同列。实测 `demo` 工程：一列堆了 17 个节点，
+画布高 4420px，`fitView` 被 `minZoom` 截断后只能看到一条竖线。
+
+修复：依赖表统一用节点 key（`asset:<id>` / 卡片自己的 key），去掉
+`producerByKey`。修正后同一工程 7 列、2500x2600。回归断言补在
+`tests/gameLabFlow.test.mjs`：部件必须严格在卡片右边、卡片在源图右边、任意两个
+节点位置不重叠——第一版实现过不了这三条。
+
+### 验证
+
+纯函数单测 `tests/gameLabFlow.test.mjs`（`npm run test:game-lab-flow`，8 条全通过）：
+空工程返回空图、分解批次合并、多批次各一张卡、2D转3D→补全→重构列递增、
+未知来源/pending/上游已删的容错、循环依赖不溢出、**每条边都落在节点真实端口
+上**（端口名表抄自 `nodes/*.tsx`）、幂等。
+
+前端端到端（真实前端 + 真实后端 + 真实工程数据，17 项断言全通过）：用
+`demo`（15 个素材、四类卡片齐、原有 17 个节点）与一个只有生成素材的工程。
+
+| 检查 | 结果 |
+|---|---|
+| 按钮存在 + 文案取自 i18n | `title=生成实验室流程图` |
+| 重建后节点/连线数 | 22 / 20，与纯函数算出的期望一致 |
+| 卡片构成 | 分解 1、2D转3D 2、网格补全 1、拓扑重构 3、图片 1、模型 14 |
+| 分解卡片 | 「已产出 8 个部件」 |
+| 连线路径 | 20 条均有有效 `d`，端口集合覆盖 `image/in/out/parts/model/result` |
+| 卡片仍可用 | 2D转3D 卡片认到源图；网格卡片按 `source_asset_id` 认到上游（3 张有源、1 张历史无源） |
+| 取景 | 最右节点 `right=1288` < 面板 `left=1305`，未被遮挡 |
+| 摆位 | 分解卡 + 2 张 2D转3D 卡同列（x 相同、y 不同）；8 个部件铺成 4 列 × 2 行且整体在卡片右侧；网格卡片在部件右侧 |
+| 幂等 | 再点一次仍 22 / 20 |
+| 持久化 | 刷新后仍是 22 / 20（autosave 生效） |
+| 空工程 | 点击前后都是 2 个节点，不误清画布 |
+| `pageerror` | 0 |
+
+历史无源卡片：`gasset_41fc8ad1`「拓扑重构模型」是早期跑的，那时还没记
+`source_asset_id`。它仍然画出来（产出还在、能继续用），只是没有入边、卡片
+上显示"请从左侧连一个 3D 模型"——这是有意的容错，不是缺陷。
+
 ## 遗留
 
 - 助手只覆盖实验室四张卡片。若需要"先在图里生成再处理"，需把创作页的生成
@@ -139,3 +235,7 @@ INVALID_PARAMS：缺少 placeholder_asset_id / job_id
 - 一轮内的卡片调用是串行的（等一张跑完再下一张），没有并发调度；与剪辑助手
   单智能体路径一致。
 - 前端没有做"取消本轮"入口；长任务只能等后端超时。
+- 流程图按"层"分区、层内成组铺开，整图仍需缩到 0.44 左右才能看全；行序按
+  素材顺序，没有做"上下游尽量对齐"的交叉最小化。
+- 没有还原"意图"：导演模式能带回提示词/参数，游戏模式的卡片本来就没有自由
+  提示词，所以只还原链路结构。

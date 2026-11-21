@@ -106,6 +106,32 @@ export type GameMeshOpStatusResult = {
   asset?: GameAsset;
 };
 
+/** 实验室「文生图 / 图生图」卡片提交参数。`source` 只用于标记素材由哪张
+ *  卡片产出（后端写进 params.source），「生成实验室流程图」靠它还原卡片；
+ *  `referenceAssetIds` 只在图生图时出现，后端会解析成参考图路径。 */
+export type GameLabImageRequest = {
+  prompt: string;
+  assetType: 'character' | 'world';
+  source: 'text2image' | 'image_ref';
+  referenceAssetIds?: string[];
+  name?: string;
+};
+
+/** 骨骼检查的提交/轮询结果：只回"能不能绑定 + 推荐骨架"，不产出素材，
+ *  所以没有 placeholder_asset_id / asset。 */
+export type GameRigCheckSubmitResult = {
+  project: GameProject;
+  job_id: string;
+};
+
+export type GameRigCheckStatusResult = {
+  status: 'pending' | 'success' | 'failed';
+  riggable?: boolean;
+  rig_type?: string;
+  error?: string;
+  project?: GameProject;
+};
+
 export type GameBridgeStatus = {
   godot: boolean;
   godot_binary: string;
@@ -140,6 +166,14 @@ const METHOD = {
   assetsMeshCompleteCheckStatus: 'game.assets.mesh_complete_check_status',
   assetsMeshDecimate: 'game.assets.mesh_decimate',
   assetsMeshDecimateCheckStatus: 'game.assets.mesh_decimate_check_status',
+  assetsTexture: 'game.assets.texture',
+  assetsTextureCheckStatus: 'game.assets.texture_check_status',
+  assetsRigCheck: 'game.assets.rig_check',
+  assetsRigCheckStatus: 'game.assets.rig_check_status',
+  assetsRig: 'game.assets.rig',
+  assetsRigStatus: 'game.assets.rig_status',
+  assetsRetarget: 'game.assets.retarget',
+  assetsRetargetStatus: 'game.assets.retarget_status',
   labCanvasSave: 'game.lab_canvas.save',
   labChatSend: 'game.lab_chat.send',
   filesTree: 'game.files.tree',
@@ -188,6 +222,26 @@ export const gameApi = {
     const resp = await webRequest<{ project: GameProject; asset: GameAsset }>(
       METHOD.assetsGenerate,
       { project_id: projectId, prompt, type, name },
+      { timeoutMs: GAME_GENERATE_TIMEOUT_MS }
+    );
+    return resp;
+  },
+  /** 实验室「文生图 / 图生图」卡片：与创作页共用 game.assets.generate，
+   *  只是多带一个 `source` 标记（供流程图还原）和图生图的参考素材 id。 */
+  generateLabImage: async (
+    projectId: string,
+    req: GameLabImageRequest
+  ): Promise<{ project: GameProject; asset: GameAsset; error?: string }> => {
+    const resp = await webRequest<{ project: GameProject; asset: GameAsset; error?: string }>(
+      METHOD.assetsGenerate,
+      {
+        project_id: projectId,
+        prompt: req.prompt,
+        type: req.assetType,
+        name: req.name,
+        source: req.source,
+        reference_asset_ids: req.referenceAssetIds,
+      },
       { timeoutMs: GAME_GENERATE_TIMEOUT_MS }
     );
     return resp;
@@ -316,6 +370,93 @@ export const gameApi = {
   ): Promise<GameMeshOpStatusResult> =>
     webRequest<GameMeshOpStatusResult>(
       METHOD.assetsMeshDecimateCheckStatus,
+      { project_id: projectId, placeholder_asset_id: placeholderAssetId, job_id: jobId },
+      { timeoutMs: GAME_DECOMPOSE_STATUS_TIMEOUT_MS }
+    ),
+  /** 提交一次纹理贴图（源素材须是已就绪的 3D 模型/部件）；Tripo3D
+   *  models/texture 是单段异步任务，与拓扑重构同构。prompt 可选，
+   *  quality 取 fast/standard/detailed/extreme。 */
+  texture: async (
+    projectId: string,
+    sourceAssetId: string,
+    prompt?: string,
+    quality?: string
+  ): Promise<GameMeshOpSubmitResult> =>
+    webRequest<GameMeshOpSubmitResult>(
+      METHOD.assetsTexture,
+      { project_id: projectId, source_asset_id: sourceAssetId, prompt, quality },
+      { timeoutMs: GAME_MESH_OP_SUBMIT_TIMEOUT_MS }
+    ),
+  checkTextureStatus: async (
+    projectId: string,
+    placeholderAssetId: string,
+    jobId: string
+  ): Promise<GameMeshOpStatusResult> =>
+    webRequest<GameMeshOpStatusResult>(
+      METHOD.assetsTextureCheckStatus,
+      { project_id: projectId, placeholder_asset_id: placeholderAssetId, job_id: jobId },
+      { timeoutMs: GAME_DECOMPOSE_STATUS_TIMEOUT_MS }
+    ),
+  /** 骨骼检查：只回 riggable / rig_type，不产出素材（Tripo3D 文档里这一步
+   *  0 credits，结果纯信息）。 */
+  rigCheck: async (projectId: string, sourceAssetId: string): Promise<GameRigCheckSubmitResult> =>
+    webRequest<GameRigCheckSubmitResult>(
+      METHOD.assetsRigCheck,
+      { project_id: projectId, source_asset_id: sourceAssetId },
+      { timeoutMs: GAME_MESH_OP_SUBMIT_TIMEOUT_MS }
+    ),
+  checkRigCheckStatus: async (projectId: string, jobId: string): Promise<GameRigCheckStatusResult> =>
+    webRequest<GameRigCheckStatusResult>(
+      METHOD.assetsRigCheckStatus,
+      { project_id: projectId, job_id: jobId },
+      { timeoutMs: GAME_DECOMPOSE_STATUS_TIMEOUT_MS }
+    ),
+  /** 自动绑定：上传模型并提交 Tripo3D animations/rig，产出带骨架的模型。 */
+  rig: async (
+    projectId: string,
+    sourceAssetId: string,
+    rigType: string,
+    spec: string
+  ): Promise<GameMeshOpSubmitResult> =>
+    webRequest<GameMeshOpSubmitResult>(
+      METHOD.assetsRig,
+      { project_id: projectId, source_asset_id: sourceAssetId, rig_type: rigType, spec },
+      { timeoutMs: GAME_MESH_OP_SUBMIT_TIMEOUT_MS }
+    ),
+  checkRigStatus: async (
+    projectId: string,
+    placeholderAssetId: string,
+    jobId: string
+  ): Promise<GameMeshOpStatusResult> =>
+    webRequest<GameMeshOpStatusResult>(
+      METHOD.assetsRigStatus,
+      { project_id: projectId, placeholder_asset_id: placeholderAssetId, job_id: jobId },
+      { timeoutMs: GAME_DECOMPOSE_STATUS_TIMEOUT_MS }
+    ),
+  /** 动画重定向：给已绑定的模型套预设动画，产出带动画的模型。 */
+  retarget: async (
+    projectId: string,
+    sourceAssetId: string,
+    animation: string,
+    animateInPlace: boolean
+  ): Promise<GameMeshOpSubmitResult> =>
+    webRequest<GameMeshOpSubmitResult>(
+      METHOD.assetsRetarget,
+      {
+        project_id: projectId,
+        source_asset_id: sourceAssetId,
+        animation,
+        animate_in_place: animateInPlace,
+      },
+      { timeoutMs: GAME_MESH_OP_SUBMIT_TIMEOUT_MS }
+    ),
+  checkRetargetStatus: async (
+    projectId: string,
+    placeholderAssetId: string,
+    jobId: string
+  ): Promise<GameMeshOpStatusResult> =>
+    webRequest<GameMeshOpStatusResult>(
+      METHOD.assetsRetargetStatus,
       { project_id: projectId, placeholder_asset_id: placeholderAssetId, job_id: jobId },
       { timeoutMs: GAME_DECOMPOSE_STATUS_TIMEOUT_MS }
     ),

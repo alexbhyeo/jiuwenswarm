@@ -155,13 +155,15 @@ def _run_flow(page):
     print(f"[lab] rail asset grid visible on lab tab: {rail_visible}")
     assert rail_visible, "GameRail must stay mounted/visible on the Lab tab (drag source for process cards)"
 
-    print("[lab] open the round 图片处理 toolrail button, confirm the 2-option menu")
+    print("[lab] open the round 图片处理 toolrail button, confirm the menu options")
     page.click('[data-testid="game-workshop-lab-toolrail-button"][data-variant="image"]')
     page.wait_for_selector('[data-testid="game-workshop-lab-add-menu"]', timeout=5000)
     menu_items = page.locator('[data-testid="game-workshop-lab-add-menu-item"]')
     labels = [menu_items.nth(i).inner_text() for i in range(menu_items.count())]
     print(f"[lab] toolrail menu options: {labels}")
-    assert labels == ["2D转3D", "分解图"], f"expected exactly [2D转3D, 分解图] in that order, got {labels}"
+    assert labels == ["文生图", "图生图", "2D转3D", "分解图"], (
+        f"expected exactly [文生图, 图生图, 2D转3D, 分解图] in that order, got {labels}"
+    )
     shot(page, "05_toolrail_menu")
 
     _run_process_card(
@@ -241,8 +243,10 @@ def _run_process_card(page, *, kind, add_menu_variant, node_testid, submit_testi
     process_node = page.locator(f'[data-testid="{node_testid}"]').last
 
     print(f"[lab:{kind}] connecting image node output to {kind} node input")
-    img_handle = image_node.locator(".react-flow__handle").first
-    target_handle = process_node.locator(".react-flow__handle").first
+    # 图片节点现在同时有 target(in) / source(image) 两个 handle，必须显式取
+    # source——`.first` 会拿到左边那个入端口，连线会直接失败。
+    img_handle = image_node.locator(".react-flow__handle.source").first
+    target_handle = process_node.locator(".react-flow__handle.target").first
     ib = img_handle.bounding_box()
     tb = target_handle.bounding_box()
     page.mouse.move(ib["x"] + ib["width"] / 2, ib["y"] + ib["height"] / 2)

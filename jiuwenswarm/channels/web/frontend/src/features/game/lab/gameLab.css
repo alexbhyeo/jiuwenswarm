@@ -223,7 +223,13 @@
 .game-lab-node--decompose,
 .game-lab-node--to-model,
 .game-lab-node--mesh-complete,
-.game-lab-node--mesh-decimate {
+.game-lab-node--mesh-decimate,
+.game-lab-node--texture,
+.game-lab-node--rig-check,
+.game-lab-node--auto-rig,
+.game-lab-node--retarget,
+.game-lab-node--text2image,
+.game-lab-node--image-ref {
   width: 220px;
 }
 
@@ -302,4 +308,18 @@
 .game-lab-node-status--failed {
   background: var(--color-danger-subtle, #fef2f2);
   color: var(--color-danger, #dc2626);
+}
+
+/* 动画重定向卡片上的"原地播放"开关。 */
+.game-lab-node-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary, #6b7280);
+  cursor: pointer;
+}
+
+.game-lab-node-checkbox input {
+  margin: 0;
 }

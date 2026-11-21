@@ -7011,7 +7011,8 @@
       "collapse": "Collapse assistant",
       "expand": "Expand lab assistant",
       "scopeChip": "Process cards only",
-      "scopeHint": "The lab assistant can only run the four process cards: decompose, 2D to 3D, mesh completion and retopology"
+      "scopeHint": "The lab assistant can only run the four process cards: decompose, 2D to 3D, mesh completion and retopology",
+      "buildFlow": "Build flow in Lab"
     },
     "tabs": {
       "create": "Create",
@@ -7064,12 +7065,117 @@
     "lab": {
       "imageGroup": "Image processing",
       "modelGroup": "Model processing",
+      "animationGroup": "Animation",
       "resumeLostError": "Lost track of this submission after a reload — please submit again",
       "process": {
+        "text2image": "Text to image",
+        "imageRef": "Image to image",
         "decompose": "Decompose",
         "toModel": "2D to 3D",
         "meshComplete": "Mesh complete",
-        "meshDecimate": "Retopology"
+        "meshDecimate": "Retopology",
+        "texture": "Texture",
+        "rigCheck": "Rig check",
+        "autoRig": "Auto rig",
+        "retarget": "Animation retarget"
+      },
+      "rigTypes": {
+        "biped": "Biped (humanoid)",
+        "quadruped": "Quadruped",
+        "hexapod": "Hexapod",
+        "octopod": "Octopod",
+        "avian": "Avian / winged",
+        "serpentine": "Serpentine",
+        "aquatic": "Aquatic",
+        "others": "Other skeleton"
+      },
+      "rigSpecs": {
+        "tripo": "Tripo native",
+        "mixamo": "Mixamo compatible",
+        "actorcore": "ActorCore",
+        "unity": "Unity Humanoid",
+        "unreal": "Unreal Mannequin",
+        "vrm": "VRM 1.0"
+      },
+      "animations": {
+        "idle": "Idle",
+        "walk": "Walk",
+        "run": "Run",
+        "jump": "Jump",
+        "dive": "Dive",
+        "climb": "Climb",
+        "slash": "Slash",
+        "shoot": "Shoot",
+        "hurt": "Hurt",
+        "fall": "Fall",
+        "turn": "Turn",
+        "quadruped_walk": "Quadruped walk",
+        "hexapod_walk": "Hexapod walk",
+        "octopod_walk": "Octopod walk",
+        "serpentine_march": "Serpentine march",
+        "aquatic_march": "Aquatic march"
+      },
+      "rigCheck": {
+        "title": "Rig check",
+        "sourceConnected": "Source model: {{name}}",
+        "sourceMissing": "Connect a 3D model from the left",
+        "action": "Check",
+        "statusRunning": "Checking…",
+        "statusRiggable": "Can be rigged — recommended skeleton: {{rigType}}",
+        "statusNotRiggable": "This model cannot be rigged right now",
+        "rigTypeUnknown": "unknown",
+        "statusFailedGeneric": "Rig check failed"
+      },
+      "autoRig": {
+        "title": "Auto rig",
+        "sourceConnected": "Source model: {{name}}",
+        "sourceMissing": "Connect a 3D model from the left",
+        "action": "Rig",
+        "statusRunning": "Rigging…",
+        "statusSuccess": "Rigged model generated — see it under \"3D models\" in the creation panel",
+        "statusFailedGeneric": "Auto rig failed"
+      },
+      "retarget": {
+        "title": "Animation retarget",
+        "sourceConnected": "Source model: {{name}}",
+        "sourceMissing": "Connect a rigged model from the left",
+        "animateInPlace": "Animate in place",
+        "action": "Apply animation",
+        "statusRunning": "Retargeting…",
+        "statusSuccess": "Animated model generated — see it under \"3D models\" in the creation panel",
+        "statusFailedGeneric": "Animation retarget failed"
+      },
+      "texture": {
+        "title": "Texture",
+        "sourceConnected": "Source model: {{name}}",
+        "sourceMissing": "Connect a 3D model from the left",
+        "promptPlaceholder": "Texture style (optional), e.g. worn leather with scratches",
+        "qualityFast": "Fast",
+        "qualityStandard": "Standard",
+        "qualityDetailed": "Detailed",
+        "qualityExtreme": "Extreme (8K)",
+        "action": "Generate texture",
+        "statusRunning": "Texturing…",
+        "statusSuccess": "Textured model generated — see it under \"3D models\" in the creation panel",
+        "statusFailedGeneric": "Texturing failed"
+      },
+      "text2image": {
+        "title": "Text to image",
+        "promptPlaceholder": "Describe the image, e.g. chibi forest elf mage, three-view sheet",
+        "action": "Generate",
+        "statusRunning": "Generating…",
+        "statusSuccess": "Image generated — see it under \"Character / World\" in the creation panel",
+        "statusFailedGeneric": "Generation failed"
+      },
+      "imageRef": {
+        "title": "Image to image",
+        "sourceConnected": "References: {{count}}",
+        "sourceMissing": "Connect one or more images from the left as references",
+        "promptPlaceholder": "Describe the change, e.g. keep the character, switch to a side-on battle pose",
+        "action": "Generate",
+        "statusRunning": "Generating…",
+        "statusSuccess": "Image generated — see it under \"Character / World\" in the creation panel",
+        "statusFailedGeneric": "Generation failed"
       },
       "decompose": {
         "title": "Decompose",
