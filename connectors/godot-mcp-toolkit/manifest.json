@@ -1,0 +1,43 @@
+{
+  "version": "1.0.0",
+  "package_type": "mcp",
+  "id": "godot-mcp-toolkit",
+  "name": "Godot MCP Toolkit",
+  "description": "把 Godot 4.2+ 编辑器变成 MCP Server：在编辑器里创建场景与节点、读写 GDScript、编排动画与 Tilemap、启动试玩并回读运行中的节点与报错。",
+  "display_name": {
+    "zh": "Godot MCP Toolkit",
+    "en": "Godot MCP Toolkit"
+  },
+  "display_description": {
+    "zh": "通过 MCP 驱动 Godot 4.2+ 编辑器：场景与节点增删改、属性读写、GDScript 读写与校验、Tilemap/动画/音频编排、试玩启动与运行时节点检查、编辑器与游戏截图、报错回读。全部在本机运行，不上传工程数据。需要 Godot 4.2+ 编辑器插件与 Node.js 22+。",
+    "en": "Drive the Godot 4.2+ editor over MCP: create and edit scenes and nodes, read/write properties, author and validate GDScript, build tilemaps/animations/audio, start playtests and inspect live nodes, capture editor and game screenshots, and read back runtime errors. Runs fully locally with no project data uploaded. Requires the Godot 4.2+ editor plugin and Node.js 22+."
+  },
+  "integration": {
+    "type": "stdio-mcp",
+    "file": "mcp.json"
+  },
+  "icon": "icon.png",
+  "skills": [
+    {
+      "dir": "skills/godot-mcp-toolkit-guide",
+      "mode": "all"
+    }
+  ],
+  "category": "游戏开发",
+  "examples": {
+    "zh": [
+      "在当前场景里加一个 CharacterBody2D 玩家，带 Sprite2D 和碰撞体",
+      "把这个脚本里的移动逻辑改成支持手柄摇杆",
+      "启动试玩，然后告诉我玩家现在的位置和速度",
+      "读一下编辑器控制台里最近的报错并定位到对应脚本",
+      "给这个场景截图，确认 UI 布局是否正确"
+    ],
+    "en": [
+      "Add a CharacterBody2D player with a Sprite2D and a collider to the current scene",
+      "Change the movement logic in this script to support a gamepad stick",
+      "Start the playtest, then tell me the player's position and velocity",
+      "Read the latest editor console errors and point me at the script involved",
+      "Screenshot this scene so I can check the UI layout"
+    ]
+  }
+}
