@@ -7066,6 +7066,10 @@
       "imageGroup": "Image processing",
       "modelGroup": "Model processing",
       "animationGroup": "Animation",
+      "model": {
+        "skeletonBadge": "Skeleton",
+        "animatedBadge": "Skeleton + animation"
+      },
       "resumeLostError": "Lost track of this submission after a reload — please submit again",
       "process": {
         "text2image": "Text to image",

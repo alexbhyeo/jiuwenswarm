@@ -238,7 +238,8 @@
     "test:moa-progress": "node --test tests/moaProgress.test.mjs",
     "test:duplex-subagent-panel": "esbuild ../../../extensions/video_duplex/frontend/duplexSubagentEvents.ts src/stores/subagentStore.ts --bundle --splitting --packages=external --platform=node --format=esm --entry-names=[name] --outdir=node_modules/.cache/duplex-subagent-panel --define:import.meta.env={} && node --test ../../../extensions/video_duplex/tests/frontend/duplexSubagentPanel.test.mjs",
     "test:video-frame-encoding": "esbuild ../../../extensions/video_duplex/frontend/VideoLivePanel/frameEncoding.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/frame-encoding/frameEncoding.mjs && node --test ../../../extensions/video_duplex/tests/frontend/frameEncoding.test.mjs",
-    "test:game-lab-flow": "esbuild src/features/game/lab/labFlow.ts --bundle --packages=external --platform=node --format=esm --outfile=node_modules/.cache/game-lab-flow/labFlow.js && node --test tests/gameLabFlow.test.mjs"
+    "test:game-lab-flow": "esbuild src/features/game/lab/labFlow.ts --bundle --packages=external --platform=node --format=esm --outfile=node_modules/.cache/game-lab-flow/labFlow.js && node --test tests/gameLabFlow.test.mjs",
+    "test:game-lab-skeleton": "esbuild src/features/game/lab/nodes/skeletonOverlay.ts --bundle --packages=external --platform=node --format=esm --outfile=node_modules/.cache/game-lab-skeleton/skeletonOverlay.js && node --test tests/gameLabSkeleton.test.mjs"
   },
   "dependencies": {
     "@a2ui/react": "0.8.0",
@@ -305,6 +306,7 @@
     "saxes": "5.0.1",
     "shiki": "^4.3.1",
     "ssf": "0.11.2",
+    "three": "^0.183.2",
     "zustand": "^4.5.0"
   },
   "devDependencies": {
@@ -312,6 +314,7 @@
     "@types/node": "^25.2.3",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
+    "@types/three": "^0.183.1",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
     "@vitejs/plugin-react": "^4.2.0",

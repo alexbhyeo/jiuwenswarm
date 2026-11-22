@@ -6,6 +6,7 @@ import { useGameLabActions } from '../GameLabActionsContext';
 import type { GameModelPartNodeData } from '../labTypes';
 import { rawFileUrl } from './gameRawFileUrl';
 import { ModelViewerModal } from './ModelViewerModal';
+import { SkeletonModelViewer } from './SkeletonModelViewer';
 
 const trashIcon = (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -35,18 +36,42 @@ export function GameModelPartNode({ id, type, data }: NodeProps & { data: GameMo
   const modelUrl = rawFileUrl(data.filePath);
   const variant = type === 'model' ? 'model' : 'model-part';
   const testid = (suffix: string) => `game-workshop-lab-${variant}-node${suffix}`;
+  // 自动绑定的产出叠一层骨骼，让"绑上了什么骨架"一眼可见（用户给的参考图
+  // 就是模型 + 骨架线）；动画重定向的产出同样带骨架，而且带一段动画，预览
+  // 里会动起来。缩略图不开放拖拽，点击放大后再在弹窗里自由旋转。
+  const rigged = data.source === 'auto_rig' || data.source === 'animation_retarget';
+  const animated = data.source === 'animation_retarget';
+  const badge = animated
+    ? t('gameWorkshop.lab.model.animatedBadge')
+    : t('gameWorkshop.lab.model.skeletonBadge');
 
   return (
     <div className={`game-lab-node game-lab-node--${variant}`} data-testid={testid('')}>
       <Handle type="target" position={Position.Left} id="in" />
       <div className="game-lab-node-media game-lab-node-media--model">
-        <model-viewer
-          src={modelUrl}
-          alt={data.name}
-          className="nodrag game-lab-node-model-thumb"
-          onClick={() => setViewerOpen(true)}
-          data-testid={testid('-thumb')}
-        />
+        {rigged ? (
+          <SkeletonModelViewer
+            src={modelUrl}
+            alt={data.name}
+            className="nodrag game-lab-node-model-thumb game-lab-skeleton-viewer"
+            showSkeleton
+            onActivate={() => setViewerOpen(true)}
+            testId={testid('-skeleton')}
+          />
+        ) : (
+          <model-viewer
+            src={modelUrl}
+            alt={data.name}
+            className="nodrag game-lab-node-model-thumb"
+            onClick={() => setViewerOpen(true)}
+            data-testid={testid('-thumb')}
+          />
+        )}
+        {rigged && (
+          <span className="game-lab-node-badge" data-testid={testid('-skeleton-badge')}>
+            {badge}
+          </span>
+        )}
         <div className="game-lab-node-media-actions">
           <a href={modelUrl} download title={t('common.download')} data-testid={testid('-download')}>
             {downloadIcon}
@@ -81,7 +106,9 @@ export function GameModelPartNode({ id, type, data }: NodeProps & { data: GameMo
           {data.name}
         </div>
       )}
-      {viewerOpen && <ModelViewerModal src={modelUrl} alt={data.name} onClose={() => setViewerOpen(false)} />}
+      {viewerOpen && (
+        <ModelViewerModal src={modelUrl} alt={data.name} showSkeleton={rigged} onClose={() => setViewerOpen(false)} />
+      )}
       <Handle type="source" position={Position.Right} id="out" />
     </div>
   );

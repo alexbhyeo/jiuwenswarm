@@ -323,3 +323,31 @@
 .game-lab-node-checkbox input {
   margin: 0;
 }
+
+/* 自动绑定产出的"模型 + 骨骼"预览（three.js canvas）。容器铺满缩略图/
+  大图弹窗，canvas 由 renderer 设定像素尺寸，这里只负责铺满与裁切。 */
+.game-lab-skeleton-viewer {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.game-lab-skeleton-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.game-lab-node-badge {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 16px;
+  background: var(--color-accent, #6366f1);
+  color: #fff;
+  pointer-events: none;
+}

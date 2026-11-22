@@ -314,6 +314,9 @@ export function buildLabFlow(project: { assets: FlowAsset[] }): LabFlow {
               filePath: asset.file_path ?? '',
               name: asset.name,
               status: asset.status,
+              // 自动绑定的产出要叠骨骼，还原时要带上来源标记（见
+              // GameModelPartNode 对 data.source 的用法）。
+              source: sourceOf(asset),
             };
       nodes.push({ id: key, type: nodeType, position: positionOf(key), data });
       continue;

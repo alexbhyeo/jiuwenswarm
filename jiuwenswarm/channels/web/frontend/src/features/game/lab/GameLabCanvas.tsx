@@ -291,6 +291,8 @@ function GameLabCanvasInner({ project, onProjectUpdate, children }: GameLabCanva
             filePath: asset.file_path ?? '',
             name: asset.name,
             status: asset.status,
+            // 自动绑定的产出在节点上叠骨骼（见 GameModelPartNode）。
+            source: typeof asset.params?.source === 'string' ? asset.params.source : undefined,
           } satisfies GameModelPartNodeData,
         }));
         setEdges((eds) =>

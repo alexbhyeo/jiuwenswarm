@@ -58,6 +58,10 @@ export type GameModelPartNodeData = {
   filePath: string;
   name: string;
   status: string;
+  /** 产出这张素材的卡片（素材 params.source 的快照）。自动绑定 / 动画重定向
+   *  的产出都带骨架（`auto_rig` / `animation_retarget`），节点据此在缩略图上
+   *  叠加骨骼；画布快照里没有这个字段的旧模型节点按"普通模型"渲染。 */
+  source?: string;
 };
 
 export type GameDecomposeNodeData = {

@@ -7063,6 +7063,10 @@
       "imageGroup": "图片处理",
       "modelGroup": "模型处理",
       "animationGroup": "动画处理",
+      "model": {
+        "skeletonBadge": "骨骼",
+        "animatedBadge": "骨骼动画"
+      },
       "resumeLostError": "页面刷新或重新打开后丢失了提交进度，请重新提交",
       "process": {
         "text2image": "文生图",
