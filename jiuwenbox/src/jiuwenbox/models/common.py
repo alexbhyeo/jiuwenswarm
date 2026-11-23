@@ -14,6 +14,10 @@ class AuditEventType(str, enum.Enum):
     SANDBOX_STARTED = "sandbox_started"
     SANDBOX_STOPPED = "sandbox_stopped"
     SANDBOX_DELETED = "sandbox_deleted"
+    SANDBOX_PAUSED = "sandbox_paused"
+    SANDBOX_RESUMED = "sandbox_resumed"
+    SANDBOX_CHECKPOINTED = "sandbox_checkpointed"
+    SANDBOX_FORKED = "sandbox_forked"
     POLICY_APPLIED = "policy_applied"
     # Single event per operation, emitted **after** the call returns so
     # the payload carries both intent (command/workdir) and outcome

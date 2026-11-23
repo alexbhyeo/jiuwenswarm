@@ -122,6 +122,35 @@ async def restart_sandbox(sandbox_id: str):
     return await _mgr().restart_sandbox(sandbox_id)
 
 
+@router.post("/sandboxes/{sandbox_id}/pause", response_model=SandboxRef)
+async def pause_sandbox(sandbox_id: str):
+    return await _mgr().pause_sandbox(sandbox_id)
+
+
+@router.post("/sandboxes/{sandbox_id}/resume", response_model=SandboxRef)
+async def resume_sandbox(sandbox_id: str):
+    return await _mgr().resume_sandbox(sandbox_id)
+
+
+class CheckpointResponse(BaseModel):
+    checkpoint_id: str
+
+
+@router.post("/sandboxes/{sandbox_id}/checkpoint", response_model=CheckpointResponse)
+async def checkpoint_sandbox(sandbox_id: str):
+    checkpoint_id = await _mgr().checkpoint_sandbox(sandbox_id)
+    return CheckpointResponse(checkpoint_id=checkpoint_id)
+
+
+class ForkRequest(BaseModel):
+    sandbox_id: str | None = None
+
+
+@router.post("/sandboxes/checkpoints/{checkpoint_id}/fork", response_model=SandboxRef, status_code=201)
+async def fork_sandbox(checkpoint_id: str, request: ForkRequest):
+    return await _mgr().fork_sandbox(checkpoint_id, sandbox_id=request.sandbox_id)
+
+
 @router.post("/sandboxes/{sandbox_id}/exec", response_model=ExecResult)
 async def exec_in_sandbox(sandbox_id: str, request: ExecRequest):
     stdin_data = request.stdin.encode() if request.stdin else None

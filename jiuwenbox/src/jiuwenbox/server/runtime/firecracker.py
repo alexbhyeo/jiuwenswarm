@@ -23,6 +23,7 @@ import os
 import shlex
 import shutil
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -197,9 +198,11 @@ class _FirecrackerSandbox:
     workdir: Path
     api_sock: Path
     vsock_uds: Path
+    rootfs_path: Path
     guest_cid: int
     log_file: Any
     jobs: dict[str, _FirecrackerBackgroundJobCache] = field(default_factory=dict)
+    paused: bool = False
 
 
 class FirecrackerRuntime(RuntimeAdapter):
@@ -261,6 +264,7 @@ class FirecrackerRuntime(RuntimeAdapter):
             workdir=workdir,
             api_sock=api_sock,
             vsock_uds=vsock_uds,
+            rootfs_path=rootfs_copy,
             guest_cid=guest_cid,
             log_file=log_file,
         )
@@ -374,12 +378,183 @@ class FirecrackerRuntime(RuntimeAdapter):
         except Exception:  # noqa: BLE001
             pass
 
+    # ------------------------------------------------------------------
+    # Phase 4: pause/resume (design D-20261123-1054 §8 step 4)
+    # ------------------------------------------------------------------
+
+    async def pause(self, sandbox_id: str) -> None:
+        """Freeze the VM's vCPUs in place without destroying it (near-instant)."""
+        sandbox = await self._require_sandbox(sandbox_id)
+        if sandbox.paused:
+            return
+        await _fc_api(sandbox.api_sock, "PATCH", "/vm", {"state": "Paused"})
+        sandbox.paused = True
+
+    async def resume(self, sandbox_id: str) -> None:
+        """Unfreeze a paused VM; it continues exactly where it was paused."""
+        sandbox = await self._require_sandbox(sandbox_id)
+        if not sandbox.paused:
+            return
+        await _fc_api(sandbox.api_sock, "PATCH", "/vm", {"state": "Resumed"})
+        sandbox.paused = False
+
+    # ------------------------------------------------------------------
+    # Phase 5: checkpoint/fork (design D-20261123-1054 §8 step 5)
+    # ------------------------------------------------------------------
+
+    async def checkpoint(self, sandbox_id: str, *, resume_after: bool = True) -> str:
+        """Snapshot the VM's full state (memory + vCPU + devices) to disk.
+
+        This Firecracker build (v1.18.0) has no ``drive_overrides`` on
+        ``/snapshot/load``, so the rootfs path baked into the snapshot is
+        whatever the drive points at *at snapshot time* -- there is no way
+        to redirect it later. To keep the checkpoint durable (independent of
+        the source sandbox's own lifecycle, e.g. if it gets deleted) and
+        collision-free (so forks don't fight over the live sandbox's
+        still-mutating disk), the drive is hot-swapped to a checkpoint-owned
+        frozen copy via ``PATCH /drives/{id}`` right before snapshotting,
+        then swapped back to the sandbox's own file afterward.
+        """
+        sandbox = await self._require_sandbox(sandbox_id)
+        was_paused = sandbox.paused
+        if not was_paused:
+            await self.pause(sandbox_id)
+
+        checkpoint_id = f"{sandbox_id}-{uuid.uuid4().hex[:12]}"
+        checkpoint_dir = _resolve_workdir_root() / "checkpoints" / checkpoint_id
+        await asyncio.to_thread(checkpoint_dir.mkdir, parents=True, exist_ok=True)
+        snapshot_path = checkpoint_dir / "snap.file"
+        mem_file_path = checkpoint_dir / "mem.file"
+        frozen_rootfs = checkpoint_dir / "rootfs.ext4"
+
+        try:
+            await asyncio.to_thread(shutil.copyfile, sandbox.rootfs_path, frozen_rootfs)
+            await _fc_api(
+                sandbox.api_sock, "PATCH", "/drives/rootfs",
+                {"drive_id": "rootfs", "path_on_host": str(frozen_rootfs)},
+            )
+            await _fc_api(
+                sandbox.api_sock, "PUT", "/snapshot/create",
+                {
+                    "snapshot_path": str(snapshot_path),
+                    "mem_file_path": str(mem_file_path),
+                    "snapshot_type": "Full",
+                },
+            )
+        except Exception:
+            await asyncio.to_thread(shutil.rmtree, checkpoint_dir, True)
+            raise
+        finally:
+            # Always point the live sandbox's drive back at its own file,
+            # whether or not the snapshot succeeded, before any resume.
+            await _fc_api(
+                sandbox.api_sock, "PATCH", "/drives/rootfs",
+                {"drive_id": "rootfs", "path_on_host": str(sandbox.rootfs_path)},
+            )
+            if not was_paused:
+                await self.resume(sandbox_id)
+
+        return checkpoint_id
+
+    async def fork(self, checkpoint_id: str, new_sandbox_id: str) -> int | None:
+        """Restore ``checkpoint_id`` into a brand-new, independent microVM.
+
+        Loads the snapshot paused (``resume_vm: false``), hot-swaps the
+        rootfs drive to a fresh per-fork copy via ``PATCH /drives/{id}``
+        before any guest code can run, overrides the vsock UDS path (the
+        one override this Firecracker build does support), then resumes --
+        so no two forks (or a fork and its source) ever share a writable
+        disk file.
+        """
+        async with self._lock:
+            if new_sandbox_id in self._sandboxes:
+                raise RuntimeError(f"Firecracker sandbox {new_sandbox_id} already has an active handle")
+            guest_cid = next(self._cid_counter)
+
+        checkpoint_dir = _resolve_workdir_root() / "checkpoints" / checkpoint_id
+        snapshot_path = checkpoint_dir / "snap.file"
+        mem_file_path = checkpoint_dir / "mem.file"
+        checkpoint_rootfs = checkpoint_dir / "rootfs.ext4"
+        if not snapshot_path.is_file() or not mem_file_path.is_file() or not checkpoint_rootfs.is_file():
+            raise RuntimeError(f"checkpoint {checkpoint_id!r} not found at {checkpoint_dir}")
+
+        firecracker_bin = _resolve_firecracker_bin()
+        workdir = _resolve_workdir_root() / new_sandbox_id
+        await asyncio.to_thread(workdir.mkdir, parents=True, exist_ok=True)
+        rootfs_copy = workdir / "rootfs.ext4"
+        api_sock = workdir / "fc-api.sock"
+        vsock_uds = workdir / "fc-vsock.sock"
+        log_path = workdir / "firecracker.log"
+        for stale in (api_sock, vsock_uds):
+            await asyncio.to_thread(stale.unlink, True)
+
+        await asyncio.to_thread(shutil.copyfile, checkpoint_rootfs, rootfs_copy)
+
+        log_file = open(log_path, "ab")
+        try:
+            process = await asyncio.create_subprocess_exec(
+                firecracker_bin,
+                "--api-sock", str(api_sock),
+                "--id", new_sandbox_id,
+                stdout=log_file,
+                stderr=log_file,
+            )
+        except FileNotFoundError as exc:
+            log_file.close()
+            raise FirecrackerConfigError(
+                f"Firecracker binary {firecracker_bin!r} not found on PATH"
+            ) from exc
+
+        sandbox = _FirecrackerSandbox(
+            sandbox_id=new_sandbox_id,
+            process=process,
+            workdir=workdir,
+            api_sock=api_sock,
+            vsock_uds=vsock_uds,
+            rootfs_path=rootfs_copy,
+            guest_cid=guest_cid,
+            log_file=log_file,
+        )
+
+        try:
+            await self._wait_for_api_socket(api_sock, process)
+            await _fc_api(api_sock, "PUT", "/logger", {"log_path": str(log_path), "level": "Info"})
+            await _fc_api(
+                api_sock, "PUT", "/snapshot/load",
+                {
+                    "snapshot_path": str(snapshot_path),
+                    "mem_backend": {"backend_type": "File", "backend_path": str(mem_file_path)},
+                    "resume_vm": False,
+                    "vsock_override": {"uds_path": str(vsock_uds)},
+                },
+            )
+            # No drive_overrides on this Firecracker build: hot-swap the
+            # drive to this fork's own copy while still paused (loaded but
+            # not yet resumed), so no guest code ever observes the
+            # checkpoint's shared frozen file as its live disk.
+            await _fc_api(
+                api_sock, "PATCH", "/drives/rootfs",
+                {"drive_id": "rootfs", "path_on_host": str(rootfs_copy)},
+            )
+            await _fc_api(api_sock, "PATCH", "/vm", {"state": "Resumed"})
+            await self._wait_for_guest_agent(vsock_uds, process)
+        except Exception:
+            await self._force_kill(sandbox)
+            await asyncio.to_thread(shutil.rmtree, workdir, True)
+            raise
+
+        async with self._lock:
+            self._sandboxes[new_sandbox_id] = sandbox
+        return process.pid
+
     async def exec(
         self,
         sandbox_id: str,
         request: RuntimeExecRequest,
     ) -> ExecResult:
         sandbox = await self._require_sandbox(sandbox_id)
+        if sandbox.paused:
+            raise RuntimeError(f"Firecracker sandbox {sandbox_id} is paused; call resume first")
         if not request.command:
             raise ValueError("command must not be empty")
         req: dict[str, Any] = {
@@ -409,6 +584,11 @@ class FirecrackerRuntime(RuntimeAdapter):
         request: RuntimeBackgroundExecRequest,
     ) -> BackgroundExecResult:
         sandbox = await self._require_sandbox(sandbox_id)
+        if sandbox.paused:
+            return BackgroundExecResult(
+                started=False, command=list(request.command),
+                error_message=f"Firecracker sandbox {sandbox_id} is paused; call resume first",
+            )
         if not request.command:
             return BackgroundExecResult(started=False, command=[], error_message="command must not be empty")
 

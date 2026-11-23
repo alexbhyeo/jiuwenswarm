@@ -834,6 +834,8 @@ generated: true
 |---|---|---|---|---|
 | [README](designs/README.md) | D | 设计资产 | 待确认 | — |
 | [REGISTRY](designs/REGISTRY.md) | D | SDD 编号台账 (REGISTRY) | 待确认 | — |
+| [experiments](designs/proposals/D-20261123-1054-firecracker-microvm-per-session/experiments.md) | D | Firecracker 实验结果 | 待确认 | — |
+| [flow](designs/proposals/D-20261123-1054-firecracker-microvm-per-session/flow.md) | D | 用户请求 → Firecracker microVM 执行链路 | 待确认 | — |
 | [legacy-documents](designs/legacy-documents.md) | D | 旧格式设计资料 | 待确认 | — |
 | [migration-20261026](designs/migration-20261026.md) | D | 设计文档迁移与跨仓引用 | 待确认 | — |
 | [team_expert_group_manifest_design](designs/archive/team_expert_group_manifest_design.md) | D | Team 模式接入专家团 Manifest 加载设计 | 待确认 | — |

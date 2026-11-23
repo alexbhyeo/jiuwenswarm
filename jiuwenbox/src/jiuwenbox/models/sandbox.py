@@ -66,6 +66,7 @@ def validate_custom_job_id(value: str) -> str:
 class SandboxPhase(str, enum.Enum):
     PROVISIONING = "provisioning"
     READY = "ready"
+    PAUSED = "paused"
     STOPPED = "stopped"
     ERROR = "error"
     DELETING = "deleting"

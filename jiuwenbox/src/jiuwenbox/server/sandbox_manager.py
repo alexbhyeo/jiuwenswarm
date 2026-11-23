@@ -783,6 +783,132 @@ class SandboxManager:
         self.audit.log(AuditEventType.SANDBOX_STOPPED, sandbox_id)
         return ref
 
+    async def pause_sandbox(self, sandbox_id: str) -> SandboxRef:
+        """Freeze a sandbox's vCPUs in place (near-instant; full state kept).
+
+        Optional runtime capability (currently only ``FirecrackerRuntime``);
+        other runtimes raise ``SandboxStateError``.
+        """
+        async with self._lock:
+            ref = self._get_sandbox(sandbox_id)
+            runtime = self._runtime_for(ref)
+            pause_fn = getattr(runtime, "pause", None)
+            if pause_fn is None:
+                raise SandboxStateError(
+                    f"Sandbox '{sandbox_id}' uses runtime '{ref.runtime}', "
+                    "which does not support pause"
+                )
+            if ref.phase != SandboxPhase.READY:
+                raise SandboxStateError(
+                    f"Cannot pause sandbox '{sandbox_id}': phase is {ref.phase.value}, expected ready"
+                )
+        await pause_fn(sandbox_id)
+        async with self._lock:
+            ref = self._get_sandbox(sandbox_id)
+            ref.phase = SandboxPhase.PAUSED
+            self._save_state(ref)
+            self.audit.log(AuditEventType.SANDBOX_PAUSED, sandbox_id)
+            return ref
+
+    async def resume_sandbox(self, sandbox_id: str) -> SandboxRef:
+        """Unfreeze a paused sandbox; it continues exactly where it was paused."""
+        async with self._lock:
+            ref = self._get_sandbox(sandbox_id)
+            runtime = self._runtime_for(ref)
+            resume_fn = getattr(runtime, "resume", None)
+            if resume_fn is None:
+                raise SandboxStateError(
+                    f"Sandbox '{sandbox_id}' uses runtime '{ref.runtime}', "
+                    "which does not support resume"
+                )
+            if ref.phase != SandboxPhase.PAUSED:
+                raise SandboxStateError(
+                    f"Cannot resume sandbox '{sandbox_id}': phase is {ref.phase.value}, expected paused"
+                )
+        await resume_fn(sandbox_id)
+        async with self._lock:
+            ref = self._get_sandbox(sandbox_id)
+            ref.phase = SandboxPhase.READY
+            self._mark_active(ref)
+            self._save_state(ref)
+            self.audit.log(AuditEventType.SANDBOX_RESUMED, sandbox_id)
+            return ref
+
+    async def checkpoint_sandbox(self, sandbox_id: str) -> str:
+        """Snapshot a sandbox's full state to disk; returns a checkpoint id.
+
+        Non-disruptive: the sandbox is paused only for the duration of the
+        snapshot call and resumed afterward (unless it was already paused).
+        """
+        async with self._lock:
+            ref = self._get_sandbox(sandbox_id)
+            runtime = self._runtime_for(ref)
+            checkpoint_fn = getattr(runtime, "checkpoint", None)
+            if checkpoint_fn is None:
+                raise SandboxStateError(
+                    f"Sandbox '{sandbox_id}' uses runtime '{ref.runtime}', "
+                    "which does not support checkpoint"
+                )
+            if ref.phase not in (SandboxPhase.READY, SandboxPhase.PAUSED):
+                raise SandboxStateError(
+                    f"Cannot checkpoint sandbox '{sandbox_id}': phase is {ref.phase.value}"
+                )
+        checkpoint_id = await checkpoint_fn(sandbox_id)
+        self.audit.log(AuditEventType.SANDBOX_CHECKPOINTED, sandbox_id, checkpoint_id=checkpoint_id)
+        return checkpoint_id
+
+    async def fork_sandbox(
+        self,
+        checkpoint_id: str,
+        *,
+        sandbox_id: str | None = None,
+        runtime_name: str = RUNTIME_FIRECRACKER,
+    ) -> SandboxRef:
+        """Restore ``checkpoint_id`` into a brand-new, independent sandbox."""
+        async with self._lock:
+            if sandbox_id is None:
+                new_id = generate_sandbox_id()
+                while new_id in self._sandboxes:
+                    new_id = generate_sandbox_id()
+            else:
+                validate_custom_sandbox_id(sandbox_id)
+                if sandbox_id in self._sandboxes:
+                    raise SandboxConflictError(f"Sandbox '{sandbox_id}' already exists")
+                new_id = sandbox_id
+
+            ref = SandboxRef(id=new_id, phase=SandboxPhase.PROVISIONING, runtime=runtime_name)
+            self._sandboxes[new_id] = ref
+            self._save_state(ref)
+            runtime = self._runtime_for(ref)
+            fork_fn = getattr(runtime, "fork", None)
+            if fork_fn is None:
+                self._sandboxes.pop(new_id, None)
+                self._delete_state(new_id)
+                raise SandboxStateError(f"Runtime '{runtime_name}' does not support fork")
+
+        try:
+            pid = await fork_fn(checkpoint_id, new_id)
+        except Exception as e:
+            logger.error("Failed to fork sandbox %s from checkpoint %s: %s", new_id, checkpoint_id, e)
+            async with self._lock:
+                current = self._sandboxes.get(new_id)
+                if current is not None:
+                    current.phase = SandboxPhase.ERROR
+                    current.error_message = str(e)
+                    self._save_state(current)
+                return current if current is not None else ref
+
+        async with self._lock:
+            current = self._get_sandbox(new_id)
+            current.phase = SandboxPhase.READY
+            current.pid = pid
+            now = _local_now()
+            current.started_at = now
+            current.last_active_at = now
+            self._save_state(current)
+            self.audit.log(AuditEventType.SANDBOX_FORKED, new_id, checkpoint_id=checkpoint_id)
+            return current
+
     async def restart_sandbox(self, sandbox_id: str) -> SandboxRef:
         async with self._lock:
             ref = self._get_sandbox(sandbox_id)
