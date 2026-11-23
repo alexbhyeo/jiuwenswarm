@@ -209,6 +209,8 @@
       "generateFailed": "生成失败",
       "generateTimeoutGaveUp": "等待生成结果超时，请稍后在素材面板中查看，或重新点击生成",
       "aspectRatioLabel": "宽高比",
+      "aspectRatioAutoLabel": "自动",
+      "aspectRatioAutoHint": "跟随输入素材（{{ratio}}）",
       "resolutionLabel": "分辨率",
       "durationLabel": "时长",
       "voiceLabel": "音色",

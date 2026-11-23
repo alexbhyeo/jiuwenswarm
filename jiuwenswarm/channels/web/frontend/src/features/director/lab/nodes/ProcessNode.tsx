@@ -20,11 +20,12 @@ import {
 import { MediaFrame, popoverPositionFromTrigger } from './MediaFrame';
 import { filterSwappableAssets } from '../swapAssets';
 import { resolveDetailVisible, useShowCardDetail } from '../cardDetailPrefs';
+import { measureImageAspectRatio, measureVideoAspectRatio, SUPPORTED_ASPECT_RATIOS } from '../labMediaRatio';
 import { NodeNameLabel } from './NodeNameLabel';
 import { PromptTextarea } from './PromptTextarea';
 import { renderWithImageChips } from './promptChips';
 
-const ASPECT_RATIO_OPTIONS = ['16:9', '9:16', '1:1', '4:3'];
+const ASPECT_RATIO_OPTIONS = [...SUPPORTED_ASPECT_RATIOS];
 const IMAGE_RESOLUTION_OPTIONS = ['512', '768', '1024'];
 const VIDEO_RESOLUTION_OPTIONS = ['480p', '720p', '1080p'];
 const DURATION_OPTIONS = [5, 10, 15];
@@ -95,6 +96,12 @@ const paramsToggleIcon = (
 
 function rawFileUrl(path: string): string {
   return `/file-api/raw-file?path=${encodeURIComponent(path)}`;
+}
+
+/** 输入端口的素材地址；还没写好的空路径不能拿来量——`rawFileUrl('')` 会
+ *  变成一次 `/file-api/raw-file?path=` 的 400 请求。 */
+function inputAssetUrl(asset: { filePath: string } | null): string | null {
+  return asset?.filePath ? rawFileUrl(asset.filePath) : null;
 }
 
 /** 下载按钮的建议文件名——跟 DirectorRail.tsx 的 downloadFileName 同一个
@@ -276,6 +283,42 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
   const swapWrapRef = useRef<HTMLDivElement>(null);
   const swapPopoverRef = useRef<HTMLDivElement>(null);
   const [swapPos, setSwapPos] = useState<{ top: number; left: number } | null>(null);
+
+  // 画面比例跟随输入素材（默认开）：视频类卡片只有在真连了图/片之后才谈得上
+  // "素材原来的比例"。9:16 素材配 16:9 请求时服务商按请求裁帧，成片就变横屏
+  // ——这正是"提示词和输入都是竖屏、出来的却是横屏"的来源。这里量出第一个
+  // 输入的宽高比写回 aspectRatio；用户点过比例药丸（aspectRatioAuto=false）
+  // 就不再自动改。量不出来（远程链接、素材被删）时保持原值。
+  const measuredInputUrl = useMemo(() => {
+    if (data.aspectRatioAuto === false) return null;
+    if (data.kind === 'image2video') return inputAssetUrl(image1) ?? inputAssetUrl(image2);
+    if (data.kind === 'imageAudio2video') return inputAssetUrl(image1);
+    if (data.kind === 'video2video') return inputAssetUrl(video1);
+    if (data.kind === 'videoBridge') return inputAssetUrl(video1);
+    return null;
+  }, [data.aspectRatioAuto, data.kind, image1, image2, video1]);
+  const measuresVideo = data.kind === 'video2video' || data.kind === 'videoBridge';
+  // 只有"输入本身能定比例"的卡片才给「自动」药丸：文生视频/文生图没有输入
+  // 素材可跟随，摆一颗点了什么也不会变的药丸只会误导。
+  const canFollowInput =
+    data.kind === 'image2video' ||
+    data.kind === 'imageAudio2video' ||
+    data.kind === 'video2video' ||
+    data.kind === 'videoBridge';
+  const isAspectRatioAuto = canFollowInput && data.aspectRatioAuto !== false;
+
+  useEffect(() => {
+    if (!measuredInputUrl) return;
+    let cancelled = false;
+    const measure = measuresVideo ? measureVideoAspectRatio : measureImageAspectRatio;
+    void measure(measuredInputUrl).then((ratio) => {
+      if (cancelled || !ratio || ratio === data.aspectRatio) return;
+      actions.patchProcessNode(id, { aspectRatio: ratio });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [actions, data.aspectRatio, id, measuredInputUrl, measuresVideo]);
   // "放大"按钮调浏览器 Fullscreen API 时要拿到这张 <img> 本身——同
   // DirectorRail.tsx 的 EnlargeableImage，只是那边是独立的参考卡片，
   // 这里是合并卡片"已生成"态里嵌的那张图。
@@ -599,7 +642,7 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
           <span className="lab-node-param-value">
             {isAudio
               ? voice
-              : `${data.aspectRatio} · ${data.resolution}${
+              : `${isAspectRatioAuto ? `${t('director.lab.aspectRatioAutoLabel')} · ` : ''}${data.aspectRatio} · ${data.resolution}${
                   mode === 'video' ? ` · ${data.durationSeconds}s` : ''
                 }${hasAudioOption ? ` · ${audioOutputLabel}` : ''}`}
             {outputCount > 1 ? ` · ×${outputCount}` : ''}
@@ -614,12 +657,25 @@ export function ProcessNode({ id, data }: NodeProps & { data: ProcessNodeData })
                 <div className="lab-node-params-popover-section">
                   <div className="lab-node-params-popover-label">{t('director.lab.aspectRatioLabel')}</div>
                   <div className="lab-node-params-popover-pills">
+                    {canFollowInput && (
+                      <button
+                        type="button"
+                        className={`lab-node-param-pill ${isAspectRatioAuto ? 'lab-node-param-pill--active' : ''}`}
+                        title={t('director.lab.aspectRatioAutoHint', { ratio: data.aspectRatio })}
+                        onClick={() => actions.patchProcessNode(id, { aspectRatioAuto: true })}
+                        data-testid="lab-aspect-ratio-auto"
+                      >
+                        {t('director.lab.aspectRatioAutoLabel')}
+                      </button>
+                    )}
                     {ASPECT_RATIO_OPTIONS.map((v) => (
                       <button
                         type="button"
                         key={v}
-                        className={`lab-node-param-pill ${data.aspectRatio === v ? 'lab-node-param-pill--active' : ''}`}
-                        onClick={() => actions.patchProcessNode(id, { aspectRatio: v })}
+                        className={`lab-node-param-pill ${
+                          !isAspectRatioAuto && data.aspectRatio === v ? 'lab-node-param-pill--active' : ''
+                        }`}
+                        onClick={() => actions.patchProcessNode(id, { aspectRatio: v, aspectRatioAuto: false })}
                       >
                         {v}
                       </button>

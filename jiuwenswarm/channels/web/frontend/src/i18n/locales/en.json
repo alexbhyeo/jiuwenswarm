@@ -209,6 +209,8 @@
       "generateFailed": "Generation failed",
       "generateTimeoutGaveUp": "Timed out waiting for the result — check the assets panel shortly, or click Generate again",
       "aspectRatioLabel": "Aspect Ratio",
+      "aspectRatioAutoLabel": "Auto",
+      "aspectRatioAutoHint": "Follow the input media ({{ratio}})",
       "resolutionLabel": "Resolution",
       "durationLabel": "Duration",
       "voiceLabel": "Voice",

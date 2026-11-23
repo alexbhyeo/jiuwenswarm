@@ -1332,6 +1332,9 @@ function LabCanvasInner() {
         status: 'idle',
         error: null,
         aspectRatio: typeof params.aspect_ratio === 'string' ? params.aspect_ratio : '16:9',
+        // 重建出来的比例就是当初真正用的那一个（可能来自"跟随输入"），
+        // 按手动值恢复，避免连上素材后又被重新量一遍改成别的档位。
+        aspectRatioAuto: false,
         resolution:
           typeof params.resolution === 'string' ? params.resolution : mode === 'video' ? '720p' : '512',
         durationSeconds: typeof params.duration_seconds === 'number' ? params.duration_seconds : 5,

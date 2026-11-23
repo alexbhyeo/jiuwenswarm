@@ -239,7 +239,8 @@
     "test:duplex-subagent-panel": "esbuild ../../../extensions/video_duplex/frontend/duplexSubagentEvents.ts src/stores/subagentStore.ts --bundle --splitting --packages=external --platform=node --format=esm --entry-names=[name] --outdir=node_modules/.cache/duplex-subagent-panel --define:import.meta.env={} && node --test ../../../extensions/video_duplex/tests/frontend/duplexSubagentPanel.test.mjs",
     "test:video-frame-encoding": "esbuild ../../../extensions/video_duplex/frontend/VideoLivePanel/frameEncoding.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/frame-encoding/frameEncoding.mjs && node --test ../../../extensions/video_duplex/tests/frontend/frameEncoding.test.mjs",
     "test:game-lab-flow": "esbuild src/features/game/lab/labFlow.ts --bundle --packages=external --platform=node --format=esm --outfile=node_modules/.cache/game-lab-flow/labFlow.js && node --test tests/gameLabFlow.test.mjs",
-    "test:game-lab-skeleton": "esbuild src/features/game/lab/nodes/skeletonOverlay.ts --bundle --packages=external --platform=node --format=esm --outfile=node_modules/.cache/game-lab-skeleton/skeletonOverlay.js && node --test tests/gameLabSkeleton.test.mjs"
+    "test:game-lab-skeleton": "esbuild src/features/game/lab/nodes/skeletonOverlay.ts --bundle --packages=external --platform=node --format=esm --outfile=node_modules/.cache/game-lab-skeleton/skeletonOverlay.js && node --test tests/gameLabSkeleton.test.mjs",
+    "test:lab-media-ratio": "esbuild src/features/director/lab/labMediaRatio.ts --bundle --packages=external --platform=node --format=esm --outfile=node_modules/.cache/lab-media-ratio/labMediaRatio.js && node --test tests/labMediaRatio.test.mjs"
   },
   "dependencies": {
     "@a2ui/react": "0.8.0",

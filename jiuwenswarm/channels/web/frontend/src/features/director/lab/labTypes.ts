@@ -202,6 +202,17 @@ export interface ProcessNodeData {
   status: ProcessStatus;
   error: string | null;
   aspectRatio: string;
+  /** 画面比例是否跟随输入素材（默认跟随）。
+   *
+   *  视频类卡片只有在真的连了图/片之后才有"原来的比例"可谈：9:16 的竖屏
+   *  素材配 16:9 的请求，服务商按请求裁切，成片就变成横屏、竖屏内容被切掉
+   *  一半。所以默认跟随第一个输入（图生视频看首帧图、视频连视频/视频生
+   *  视频看片段一），由卡片自己量出素材的宽高比写回 aspectRatio；用户点
+   *  过比例药丸就置为 false，从此以手动值为准。
+   *
+   *  旧画布数据没有这个字段时按 true 处理——16:9 素材量出来仍是 16:9，
+   *  行为不变；竖屏素材则自动修正。 */
+  aspectRatioAuto?: boolean;
   resolution: string;
   durationSeconds: number;
   /** 仅 text2audio（文生音频）使用：TTS 音色名。旧数据没有这个字段时按
