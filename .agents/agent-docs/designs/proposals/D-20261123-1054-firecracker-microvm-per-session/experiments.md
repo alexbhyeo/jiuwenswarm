@@ -125,3 +125,42 @@ n=1 完整流程，全部针对真实 jiuwenbox HTTP API：
 **结果：17 项断言全部通过（PASS=17 FAIL=0）**，包括最关键的跨 fork 隔离性
 （15 号）——证明每个 fork、以及 fork 的源 sandbox，各自持有独立可写磁盘，
 互不干扰，不是共享同一份文件的假隔离。
+
+## 实验五：完整 before/after 延迟对比（含阶段 4/5）
+
+在实验一的基础上，把阶段 4/5 新增的操作（pause/resume/checkpoint/fork）也
+纳入同一张 before/after 表。`bwrap` 一侧的这四项标注"不适用"，不是伪造一个
+对照数值——`ProcessRuntime`/`RuntimeAdapter` 没有任何 checkpoint/pause API
+（已在实验三前用 grep 确认），SIGSTOP/SIGCONT 式的进程级暂停两边都能做，
+不构成有意义的差异点，所以不纳入对比。
+
+统计方式改用 curl 自带的 `%{time_total}`（curl 内部的单调计时），不再用
+`date +%s.%N` 做差——后者在跑这批实验时撞上了一次 WSL2 虚拟机的时钟校正，
+一度量出负数耗时，确认是环境噪音后换了更稳的计时方式重跑。
+
+n=8，容器：`--device=/dev/kvm --privileged --cgroupns=host`，真实 jiuwenbox HTTP API。
+
+| 操作 | bwrap（before） | firecracker（after） |
+|---|---|---|
+| create | 0.524s | 2.894s |
+| exec（热 sandbox） | 0.007s | 0.008s |
+| delete | 0.509s | 0.240s |
+| pause | 不适用（无此能力） | 0.003s |
+| resume | 不适用（无此能力） | 0.003s |
+| checkpoint | 不适用（无此能力） | 1.632s |
+| fork（从 checkpoint 到新 sandbox ready） | 不适用（无此能力） | 1.428s |
+
+要点：
+
+- create/exec/delete 的结论与实验一一致（create 慢，主因是整份 rootfs 拷贝；
+  exec 两者相当；delete firecracker 更快）。
+- pause/resume 近乎瞬时（3ms 量级）——这正是设计文档里"挂起默认用 pause 不
+  用 destroy"的可行性依据：比起销毁重建（~2.9s 冷启动），挂起/恢复几乎不
+  花时间。
+- checkpoint（~1.6s）、fork（~1.4s）比 Firecracker 官方文档给出的裸机数字
+  （3-8.5ms）慢了两三个数量级，原因与 create 慢的原因相同：这两步都要整份
+  拷贝 1GB 的 rootfs（checkpoint 拷到 checkpoint 专属文件，fork 再拷一次到
+  自己的独立文件），而不是裸机场景下通常搭配的 COW/差分磁盘。换成 qcow2
+  backing file 或文件系统级 reflink 之后，这两个数字预期会显著下降，接近
+  Firecracker 自己给出的量级——但本次没有去验证这个优化空间，仅如实记录
+  "按整份拷贝算出来的真实耗时"，不采信文档给的理论值。
