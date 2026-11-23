@@ -1,0 +1,96 @@
+# Firecracker-capable jiuwenbox image (design
+# .agents/agent-docs/designs/proposals/D-20261123-1054-firecracker-microvm-per-session).
+#
+# Phase-1 scope: proves the FirecrackerRuntime adapter end-to-end inside
+# Docker-on-KVM. Runs as root (jailer / non-root hardening is phase 6 in the
+# design doc, not yet implemented) and ships no virtiofs/9p, so sandbox.files
+# / workspace bind-mounts are rejected for this sandbox type (see
+# sysop_builder.py's jiuwenbox-firecracker branch).
+#
+# Build from the jiuwenbox/ directory:
+#   docker build -f docker/Dockerfile.firecracker -t jiuwenbox-firecracker .
+# Run with KVM access:
+#   docker run --rm -p 8321:8321 --device=/dev/kvm jiuwenbox-firecracker
+
+# ---- Stage: fc-assets -- fetch+bake the golden kernel/rootfs ----
+FROM ubuntu:22.04 AS fc-assets
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        wget curl ca-certificates squashfs-tools e2fsprogs \
+    && rm -rf /var/lib/apt/lists/*
+COPY docker/firecracker /assets-src
+RUN bash /assets-src/build-assets.sh /opt/fc-assets
+
+# ---- Stage: fc-bin -- fetch the firecracker release binary ----
+FROM ubuntu:22.04 AS fc-bin
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN ARCH="$(uname -m)" \
+    && release_url="https://github.com/firecracker-microvm/firecracker/releases" \
+    && latest=$(basename "$(curl -fsSLI -o /dev/null -w '%{url_effective}' "${release_url}/latest")") \
+    && curl -fsSL "${release_url}/download/${latest}/firecracker-${latest}-${ARCH}.tgz" | tar -xz -C /tmp \
+    && mv "/tmp/release-${latest}-${ARCH}/firecracker-${latest}-${ARCH}" /usr/local/bin/firecracker \
+    && chmod +x /usr/local/bin/firecracker
+
+# ---- Final stage: jiuwenbox + firecracker ----
+FROM openeuler/openeuler:24.03
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN echo "sslverify=false" >> /etc/yum.conf
+RUN echo "insecure" >> ~/.curlrc
+RUN sed -i 's/gpgcheck=1/gpgcheck=0/g' /etc/yum.conf /etc/yum.repos.d/openEuler.repo
+
+RUN yum makecache
+RUN yum install -y \
+        bubblewrap \
+        iproute \
+        iptables \
+        iptables-nft \
+        nftables \
+        ca-certificates \
+        nodejs \
+        python3-pip \
+        git \
+        vim \
+        unzip \
+        java-17-openjdk-headless \
+        java-17-openjdk-devel \
+    && yum clean all \
+    && rm -rf /var/cache/yum
+
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+WORKDIR /app
+
+COPY pyproject.toml README.md ./
+COPY docker/requirements.txt ./docker/requirements.txt
+COPY src ./src
+COPY src/jiuwenbox/configs /app/configs
+
+RUN pip install --break-system-packages --upgrade -i https://pypi.tuna.tsinghua.edu.cn/simple build setuptools wheel \
+    && pip install --break-system-packages -i https://pypi.tuna.tsinghua.edu.cn/simple -r ./docker/requirements.txt \
+    && python3 -m build --wheel --no-isolation \
+    && pip install --break-system-packages -i https://pypi.tuna.tsinghua.edu.cn/simple dist/jiuwenbox-*.whl
+
+RUN ln -s /usr/bin/python3 /usr/bin/python
+
+COPY --from=fc-bin /usr/local/bin/firecracker /usr/local/bin/firecracker
+COPY --from=fc-assets /opt/fc-assets/vmlinux /opt/firecracker/vmlinux
+COPY --from=fc-assets /opt/fc-assets/rootfs.ext4 /opt/firecracker/golden-rootfs.ext4
+
+EXPOSE 8321
+EXPOSE 8322
+
+# Phase-1 scope: no non-root device-group plumbing for /dev/kvm yet, so this
+# image (unlike the main Dockerfile) stays root rather than dropping to the
+# `app` user.
+ENV JIUWENBOX_LISTEN=http://0.0.0.0:8321
+ENV JIUWENBOX_FIRECRACKER_BIN=/usr/local/bin/firecracker
+ENV JIUWENBOX_FIRECRACKER_KERNEL=/opt/firecracker/vmlinux
+ENV JIUWENBOX_FIRECRACKER_ROOTFS=/opt/firecracker/golden-rootfs.ext4
+ENV JIUWENBOX_FIRECRACKER_WORKDIR=/var/lib/jiuwenbox/firecracker
+
+CMD ["python3", "-m", "jiuwenbox.server.launcher"]

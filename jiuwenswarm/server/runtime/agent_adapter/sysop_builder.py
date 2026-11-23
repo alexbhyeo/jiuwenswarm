@@ -944,7 +944,7 @@ def create_sandbox_sysop_card(
 
     normalized_type = str(sandbox_type or "").strip().lower()
     try:
-        if normalized_type in {"jiuwenbox", "jiuwenbox-conch"}:
+        if normalized_type in {"jiuwenbox", "jiuwenbox-conch", "jiuwenbox-firecracker"}:
             from jiuwenswarm.server.runtime.no_host_fallback_jiuwenbox import (
                 install_no_host_fallback_jiuwenbox_providers,
             )
@@ -1062,6 +1062,29 @@ def create_sandbox_sysop_card(
                 conch.update(run_as_user=user, run_as_group=group)
             extra_params["policy"] = {"conch": conch}
             extra_params["api_sandbox_runtime"] = "conch"
+            extra_params["fallback_on_failure"] = False
+            sandbox_type = "jiuwenbox"
+
+        if normalized_type == "jiuwenbox-firecracker":
+            # Phase-1 scope (design D-20261123-1054 §9): a microVM has its own
+            # independent rootfs and no virtiofs/9p bind-mount support yet, so
+            # host directory sharing (workspace / project_dir / sandbox.files)
+            # is not wired up. Reject it loudly instead of silently dropping
+            # the mounts the caller asked for.
+            if any(value for value in files_runtime.values()) or upload_list:
+                raise ValueError(
+                    "jiuwenbox-firecracker does not support sandbox.files "
+                    "uploads/allow/deny yet (no virtiofs/9p bind-mount path); "
+                    "see design D-20261123-1054 §9"
+                )
+            if policy.get("filesystem_policy", {}).get("bind_mounts"):
+                logger.warning(
+                    "[sysop_builder] jiuwenbox-firecracker drops %d auto-managed "
+                    "bind mount(s); host directory sharing is not supported yet",
+                    len(policy["filesystem_policy"]["bind_mounts"]),
+                )
+            extra_params["policy"] = {}
+            extra_params["api_sandbox_runtime"] = "firecracker"
             extra_params["fallback_on_failure"] = False
             sandbox_type = "jiuwenbox"
 

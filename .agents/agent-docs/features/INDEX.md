@@ -17,6 +17,7 @@ generated: true
 | [deploy/yuanrong](#module-deploy-yuanrong) |
 | [docs](#module-docs) |
 | [gateway/channel_manager/web](#module-gateway-channel_manager-web) |
+| [jiuwenbox/src/jiuwenbox/server/runtime](#module-jiuwenbox-src-jiuwenbox-server-runtime) |
 | [jiuwenswarm](#module-jiuwenswarm) |
 | [jiuwenswarm/agents/harness](#module-jiuwenswarm-agents-harness) |
 | [jiuwenswarm/agents/harness/common](#module-jiuwenswarm-agents-harness-common) |
@@ -80,6 +81,14 @@ generated: true
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
 | [F_20261031_1139_gateway-session-e2a](F_20261031_1139_gateway-session-e2a.md) | F | Web 会话管理统一经 E2A 交由 Server 执行 | ruiqiang2 | 无独立 D：用户确认的 Gateway 解耦任务 4.1，沿用 develop 个人版现有链路，无独立设计编号。 |
+
+<a id="module-jiuwenbox-src-jiuwenbox-server-runtime"></a>
+
+## jiuwenbox/src/jiuwenbox/server/runtime
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [F_20261123_1420_firecracker-runtime-adapter](F_20261123_1420_firecracker-runtime-adapter.md) | F | Firecracker per-session microVM 运行时适配器实现与验证 | alexbhyeo | [D-20261123-1054-firecracker-microvm-per-session](../designs/proposals/D-20261123-1054-firecracker-microvm-per-session/design.md) |
 
 <a id="module-jiuwenswarm"></a>
 
@@ -395,6 +404,7 @@ generated: true
 | [F_20261104_1225_npc-team-member-sessions](F_20261104_1225_npc-team-member-sessions.md) | F | NPC 主从会话与成员咨询 | kdgmpw | [D-20261104-1141-npc-team-member-sessions](../designs/active/D-20261104-1141-npc-team-member-sessions/design.md) |
 | [F_20261110_1438_opencode-go-provider](F_20261110_1438_opencode-go-provider.md) | F | 新增 opencode-go 模型供应商 | wang_njust_608 | 无独立 D：需求与方案由本地 Spec Kit 资产 specs/001-opencode-go-provider/ 承载（spec/plan/tasks，仅本地保留、不入库），未另建 .agents/agent-docs 下的 D 编号；上游供应商预设归 agent-gateway 仓。 |
 | [F_20261111_1755_team-leader-goal](F_20261111_1755_team-leader-goal.md) | F | 调度模式领导目标驱动设置实施与验证 | alan_cheng | [D-20261111-1722-team-goal-config](../designs/active/D-20261111-1722-team-goal-config/design.md) |
+| [F_20261123_1420_firecracker-runtime-adapter](F_20261123_1420_firecracker-runtime-adapter.md) | F | Firecracker per-session microVM 运行时适配器实现与验证 | alexbhyeo | [D-20261123-1054-firecracker-microvm-per-session](../designs/proposals/D-20261123-1054-firecracker-microvm-per-session/design.md) |
 
 <a id="module-jiuwenswarm-server-runtime-marketplace"></a>
 

@@ -102,6 +102,7 @@ from jiuwenbox.server.runtime.errors import SandboxNotFoundError, SandboxConflic
 
 RUNTIME_PROCESS = "process"
 RUNTIME_CONCH = "conch"
+RUNTIME_FIRECRACKER = "firecracker"
 
 
 def normalize_sandbox_runtime(sandbox_runtime: str | None) -> str:
@@ -113,9 +114,11 @@ def normalize_sandbox_runtime(sandbox_runtime: str | None) -> str:
         return RUNTIME_PROCESS
     if value == "conch":
         return RUNTIME_CONCH
+    if value == "firecracker":
+        return RUNTIME_FIRECRACKER
     raise PolicyValidationError(
         f"Unsupported sandbox_runtime {sandbox_runtime!r}; "
-        "expected 'bwrap' or 'conch'"
+        "expected 'bwrap', 'conch', or 'firecracker'"
     )
 
 
@@ -165,6 +168,7 @@ class SandboxManager:
     ) -> None:
         self.runtime = runtime or ProcessRuntime()
         self._conch_runtime = None
+        self._firecracker_runtime = None
         self._policy_updates_enabled = (
             os.getenv("JIUWENBOX_RUNTIME_PROFILE", "").lower() == "agentos"
             or update_policy_path is not None
@@ -1977,6 +1981,11 @@ class SandboxManager:
                 from jiuwenbox.server.runtime.conch import ConchRuntime
                 self._conch_runtime = ConchRuntime()
             return self._conch_runtime
+        if ref.runtime == RUNTIME_FIRECRACKER:
+            if self._firecracker_runtime is None:
+                from jiuwenbox.server.runtime.firecracker import FirecrackerRuntime
+                self._firecracker_runtime = FirecrackerRuntime()
+            return self._firecracker_runtime
         return self.runtime
 
 

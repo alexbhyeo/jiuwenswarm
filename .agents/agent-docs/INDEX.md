@@ -21,6 +21,8 @@ generated: true
 | [deploy/yuanrong](#module-deploy-yuanrong) |
 | [docs](#module-docs) |
 | [gateway/channel_manager/web](#module-gateway-channel_manager-web) |
+| [jiuwenbox/src/jiuwenbox/server/runtime](#module-jiuwenbox-src-jiuwenbox-server-runtime) |
+| [jiuwenbox/src/jiuwenbox/supervisor](#module-jiuwenbox-src-jiuwenbox-supervisor) |
 | [jiuwenswarm](#module-jiuwenswarm) |
 | [jiuwenswarm/agents/harness](#module-jiuwenswarm-agents-harness) |
 | [jiuwenswarm/agents/harness/code/rails/heartbeat](#module-jiuwenswarm-agents-harness-code-rails-heartbeat) |
@@ -143,6 +145,23 @@ generated: true
 | [F_20261031_1139_gateway-session-e2a](features/F_20261031_1139_gateway-session-e2a.md) | F | Web 会话管理统一经 E2A 交由 Server 执行 | ruiqiang2 | 无独立 D：用户确认的 Gateway 解耦任务 4.1，沿用 develop 个人版现有链路，无独立设计编号。 |
 | [B_20261102_1644_cron-web-default-project-id](bugfix/gateway/channel_manager/B_20261102_1644_cron-web-default-project-id.md) | B | 前端未选项目创建定时任务落库 project_id 回退为空串 | kdgmpw | 无独立 D：恢复 4b00671f6（#5713）已实现的行为，属于对该修复在企业版合入后被回退的局部回归修复，无独立设计。 |
 | [S_02_app-role-npc-team](specs/jiuwenswarm/server/runtime/agent_adapter/S_02_app-role-npc-team.md) | S | app_role 的团队 NPC 与轻量咨询契约 | kdgmpw | — |
+
+<a id="module-jiuwenbox-src-jiuwenbox-server-runtime"></a>
+
+## jiuwenbox/src/jiuwenbox/server/runtime
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [D-20261123-1054-firecracker-microvm-per-session](designs/proposals/D-20261123-1054-firecracker-microvm-per-session/design.md) | D | 用 Firecracker 实现 per-session microVM——对标 DigitalOcean Managed Agents | alexbhyeo | — |
+| [F_20261123_1420_firecracker-runtime-adapter](features/F_20261123_1420_firecracker-runtime-adapter.md) | F | Firecracker per-session microVM 运行时适配器实现与验证 | alexbhyeo | [D-20261123-1054-firecracker-microvm-per-session](designs/proposals/D-20261123-1054-firecracker-microvm-per-session/design.md) |
+
+<a id="module-jiuwenbox-src-jiuwenbox-supervisor"></a>
+
+## jiuwenbox/src/jiuwenbox/supervisor
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [D-20261123-1054-firecracker-microvm-per-session](designs/proposals/D-20261123-1054-firecracker-microvm-per-session/design.md) | D | 用 Firecracker 实现 per-session microVM——对标 DigitalOcean Managed Agents | alexbhyeo | — |
 
 <a id="module-jiuwenswarm"></a>
 
@@ -664,6 +683,7 @@ generated: true
 | [F_20261104_1225_npc-team-member-sessions](features/F_20261104_1225_npc-team-member-sessions.md) | F | NPC 主从会话与成员咨询 | kdgmpw | [D-20261104-1141-npc-team-member-sessions](designs/active/D-20261104-1141-npc-team-member-sessions/design.md) |
 | [F_20261110_1438_opencode-go-provider](features/F_20261110_1438_opencode-go-provider.md) | F | 新增 opencode-go 模型供应商 | wang_njust_608 | 无独立 D：需求与方案由本地 Spec Kit 资产 specs/001-opencode-go-provider/ 承载（spec/plan/tasks，仅本地保留、不入库），未另建 .agents/agent-docs 下的 D 编号；上游供应商预设归 agent-gateway 仓。 |
 | [F_20261111_1755_team-leader-goal](features/F_20261111_1755_team-leader-goal.md) | F | 调度模式领导目标驱动设置实施与验证 | alan_cheng | [D-20261111-1722-team-goal-config](designs/active/D-20261111-1722-team-goal-config/design.md) |
+| [F_20261123_1420_firecracker-runtime-adapter](features/F_20261123_1420_firecracker-runtime-adapter.md) | F | Firecracker per-session microVM 运行时适配器实现与验证 | alexbhyeo | [D-20261123-1054-firecracker-microvm-per-session](designs/proposals/D-20261123-1054-firecracker-microvm-per-session/design.md) |
 | [B_20261031_0946_ttse-codecheck-boundaries](bugfix/jiuwenswarm/B_20261031_0946_ttse-codecheck-boundaries.md) | B | TTSE 相关 CodeCheck 受保护访问与关闭条件复杂度修复 | xinyang_bali | 无独立 D：按用户提供的 20 项 CodeCheck 清单修复实现边界，沿用当前 TTSE 通用运行契约，无独立 D。 |
 | [B_20261031_1042_pr9317-review](bugfix/jiuwenswarm/server/B_20261031_1042_pr9317-review.md) | B | PR 9317 插件模式校验与 Front 遗留启动链清理 | xinyang_bali | 无独立 D：根据 openJiuwen-bot 检视意见清理现有实现，不引入新接口或架构方案，无独立 D。 |
 | [B_20261031_1053_atomgit-review](bugfix/jiuwenswarm/server/B_20261031_1053_atomgit-review.md) | B | PR 9317 AtomGit 取消、补丁兼容与注销恢复修复 | xinyang_bali | 无独立 D：根据机器人检视修复现有资源生命周期和可选补丁边界，不引入独立方案。 |

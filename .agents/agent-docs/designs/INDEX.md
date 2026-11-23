@@ -17,6 +17,8 @@ generated: true
 | [agent_teams](#module-agent_teams) |
 | [agent_teams/workflow](#module-agent_teams-workflow) |
 | [docs](#module-docs) |
+| [jiuwenbox/src/jiuwenbox/server/runtime](#module-jiuwenbox-src-jiuwenbox-server-runtime) |
+| [jiuwenbox/src/jiuwenbox/supervisor](#module-jiuwenbox-src-jiuwenbox-supervisor) |
 | [jiuwenswarm](#module-jiuwenswarm) |
 | [jiuwenswarm/agents/harness/common](#module-jiuwenswarm-agents-harness-common) |
 | [jiuwenswarm/agents/harness/team](#module-jiuwenswarm-agents-harness-team) |
@@ -69,6 +71,26 @@ generated: true
 | ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
 |---|---|---|---|---|---|
 | [D-20261104-1141-npc-team-member-sessions](active/D-20261104-1141-npc-team-member-sessions/design.md) | NPC 主从会话与按需搜索工具 | in-development | kdgmpw | harness | 2026-11-04 |
+
+<a id="module-jiuwenbox-src-jiuwenbox-server-runtime"></a>
+
+## jiuwenbox/src/jiuwenbox/server/runtime
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261123-1054-firecracker-microvm-per-session](proposals/D-20261123-1054-firecracker-microvm-per-session/design.md) | 用 Firecracker 实现 per-session microVM——对标 DigitalOcean Managed Agents | draft | alexbhyeo | jiuwenbox | 2026-11-23 |
+
+<a id="module-jiuwenbox-src-jiuwenbox-supervisor"></a>
+
+## jiuwenbox/src/jiuwenbox/supervisor
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261123-1054-firecracker-microvm-per-session](proposals/D-20261123-1054-firecracker-microvm-per-session/design.md) | 用 Firecracker 实现 per-session microVM——对标 DigitalOcean Managed Agents | draft | alexbhyeo | jiuwenbox | 2026-11-23 |
 
 <a id="module-jiuwenswarm"></a>
 
