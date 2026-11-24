@@ -40,7 +40,12 @@ mkdir -p squashfs-root/etc/systemd/system/multi-user.target.wants
 ln -sf ../guest-agent.service squashfs-root/etc/systemd/system/multi-user.target.wants/guest-agent.service
 
 chown -R root:root squashfs-root
-truncate -s 1G rootfs.ext4
+# 1G was enough for the bare base image but not for anything guests install
+# over the internet (e.g. `apt-get install npm` pulls in nodejs + a gcc/g++
+# toolchain + git/gpg and blows past 1G mid-unpack with ENOSPC). 4G gives
+# real headroom for pip/npm/apt installs while still copying in a few
+# seconds per sandbox create.
+truncate -s 4G rootfs.ext4
 mkfs.ext4 -q -d squashfs-root -F rootfs.ext4
 
 rm -rf squashfs-root ubuntu.squashfs.upstream

@@ -4,6 +4,11 @@ After=network.target
 
 [Service]
 Type=simple
+# Kernel ip= boot arg (set by FirecrackerRuntime.create()) brings eth0 up
+# with a static address before userspace starts; DNS still needs a resolver,
+# which boot arg has no field for, so force it here every boot (replaces
+# any symlink systemd-resolved may have left, no dependency on it running).
+ExecStartPre=/bin/sh -c "rm -f /etc/resolv.conf; printf 'nameserver 8.8.8.8\\nnameserver 1.1.1.1\\n' > /etc/resolv.conf"
 ExecStart=/usr/bin/python3 /usr/local/bin/guest_agent.py
 Restart=always
 RestartSec=1

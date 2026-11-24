@@ -10,6 +10,10 @@ handshake: ``CONNECT <port>\\n`` -> ``OK <port>\\n`` ack, then the socket is
 the data channel). No Firecracker Python SDK exists, so the control plane
 (HTTP-over-UDS) and the data plane (vsock) are both hand-rolled here and kept
 deliberately small.
+
+Each sandbox also gets its own NAT'd tap device (see ``_create_tap_device``/
+``_ensure_host_nat``) so guest-side ``pip``/``wget``/``npm`` etc. can reach
+the internet; disable with ``JIUWENBOX_FIRECRACKER_NET_ENABLED=0``.
 """
 
 from __future__ import annotations
@@ -51,7 +55,24 @@ _API_SOCKET_WAIT_SECONDS = 5.0
 _API_SOCKET_POLL_INTERVAL_SECONDS = 0.05
 _BOOT_TIMEOUT_SECONDS = float(os.getenv("JIUWENBOX_FIRECRACKER_BOOT_TIMEOUT_SECONDS", "10"))
 _STOP_WAIT_SECONDS = 5.0
+
+# --- Networking (so pip/wget/npm etc. inside the guest can reach the
+# internet). One tap device per sandbox, NAT'd through the host's own
+# default-route interface. Every microVM reuses the same guest/host IP pair
+# on its own private point-to-point tap -- safe because each tap is a
+# dedicated link to exactly one VM, never a shared bridge -- which is the
+# scheme Firecracker's own network-setup docs recommend. Disable with
+# JIUWENBOX_FIRECRACKER_NET_ENABLED=0 for environments where the container
+# can't get CAP_NET_ADMIN / /dev/net/tun. ---
+_NET_ENABLED = os.getenv("JIUWENBOX_FIRECRACKER_NET_ENABLED", "1").strip().lower() not in ("0", "false", "no")
+_GUEST_IP = os.getenv("JIUWENBOX_FIRECRACKER_GUEST_IP", "172.16.0.2")
+_HOST_TAP_IP = os.getenv("JIUWENBOX_FIRECRACKER_HOST_IP", "172.16.0.1")
+_GUEST_NETMASK = os.getenv("JIUWENBOX_FIRECRACKER_NETMASK", "255.255.255.252")
+_TAP_PREFIX = "fc-tap-"
+
 _DEFAULT_BOOT_ARGS = "console=ttyS0 reboot=k panic=1 pci=off"
+if _NET_ENABLED:
+    _DEFAULT_BOOT_ARGS += f" ip={_GUEST_IP}::{_HOST_TAP_IP}:{_GUEST_NETMASK}::eth0:off"
 
 
 class FirecrackerConfigError(RuntimeError):
@@ -154,6 +175,108 @@ async def _fc_api(
         raise RuntimeError(f"Firecracker API {method} {path} failed: HTTP {status}: {text.strip()}")
 
 
+async def _run_host_cmd(*args: str) -> tuple[int, str, str]:
+    """Run a host-side networking command (ip/iptables/sysctl), capturing output."""
+    proc = await asyncio.create_subprocess_exec(
+        *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    out, err = await proc.communicate()
+    return proc.returncode or 0, out.decode(errors="replace"), err.decode(errors="replace")
+
+
+def _tap_name(guest_cid: int) -> str:
+    return f"{_TAP_PREFIX}{guest_cid}"
+
+
+async def _resolve_egress_if() -> str:
+    override = os.getenv("JIUWENBOX_FIRECRACKER_NET_EGRESS_IF", "").strip()
+    if override:
+        return override
+    code, out, err = await _run_host_cmd("ip", "route", "show", "default")
+    if code == 0:
+        for line in out.splitlines():
+            parts = line.split()
+            if "dev" in parts:
+                return parts[parts.index("dev") + 1]
+    raise FirecrackerConfigError(
+        "could not determine the host container's internet-facing interface for "
+        "Firecracker NAT (no default route); set JIUWENBOX_FIRECRACKER_NET_EGRESS_IF "
+        f"explicitly, or JIUWENBOX_FIRECRACKER_NET_ENABLED=0 to disable guest networking "
+        f"(ip route show default -> rc={code} out={out!r} err={err!r})"
+    )
+
+
+_NET_SETUP_LOCK = asyncio.Lock()
+_NET_SETUP_DONE = False
+
+
+async def _ensure_host_nat(egress_if: str) -> None:
+    """Idempotently enable IPv4 forwarding + NAT from fc-tap-* taps to egress_if.
+
+    Runs once per process. Uses `-C` (check) before `-A` (append) so repeat
+    calls across sandbox creations, or a restarted container, don't pile up
+    duplicate rules.
+    """
+    global _NET_SETUP_DONE
+    async with _NET_SETUP_LOCK:
+        if _NET_SETUP_DONE:
+            return
+        await _run_host_cmd("sysctl", "-w", "net.ipv4.ip_forward=1")
+        rules: list[tuple[list[str], list[str]]] = [
+            (
+                ["iptables", "-t", "nat", "-C", "POSTROUTING", "-o", egress_if, "-j", "MASQUERADE"],
+                ["iptables", "-t", "nat", "-A", "POSTROUTING", "-o", egress_if, "-j", "MASQUERADE"],
+            ),
+            (
+                ["iptables", "-C", "FORWARD", "-i", f"{_TAP_PREFIX}+", "-o", egress_if, "-j", "ACCEPT"],
+                ["iptables", "-A", "FORWARD", "-i", f"{_TAP_PREFIX}+", "-o", egress_if, "-j", "ACCEPT"],
+            ),
+            (
+                ["iptables", "-C", "FORWARD", "-i", egress_if, "-o", f"{_TAP_PREFIX}+",
+                 "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"],
+                ["iptables", "-A", "FORWARD", "-i", egress_if, "-o", f"{_TAP_PREFIX}+",
+                 "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"],
+            ),
+        ]
+        for check_cmd, add_cmd in rules:
+            code, _, _ = await _run_host_cmd(*check_cmd)
+            if code != 0:
+                add_code, _, add_err = await _run_host_cmd(*add_cmd)
+                if add_code != 0:
+                    raise FirecrackerConfigError(f"failed to install NAT rule {add_cmd!r}: {add_err.strip()}")
+        _NET_SETUP_DONE = True
+
+
+async def _create_tap_device(tap_name: str) -> None:
+    code, _, err = await _run_host_cmd("ip", "tuntap", "add", "dev", tap_name, "mode", "tap")
+    if code != 0:
+        raise FirecrackerConfigError(
+            f"failed to create tap device {tap_name!r} -- the jiuwenbox-firecracker "
+            "container needs CAP_NET_ADMIN and /dev/net/tun to give microVMs internet "
+            "access (docker run ... --cap-add=NET_ADMIN --device=/dev/net/tun ...), "
+            f"or set JIUWENBOX_FIRECRACKER_NET_ENABLED=0 to disable it: {err.strip()}"
+        )
+    await _run_host_cmd("ip", "addr", "add", f"{_HOST_TAP_IP}/30", "dev", tap_name)
+    await _run_host_cmd("ip", "link", "set", tap_name, "up")
+
+
+async def _delete_tap_device(tap_name: str) -> None:
+    await _run_host_cmd("ip", "link", "delete", tap_name)
+
+
+async def _sparse_copy(src: Path, dst: Path) -> None:
+    """Copy the rootfs image without materializing its unused holes.
+
+    The golden rootfs is mostly empty space reserved for guest installs
+    (pip/apt/npm), so a naive byte-for-byte copy (``shutil.copyfile``) would
+    both take longer and actually allocate that empty space on every single
+    sandbox create. ``cp --sparse=always`` skips zero-filled regions instead.
+    """
+    code, _, err = await _run_host_cmd("cp", "--sparse=always", str(src), str(dst))
+    if code != 0:
+        raise RuntimeError(f"failed to copy rootfs {src} -> {dst}: {err.strip()}")
+
+
 async def _vsock_request(
     uds_path: Path,
     guest_port: int,
@@ -201,6 +324,7 @@ class _FirecrackerSandbox:
     rootfs_path: Path
     guest_cid: int
     log_file: Any
+    tap_name: str | None = None
     jobs: dict[str, _FirecrackerBackgroundJobCache] = field(default_factory=dict)
     paused: bool = False
 
@@ -241,7 +365,14 @@ class FirecrackerRuntime(RuntimeAdapter):
         for stale in (api_sock, vsock_uds):
             await asyncio.to_thread(stale.unlink, True)
 
-        await asyncio.to_thread(shutil.copyfile, golden_rootfs, rootfs_copy)
+        await _sparse_copy(golden_rootfs, rootfs_copy)
+
+        tap_name: str | None = None
+        if _NET_ENABLED:
+            tap_name = _tap_name(guest_cid)
+            egress_if = await _resolve_egress_if()
+            await _ensure_host_nat(egress_if)
+            await _create_tap_device(tap_name)
 
         log_file = open(log_path, "ab")
         try:
@@ -254,6 +385,8 @@ class FirecrackerRuntime(RuntimeAdapter):
             )
         except FileNotFoundError as exc:
             log_file.close()
+            if tap_name:
+                await _delete_tap_device(tap_name)
             raise FirecrackerConfigError(
                 f"Firecracker binary {firecracker_bin!r} not found on PATH"
             ) from exc
@@ -267,6 +400,7 @@ class FirecrackerRuntime(RuntimeAdapter):
             rootfs_path=rootfs_copy,
             guest_cid=guest_cid,
             log_file=log_file,
+            tap_name=tap_name,
         )
 
         try:
@@ -293,10 +427,17 @@ class FirecrackerRuntime(RuntimeAdapter):
                 api_sock, "PUT", "/vsock",
                 {"guest_cid": guest_cid, "uds_path": str(vsock_uds), "vsock_id": "vsock0"},
             )
+            if tap_name:
+                await _fc_api(
+                    api_sock, "PUT", "/network-interfaces/eth0",
+                    {"iface_id": "eth0", "host_dev_name": tap_name},
+                )
             await _fc_api(api_sock, "PUT", "/actions", {"action_type": "InstanceStart"})
             await self._wait_for_guest_agent(vsock_uds, process)
         except Exception:
             await self._force_kill(sandbox)
+            if tap_name:
+                await _delete_tap_device(tap_name)
             await asyncio.to_thread(shutil.rmtree, workdir, True)
             raise
 
@@ -363,6 +504,8 @@ class FirecrackerRuntime(RuntimeAdapter):
         if sandbox is None:
             return
         await self._force_kill(sandbox)
+        if sandbox.tap_name:
+            await _delete_tap_device(sandbox.tap_name)
         await asyncio.to_thread(shutil.rmtree, sandbox.workdir, True)
 
     async def _force_kill(self, sandbox: _FirecrackerSandbox) -> None:
@@ -428,7 +571,7 @@ class FirecrackerRuntime(RuntimeAdapter):
         frozen_rootfs = checkpoint_dir / "rootfs.ext4"
 
         try:
-            await asyncio.to_thread(shutil.copyfile, sandbox.rootfs_path, frozen_rootfs)
+            await _sparse_copy(sandbox.rootfs_path, frozen_rootfs)
             await _fc_api(
                 sandbox.api_sock, "PATCH", "/drives/rootfs",
                 {"drive_id": "rootfs", "path_on_host": str(frozen_rootfs)},
@@ -488,7 +631,14 @@ class FirecrackerRuntime(RuntimeAdapter):
         for stale in (api_sock, vsock_uds):
             await asyncio.to_thread(stale.unlink, True)
 
-        await asyncio.to_thread(shutil.copyfile, checkpoint_rootfs, rootfs_copy)
+        await _sparse_copy(checkpoint_rootfs, rootfs_copy)
+
+        tap_name: str | None = None
+        if _NET_ENABLED:
+            tap_name = _tap_name(guest_cid)
+            egress_if = await _resolve_egress_if()
+            await _ensure_host_nat(egress_if)
+            await _create_tap_device(tap_name)
 
         log_file = open(log_path, "ab")
         try:
@@ -501,6 +651,8 @@ class FirecrackerRuntime(RuntimeAdapter):
             )
         except FileNotFoundError as exc:
             log_file.close()
+            if tap_name:
+                await _delete_tap_device(tap_name)
             raise FirecrackerConfigError(
                 f"Firecracker binary {firecracker_bin!r} not found on PATH"
             ) from exc
@@ -514,20 +666,24 @@ class FirecrackerRuntime(RuntimeAdapter):
             rootfs_path=rootfs_copy,
             guest_cid=guest_cid,
             log_file=log_file,
+            tap_name=tap_name,
         )
 
         try:
             await self._wait_for_api_socket(api_sock, process)
             await _fc_api(api_sock, "PUT", "/logger", {"log_path": str(log_path), "level": "Info"})
-            await _fc_api(
-                api_sock, "PUT", "/snapshot/load",
-                {
-                    "snapshot_path": str(snapshot_path),
-                    "mem_backend": {"backend_type": "File", "backend_path": str(mem_file_path)},
-                    "resume_vm": False,
-                    "vsock_override": {"uds_path": str(vsock_uds)},
-                },
-            )
+            load_body: dict[str, Any] = {
+                "snapshot_path": str(snapshot_path),
+                "mem_backend": {"backend_type": "File", "backend_path": str(mem_file_path)},
+                "resume_vm": False,
+                "vsock_override": {"uds_path": str(vsock_uds)},
+            }
+            if tap_name:
+                # Supported by this build (unlike drive_overrides): rebinds
+                # the snapshotted eth0 to this fork's own fresh tap device,
+                # so each fork gets its own NAT'd link, never sharing one.
+                load_body["network_overrides"] = [{"iface_id": "eth0", "host_dev_name": tap_name}]
+            await _fc_api(api_sock, "PUT", "/snapshot/load", load_body)
             # No drive_overrides on this Firecracker build: hot-swap the
             # drive to this fork's own copy while still paused (loaded but
             # not yet resumed), so no guest code ever observes the
@@ -540,6 +696,8 @@ class FirecrackerRuntime(RuntimeAdapter):
             await self._wait_for_guest_agent(vsock_uds, process)
         except Exception:
             await self._force_kill(sandbox)
+            if tap_name:
+                await _delete_tap_device(tap_name)
             await asyncio.to_thread(shutil.rmtree, workdir, True)
             raise
 

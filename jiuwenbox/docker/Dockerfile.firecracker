@@ -9,8 +9,14 @@
 #
 # Build from the jiuwenbox/ directory:
 #   docker build -f docker/Dockerfile.firecracker -t jiuwenbox-firecracker .
-# Run with KVM access:
-#   docker run --rm -p 8321:8321 --device=/dev/kvm jiuwenbox-firecracker
+# Run with KVM access and guest internet access (pip/wget/npm inside each
+# microVM; each sandbox gets its own NAT'd tap device -- see firecracker.py):
+#   docker run --rm -p 8321:8321 --device=/dev/kvm \
+#       --cap-add=NET_ADMIN --device=/dev/net/tun \
+#       jiuwenbox-firecracker
+# Without --cap-add=NET_ADMIN / --device=/dev/net/tun, sandbox creation fails
+# fast with a clear error; set JIUWENBOX_FIRECRACKER_NET_ENABLED=0 to opt out
+# of guest networking instead (sandboxes stay network-isolated, as before).
 
 # ---- Stage: fc-assets -- fetch+bake the golden kernel/rootfs ----
 FROM ubuntu:22.04 AS fc-assets

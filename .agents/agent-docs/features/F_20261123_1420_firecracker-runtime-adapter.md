@@ -75,7 +75,21 @@ guest-agent v0（已在设计阶段验证）、`FirecrackerRuntime` 适配器、
 | 主机目录挂载 | `jiuwenbox-firecracker` 直接拒绝 `sandbox.files` 的 allow/deny/upload，并丢弃 workspace/project_dir 的自动挂载（仅打印 warning） | microVM 有独立 rootfs，本次未实现 virtiofs/9p；设计文档 §9 已标注为空白项，本次不展开 |
 | 容器权限 | Phase-1 镜像以 root 运行（未跟随主 Dockerfile 的 uid 1001 `app` 用户） | jailer 化 / 非 root 硬化是设计 §8 的 phase 6，本次范围只到 phase 2 |
 | exec 环境变量 unset 语义 | `RuntimeExecRequest.env` 中值为 `None` 的键直接被过滤，不像 Conch 那样通过 `env -u` 真正从父进程环境里 unset | guest-agent 协议简化；新适配器不要求与 Conch 行为对齐 |
-| 网络接口 | `create()` 未调用 `/network-interfaces`，microVM 启动时无网卡 | 本设计的数据面是 vsock，不需要 guest 出网；若后续需要出网需补一次独立评估 |
+| 网络接口（已变更，见下方新增节） | `create()`/`fork()` 现在为每个 sandbox 建立独立 NAT tap 设备 | 用户明确要求 guest 内 `pip`/`wget`/`npm` 能出网；数据面仍是 vsock，网络只用于 guest 自己发起的出站流量 |
+
+### 出网支持（pip/wget/npm，用户明确要求）
+
+| 主题 | 实际做法 |
+|---|---|
+| 网卡 | `create()`/`fork()` 为每个 sandbox 建一个独立 tap 设备（`fc-tap-<guest_cid>`），`PUT /network-interfaces/eth0` 挂到 Firecracker 上；每个 tap 都是点对点链路（host 侧固定 `172.16.0.1/30`、guest 侧固定 `172.16.0.2/30`，可跨所有 sandbox 复用同一对 IP，因为每个 tap 只连一台 VM，不是共享 bridge——这是 Firecracker 官方网络文档推荐的模式）|
+| guest IP 配置 | 不进容器改 guest 文件：直接在内核 `boot_args` 追加 `ip=172.16.0.2::172.16.0.1:255.255.255.252::eth0:off`，Firecracker CI 内核自带 `CONFIG_IP_PNP`，内核自己在用户态启动前配好地址+默认路由 |
+| DNS | guest 侧 `/etc/resolv.conf` 没有对应的内核参数能配，改为 `guest-agent.service` 新增 `ExecStartPre` 每次开机强制写 `nameserver 8.8.8.8` / `1.1.1.1`（用 `rm -f` 先去掉可能的 systemd-resolved 符号链接，不依赖它是否在跑） |
+| host 侧 NAT | `_ensure_host_nat()` 幂等地打开 `net.ipv4.ip_forward=1`，并对宿主默认出网口加 `MASQUERADE` + `FORWARD` 放行规则（用 `iptables -C` 先查再 `-A`，避免重复加规则）；出网口自动探测自 `ip route show default`，可用 `JIUWENBOX_FIRECRACKER_NET_EGRESS_IF` 覆盖 |
+| fork 的网络隔离 | `/snapshot/load` 的 `network_overrides` 字段（与 `vsock_override` 同列在这个 Firecracker 版本支持的字段里，不像 `drive_overrides` 不支持）把快照里的 eth0 重新绑定到这次 fork 自己新建的 tap，保证每个 fork 都有独立链路，不共享 host 侧 tap |
+| 容器权限新增要求 | 需要 `--cap-add=NET_ADMIN --device=/dev/net/tun`；缺失时 `_create_tap_device` 直接报清晰错误（而不是一路卡到超时），并提示可用 `JIUWENBOX_FIRECRACKER_NET_ENABLED=0` 关闭出网退回原隔离行为 |
+| 清理 | tap 设备的创建/删除对称挂在 `create`/`fork` 的异常路径和 `cleanup()` 里，和 workdir 删除同一批收尾，不会泄漏 |
+
+未做（已知限制，不在本次范围）：无出网流量限速/配额（没有按 sandbox 做 `iptables`/`tc` 限流）；DNS 固定写死公共解析器，不支持按租户走自定义 DNS；host 侧 NAT 规则是进程级全局单次幂等初始化，没有按 sandbox 做更细粒度的网络策略（后续如需要见设计文档 §9 的开放问题）。
 
 ## 验证证据（容器内对真实 jiuwenbox HTTP API）
 
@@ -118,3 +132,27 @@ DELETE /api/v1/sandboxes/<id>
 - checkpoint 文件目前落在宿主机 `JIUWENBOX_FIRECRACKER_WORKDIR/checkpoints/<id>/`，没有生命周期管理（谁来删、保留多久、按什么粒度计费），仍是设计文档 §9 标注的最大空白——本次只实现了"能 checkpoint/fork"，没有解决"checkpoint 该怎么治理"。
 - `assembly.py` 对 team 成员沙箱的 `sandbox_type == "jiuwenbox"` 硬编码检查仍未放开，fork 对 team/子 agent 并行场景的价值目前用不上（见 `flow.md`）。
 - idle reaper 尚未改为对 firecracker sandbox 用 pause 代替 destroy（设计文档阶段 4 提到的另一半），这次只做了"能手动 pause/resume"，没有接入空闲淘汰逻辑。
+- 出网支持无出网流量限速/配额、DNS 固定写死公共解析器、host 侧 NAT 规则是进程级全局单次幂等初始化（均已在上方"出网支持"小节列出，不重复）。
+
+## 验证证据：出网支持（真实容器，`--cap-add=NET_ADMIN --device=/dev/net/tun`，n=1）
+
+真实踩坑并修正了两个与出网改动直接相关的问题：
+
+1. 本地工作树的 `build-assets.sh`/`guest_agent.py`/`guest-agent.service`/`Dockerfile.firecracker` 在本次改动前就已经是 CRLF（Windows `core.autocrlf=true` + 一次与本改动无关的文件损坏修复共同导致），`bash` 解析 `set -euo pipefail\r` 直接报 `invalid option name`——镶入 `.gitattributes` 的 `text eol=lf` 规则并转换这几个文件修复，顺带让这个隐患不会在别的贡献者的 Windows checkout 上复发。
+2. golden rootfs 原本 `truncate -s 1G`：真跑 `apt-get install wget python3-pip npm` 时在 `python3-pip`/`npm` 的依赖链中途 `ENOSPC`（`wget` 本身已经完整装上，证明网络链路没问题，纯粹是磁盘不够），改成 4G 后复测通过；同时把三处 `shutil.copyfile`（create/checkpoint/fork 各一处）换成 `cp --sparse=always`，避免 4G 镜像的空洞被逐字节拷贝实体化，抵消磁盘变大带来的 create 延迟/磁盘占用回退。
+
+| # | 测试点 | 结果 |
+|---|---|---|
+| 1 | `ip addr show eth0` | `172.16.0.2/30`，内核 `ip=` 参数自动配好，不用 guest 侧脚本 |
+| 2 | `ip route` | `default via 172.16.0.1 dev eth0` |
+| 3 | `cat /etc/resolv.conf` | `nameserver 8.8.8.8` / `1.1.1.1`（`guest-agent.service` 的 `ExecStartPre` 写入） |
+| 4 | ping host 侧 tap 网关 / `ping 8.8.8.8` | 均通 |
+| 5 | `getent ahostsv4 example.com` | 正确解析出公网 IP |
+| 6 | `curl -sI https://pypi.org` | `HTTP/2 200`，TLS 握手正常 |
+| 7 | `apt-get update && apt-get install -y wget python3-pip npm`（真实走 `archive.ubuntu.com`，不是本地镜像） | 两者 rc 均为 0（4G rootfs 之后）；1G rootfs 下曾因 `ENOSPC` 中途失败，`wget` 已装上证明网络没问题 |
+| 8 | `wget -q https://pypi.org/ -O x.html` | 下载 27885 字节，与 `curl -I` 返回的 `content-length` 一致 |
+| 9 | `npm install lodash` | `node_modules/lodash/package.json` 存在，真实从 npm registry 装包 |
+| 10 | `pip3 install --break-system-packages pyfiglet` | 装到全新的 `/usr/local/lib/python3.12/dist-packages/pyfiglet/`（不是预装包），证明 pip 的网络路径本身没问题；默认（不加 `--break-system-packages`）会被 Ubuntu 24.04 的 PEP 668 "externally-managed-environment" 拦住，这是 Debian 的系统策略，与本次网络改动无关 |
+| 11 | fork 后的新 sandbox 网络隔离 | 未重新单独测（Phase 5 的 fork 磁盘隔离已在实验四验证过；本次改动的 `network_overrides` 走同一条 `/snapshot/load` 路径，逻辑复用，未对出网单独补一次 fork 场景的端到端） |
+
+遗留：第 11 项（fork 场景下的出网隔离）只做了代码走读，没有补单独的端到端验证。
